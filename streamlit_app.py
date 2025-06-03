@@ -3,6 +3,7 @@ import pandas as pd
 import altair as alt
 import time 
 import numpy as np
+import re
 import openpyxl
 from pyswmm import Simulation
 from rainfall_and_tide_generator import (
@@ -14,22 +15,9 @@ from rainfall_and_tide_generator import (
     moon_tide_ranges
 )
 
-st.set_page_config(page_title="🌧️ Rainfall & Tide Simulator", layout="centered")
+st.set_page_config(page_title="High Stakes, High Water: A Watershed Design Challenge for Coastal Resilience", layout="centered")
 
 st.title("High Stakes, High Water: A Watershed Design Challenge for Coastal Resilience")
-
-# Cost data (example values, you can adjust)
-data = {
-    "Infrastructure": ["Rain Garden", "Permeable Pavement", "Rain Barrel", "Tide Gate (10'x5')"],
-    "Estimated Cost": ["$10-40 per sq ft", "$8–15 per sq ft", "$100–300", "$15,000–30,000"]
-}
-
-# Create DataFrame
-cost_df = pd.DataFrame(data)
-
-# Display in Streamlit
-st.subheader("💰 Estimated Costs for Flood Mitigation Options")
-st.table(cost_df)  # Use st.dataframe(cost_df) if you want scroll/sort features
 
 # === User Inputs ===
 duration_minutes = st.selectbox("Storm Duration", options=pf_df["Duration_Minutes"],
@@ -41,7 +29,7 @@ rain_inches = pf_df.loc[pf_df["Duration_Minutes"] == duration_minutes, return_pe
 unit = st.selectbox("Rainfall Units", ["inches", "cm", "mm"])
 method = st.radio("Rainfall Shape", ["Normal", "Randomized"])
 moon_phase = st.selectbox("Moon Phase", list(moon_tide_ranges.keys()))
-tide_align = st.radio("Tide Alignment", ["🌊 Peak aligned with High Tide", "🌊 Peak aligned with Low Tide"])
+tide_align = st.radio("Tide Alignment", ["Peak aligned with High Tide", "Peak aligned with Low Tide"])
 align_option = "peak" if "High" in tide_align else "low"
 align = "peak" if "High" in tide_align else "dip"
 
@@ -55,7 +43,7 @@ df_rain = pd.DataFrame({
     "Time (hours)": np.array(rain_minutes) / 60,
     f"Rainfall ({unit})": rain_curve
 })
-st.subheader("🌧️ Rainfall Distribution")
+st.subheader("Rainfall Distribution")
 st.line_chart(df_rain.set_index("Time (hours)"))
 
 # === Rainfall CSV Download ===
@@ -74,7 +62,7 @@ df_tide = pd.DataFrame({
     "Time (hours)": np.array(tide_minutes) / 60,
     f"Tide ({tide_unit})": tide_curve
 })
-st.subheader("🌊 Tide Profile")
+st.subheader("Tide Profile")
 st.line_chart(df_tide.set_index("Time (hours)"))
 
 # === Tide CSV Download ===
@@ -85,6 +73,13 @@ st.download_button(
     file_name="tide_profile.csv",
     mime="text/csv"
 )
+
+st.subheader("Watershed with Subcatchments")
+st.image(
+    "/workspaces/flood-modeling-k12-education/Images/watersheds.png",
+    use_container_width=True
+)
+
 
 def update_inp_file(template_path, output_path,
                     rain_lines, tide_lines, lid_usage,
@@ -109,9 +104,7 @@ def extract_runoff_and_lid_data(rpt_file):
         lines = f.readlines()
 
     runoff_section = False
-    lid_section = False
     runoff_data = []
-    lid_data = []
 
     for line in lines:
         # Detect section headers
@@ -119,10 +112,7 @@ def extract_runoff_and_lid_data(rpt_file):
             runoff_section = True
             lid_section = False
             continue
-        elif "LID Performance Summary" in line:
-            runoff_section = False
-            lid_section = True
-            continue
+
 
         # Skip dashed separators and blank lines
         if "----" in line or line.strip() == "":
@@ -147,72 +137,22 @@ def extract_runoff_and_lid_data(rpt_file):
     runoff_df = pd.DataFrame(runoff_data)
     return runoff_df
 
-# Load the LULC + LID suitability file
-df = pd.read_excel("/workspaces/flood-modeling-k12-education/raster_cells_per_sub.xlsx")
 
 
-if "user_lid_config" not in st.session_state:
-    st.session_state.user_lid_config = {}
-
-# === Loop through each subcatchment ===
-for i, row in df.iterrows():
-    sub = row["NAME"]
-    rg_max = int(row["Rain_garden_max_ft2"])
-    pp_max = int(row["Permeable_pave_max_ft2"])
-    rb_max = int(row["MaxRainBarrell_number"])
-
-    with st.expander(f"🗂️ {sub}"):
-        st.markdown(f"**Max Rain Garden Area:** {rg_max} ft²")
-        st.markdown(f"**Max Permeable Pavement Area:** {pp_max} ft²")
-        st.markdown(f"**Max Rain Barrels:** {rb_max} units")
-
-        # === Rain Garden ===
-        if rg_max == 0:
-            st.markdown("🚫 Rain Gardens not available.")
-            rain_garden_area = 0
-        else:
-            rain_garden_area = st.slider(
-                f"{sub} - Rain Garden Area (ft²)", 0, rg_max, 0, step=10
-            )
-
-        # === Permeable Pavement ===
-        if pp_max == 0:
-            st.markdown("🚫 Permeable Pavement not available.")
-            permeable_pave_area = 0
-        else:
-            permeable_pave_area = st.slider(
-                f"{sub} - Permeable Pavement Area (ft²)", 0, pp_max, 0, step=10
-            )
-
-        # === Rain Barrels ===
-        if rb_max == 0:
-            st.markdown("🚫 Rain Barrels not available.")
-            rain_barrel_units = 0
-        else:
-            rain_barrel_units = st.slider(
-                f"{sub} - Rain Barrels (#)", 0, rb_max, 0, step=1
-            )
-
-        # === Store the user input ===
-        st.session_state.user_lid_config[sub] = {
-            "rain_garden_area": rain_garden_area,
-            "permeable_pave_area": permeable_pave_area,
-            "rain_barrels": rain_barrel_units
-        }
-
-# === Optional: Show full configuration ===
-st.markdown("### 🧾 Your LID Configuration Summary")
-st.json(st.session_state.user_lid_config)
-
+st.subheader("Tide Gate")
+st.image(
+    "/workspaces/flood-modeling-k12-education/Images/tide_gate.png",
+    use_container_width=True
+)
 
 
 # === Tide Gate Option ===
-st.subheader("🌉 Tide Gate Option")
+st.subheader("Tide Gate Option")
 tide_gate_enabled = "YES" if st.checkbox("Include Tide Gate at Outfall?", value=False) else "NO"
 
 
 # === Simulation Trigger
-if st.button("🌊 Run SWMM Simulation"):
+if st.button("Run Baseline Scenario SWMM Simulation"):
     try:
         # Convert rainfall total based on unit
         total_inches = convert_units(rain_inches, unit)
@@ -244,15 +184,137 @@ if st.button("🌊 Run SWMM Simulation"):
         # === Run Simulation
         with Simulation("updated_model.inp") as sim:
             sim.execute()
-        st.success("✅ SWMM simulation complete!")
+        st.success("Baseline Scenario Complete!")
 
         time.sleep(5)  # Wait 1 second
 
-        runoff_df, lid_df = extract_runoff_and_lid_data("updated_model.rpt")
+        runoff_df = extract_runoff_and_lid_data("updated_model.rpt")
 
-        st.subheader("📊 Subcatchment Runoff Summary")
+        st.subheader("Subcatchment Runoff Summary")
         st.dataframe(runoff_df, use_container_width=True)
 
 
     except Exception as e:
         st.error(f"❌ Simulation failed: {e}")
+
+st.subheader("Low Impact Developments (LIDs)")
+st.image(
+    "/workspaces/flood-modeling-k12-education/Images/green_infrastructure_options.png",
+    use_container_width=True
+)
+
+
+# Cost data (example values, you can adjust)
+data = {
+    "Infrastructure": ["Rain Garden", "Permeable Pavement", "Rain Barrel", "Tide Gate (10'x5')"],
+    "Estimated Cost": ["$10-40 per sq ft", "$8–15 per sq ft", "$100–300", "$15,000–30,000"]
+}
+
+# Create DataFrame
+cost_df = pd.DataFrame(data)
+
+# Display in Streamlit
+st.subheader("Estimated Costs for Flood Mitigation Options")
+st.table(cost_df)  # Use st.dataframe(cost_df) if you want scroll/sort features
+
+
+        # === Load and sort subcatchments ===
+def extract_number(name):
+    match = re.search(r"_(\d+)", name)
+    return int(match.group(1)) if match else float('inf')
+
+df = pd.read_excel("/workspaces/flood-modeling-k12-education/raster_cells_per_sub.xlsx")
+df = df.sort_values(by="NAME", key=lambda x: x.map(extract_number)).reset_index(drop=True)
+
+st.title("Add LIDs")
+
+if "user_lid_config" not in st.session_state:
+    st.session_state.user_lid_config = {}
+
+# === Step 1: Let student choose if they want to intervene ===
+available_subs = df["NAME"].tolist()
+selected_subs = st.multiselect(
+    "Optional: Select subcatchments to add rain gardens, rain barrels, and/or permeable pavement",
+    options=available_subs,
+    help="If you want to test different LID options, choose one or more subcatchments to adjust."
+)
+
+# === Step 2: Only show the configuration table if something is selected ===
+if selected_subs:
+    # === Styling ===
+    st.markdown("""
+        <style>
+        .lid-table-container {
+            max-height: 600px;
+            overflow-y: scroll;
+            border: 1px solid #ccc;
+        }
+        .lid-row {
+            display: grid;
+            grid-template-columns: 1.5fr 1.5fr 1.5fr 1.5fr 1.2fr 1.2fr 1.2fr;
+            padding: 6px 5px;
+            font-size: 16px;
+            align-items: center;
+            border-bottom: 1px solid #ccc;
+        }
+        .alt-row {
+            background-color: #f9f9f9;
+        }
+        .lid-cell input {
+            font-size: 16px !important;
+            text-align: center !important;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
+    # === Header ===
+    st.markdown("""
+    <div class="lid-row" style="font-weight:bold; background-color:#ddd;">
+        <div>Subcatchment</div>
+        <div>Max Rain Garden Area (ft²)</div>
+        <div>Your Rain Garden Area</div>
+        <div>Max Pavement Area (ft²)</div>
+        <div>Your Pavement Area</div>
+        <div>Max Rain Barrels</div>
+        <div>Your Rain Barrels</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # === Start Table Container ===
+    st.markdown('<div class="lid-table-container">', unsafe_allow_html=True)
+
+    # === Table Rows ===
+    for idx, row in df[df["NAME"].isin(selected_subs)].iterrows():
+        sub = row["NAME"]
+        rg_max = int(row["Rain_garden_max_ft2"])
+        pp_max = int(row["Permeable_pave_max_ft2"])
+        rb_max = int(row["MaxRainBarrell_number"])
+
+        row_class = "lid-row alt-row" if idx % 2 == 0 else "lid-row"
+
+        st.markdown(f'<div class="{row_class}">', unsafe_allow_html=True)
+        col1, col2, col3, col4, col5, col6, col7 = st.columns([1.5, 1.5, 1.5, 1.5, 1.2, 1.2, 1.2])
+
+        with col1: st.markdown(f"**{sub}**", unsafe_allow_html=True)
+        with col2: st.markdown(f"<div style='text-align: center;'>{rg_max}</div>", unsafe_allow_html=True)
+        with col3:
+            rg_val = st.number_input("", 0, rg_max, 0, step=10, key=f"rg_{sub}", label_visibility="collapsed")
+        with col4: st.markdown(f"<div style='text-align: center;'>{pp_max}</div>", unsafe_allow_html=True)
+        with col5:
+            pp_val = st.number_input("", 0, pp_max, 0, step=10, key=f"pp_{sub}", label_visibility="collapsed")
+        with col6: st.markdown(f"<div style='text-align: center;'>{rb_max}</div>", unsafe_allow_html=True)
+        with col7:
+            rb_val = st.number_input("", 0, rb_max, 0, step=1, key=f"rb_{sub}", label_visibility="collapsed")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        st.session_state.user_lid_config[sub] = {
+            "rain_garden_area": rg_val,
+            "permeable_pave_area": pp_val,
+            "rain_barrels": rb_val
+        }
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+else:
+    st.info("You haven't selected any subcatchments to update.")
