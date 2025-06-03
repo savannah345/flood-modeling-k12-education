@@ -3,6 +3,7 @@ import pandas as pd
 import altair as alt
 import time 
 import numpy as np
+import openpyxl
 from pyswmm import Simulation
 from rainfall_and_tide_generator import (
     generate_rainfall,
@@ -143,21 +144,65 @@ def extract_runoff_and_lid_data(rpt_file):
                     "Runoff Coeff": float(parts[10])
                 })
 
-        # Parse LID section
-        if lid_section:
-            parts = line.split()
-            if len(parts) >= 10 and all(p.replace('.', '', 1).replace('-', '', 1).isdigit() for p in parts[2:10]):
-                lid_data.append({
-                    "Subcatchment": parts[0],
-                    "LID Control": parts[1],
-                    "Inflow (in)": float(parts[2]),
-                    "Infil Loss (in)": float(parts[4]),
-                    "Surface Outflow (in)": float(parts[5]),
-                })
-
     runoff_df = pd.DataFrame(runoff_data)
-    lid_df = pd.DataFrame(lid_data)
-    return runoff_df, lid_df
+    return runoff_df
+
+# Load the LULC + LID suitability file
+df = pd.read_excel("/workspaces/flood-modeling-k12-education/raster_cells_per_sub.xlsx")
+
+
+if "user_lid_config" not in st.session_state:
+    st.session_state.user_lid_config = {}
+
+# === Loop through each subcatchment ===
+for i, row in df.iterrows():
+    sub = row["NAME"]
+    rg_max = int(row["Rain_garden_max_ft2"])
+    pp_max = int(row["Permeable_pave_max_ft2"])
+    rb_max = int(row["MaxRainBarrell_number"])
+
+    with st.expander(f"🗂️ {sub}"):
+        st.markdown(f"**Max Rain Garden Area:** {rg_max} ft²")
+        st.markdown(f"**Max Permeable Pavement Area:** {pp_max} ft²")
+        st.markdown(f"**Max Rain Barrels:** {rb_max} units")
+
+        # === Rain Garden ===
+        if rg_max == 0:
+            st.markdown("🚫 Rain Gardens not available.")
+            rain_garden_area = 0
+        else:
+            rain_garden_area = st.slider(
+                f"{sub} - Rain Garden Area (ft²)", 0, rg_max, 0, step=10
+            )
+
+        # === Permeable Pavement ===
+        if pp_max == 0:
+            st.markdown("🚫 Permeable Pavement not available.")
+            permeable_pave_area = 0
+        else:
+            permeable_pave_area = st.slider(
+                f"{sub} - Permeable Pavement Area (ft²)", 0, pp_max, 0, step=10
+            )
+
+        # === Rain Barrels ===
+        if rb_max == 0:
+            st.markdown("🚫 Rain Barrels not available.")
+            rain_barrel_units = 0
+        else:
+            rain_barrel_units = st.slider(
+                f"{sub} - Rain Barrels (#)", 0, rb_max, 0, step=1
+            )
+
+        # === Store the user input ===
+        st.session_state.user_lid_config[sub] = {
+            "rain_garden_area": rain_garden_area,
+            "permeable_pave_area": permeable_pave_area,
+            "rain_barrels": rain_barrel_units
+        }
+
+# === Optional: Show full configuration ===
+st.markdown("### 🧾 Your LID Configuration Summary")
+st.json(st.session_state.user_lid_config)
 
 
 
@@ -208,8 +253,6 @@ if st.button("🌊 Run SWMM Simulation"):
         st.subheader("📊 Subcatchment Runoff Summary")
         st.dataframe(runoff_df, use_container_width=True)
 
-        st.subheader("🌱 LID Performance Summary")
-        st.dataframe(lid_df, use_container_width=True)
 
     except Exception as e:
         st.error(f"❌ Simulation failed: {e}")
