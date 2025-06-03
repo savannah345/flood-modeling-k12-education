@@ -15,7 +15,7 @@ from rainfall_and_tide_generator import (
 
 st.set_page_config(page_title="🌧️ Rainfall & Tide Simulator", layout="centered")
 
-st.title("🌧️ Rainfall & 🌊 Tide Simulator")
+st.title("High Stakes, High Water: A Watershed Design Challenge for Coastal Resilience")
 
 # Cost data (example values, you can adjust)
 data = {
