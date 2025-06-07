@@ -165,13 +165,13 @@ st.subheader("Tide Gate Option")
 tide_gate_enabled = "YES" if st.checkbox("Include Tide Gate at Outfall?", value=False) else "NO"
 
 scenario_summary = f"""
-### 📋 Scenario Summary  
+### Selected Scenario Summary  
 - **Storm Duration:** {duration_minutes // 60} hours  
 - **Return Period:** {return_period} year  
 - **Moon Phase:** {moon_phase}  
 - **Tide Alignment:** {"Rainfall aligned with high tide" if align == "peak" else "Rainfall aligned with low tide"}  
 - **Tide Gate Enabled:** {"Yes" if tide_gate_enabled == "YES" else "No"}  
-- **Units Displayed to User:** {unit}
+- **Units:** {unit}
 """
 st.markdown(scenario_summary)
 
@@ -225,7 +225,7 @@ if st.button("Run Baseline Scenario SWMM Simulation"):
 
 
 if 'baseline_runoff_df' in st.session_state:
-    st.markdown("### 📈 Baseline Subcatchment Runoff Summary (Pre-LID)")
+    st.markdown("Baseline Subcatchment Runoff Summary (Pre-intervention)")
     df_baseline = st.session_state['baseline_runoff_df'].copy()
     df_baseline = df_baseline[df_baseline['Subcatchment'].str.startswith("Sub_")]
 
@@ -249,9 +249,10 @@ st.image(
 
 # Cost data (example values, you can adjust)
 data = {
-    "Infrastructure": ["Rain Garden", "Permeable Pavement", "Rain Barrel", "Tide Gate (10'x5')"],
-    "Estimated Cost": ["$3-5 per sq ft", "$10–40 per sq ft", "$100–300", "$15,000–30,000"]
+    "Infrastructure": ["25 sq.ft. Rain Garden", "50 gallon Rain Barrel", "Tide Gate (10'x5')"],
+    "Estimated Installation Cost": ["$350", "$200", "60,000"]
 }
+
 
 # Create DataFrame
 cost_df = pd.DataFrame(data)
@@ -277,7 +278,7 @@ if "user_lid_config" not in st.session_state:
 # === Step 1: Let student choose if they want to intervene ===
 available_subs = df["NAME"].tolist()
 selected_subs = st.multiselect(
-    "Optional: Select subcatchments to add rain gardens, rain barrels, and/or permeable pavement",
+    "Select subcatchments to add rain gardens or rain barrels",
     options=available_subs,
     help="If you want to test different LID options, choose one or more subcatchments to adjust."
 )
@@ -294,7 +295,7 @@ if selected_subs:
         }
         .lid-row {
             display: grid;
-            grid-template-columns: 1.5fr 1.5fr 1.5fr 1.5fr 1.2fr 1.2fr 1.2fr;
+            grid-template-columns: 1.0fr 1.2fr 1.5fr 1.2fr 1.2fr;
             padding: 6px 5px;
             font-size: 16px;
             align-items: center;
@@ -314,10 +315,8 @@ if selected_subs:
     st.markdown("""
     <div class="lid-row" style="font-weight:bold; background-color:#ddd;">
         <div>Subcatchment</div>
-        <div>Max Rain Garden Area (ft²)</div>
-        <div>Your Rain Garden Area</div>
-        <div>Max Pavement Area (ft²)</div>
-        <div>Your Pavement Area</div>
+        <div>Max Rain Gardens</div>
+        <div>Your Rain Gardens</div>
         <div>Max Rain Barrels</div>
         <div>Your Rain Barrels</div>
     </div>
@@ -329,30 +328,25 @@ if selected_subs:
     # === Table Rows ===
     for idx, row in df[df["NAME"].isin(selected_subs)].iterrows():
         sub = row["NAME"]
-        rg_max = int(row["Rain_garden_max_ft2"])
-        pp_max = int(row["Permeable_pave_max_ft2"])
+        rg_max = int(row["MaxNumber_RG_DEM_considered"])
         rb_max = int(row["MaxRainBarrell_number"])
 
         row_class = "lid-row alt-row" if idx % 2 == 0 else "lid-row"
 
         st.markdown(f'<div class="{row_class}">', unsafe_allow_html=True)
-        col1, col2, col3, col4, col5, col6, col7 = st.columns([1.5, 1.5, 1.5, 1.5, 1.2, 1.2, 1.2])
+        col1, col2, col3, col6, col7 = st.columns([1.0, 1.2, 1.2, 1.2, 1.2])
 
         with col1: st.markdown(f"**{sub}**", unsafe_allow_html=True)
         with col2: st.markdown(f"<div style='text-align: center;'>{rg_max}</div>", unsafe_allow_html=True)
         with col3:
-            rg_val = st.number_input("", 0, rg_max, 0, step=10, key=f"rg_{sub}", label_visibility="collapsed")
-        with col4: st.markdown(f"<div style='text-align: center;'>{pp_max}</div>", unsafe_allow_html=True)
-        with col5:
-            pp_val = st.number_input("", 0, pp_max, 0, step=10, key=f"pp_{sub}", label_visibility="collapsed")
+            rg_val = st.number_input("", 0, rg_max, 0, step=5, key=f"rg_{sub}", label_visibility="collapsed")
         with col6: st.markdown(f"<div style='text-align: center;'>{rb_max}</div>", unsafe_allow_html=True)
         with col7:
-            rb_val = st.number_input("", 0, rb_max, 0, step=1, key=f"rb_{sub}", label_visibility="collapsed")
+            rb_val = st.number_input("", 0, rb_max, 0, step=5, key=f"rb_{sub}", label_visibility="collapsed")
         st.markdown("</div>", unsafe_allow_html=True)
 
         st.session_state.user_lid_config[sub] = {
-            "rain_garden_area": rg_val,
-            "permeable_pave_area": pp_val,
+            "rain_gardens": rg_val,
             "rain_barrels": rb_val
         }
 
@@ -366,21 +360,16 @@ total_cost = 0
 cost_breakdown = []
 
 for sub, config in st.session_state.user_lid_config.items():
-    rg = config["rain_garden_area"]
-    pp = config["permeable_pave_area"]
+    rg = config["rain_gardens"]
     rb = config["rain_barrels"]
     
-    if rg + pp + rb == 0:
+    if rg + rb == 0:
         continue
 
     area_multiplier = 1 if unit == "inches" else 10.7639
     if rg > 0:
-        cost = rg * area_multiplier * 4
+        cost = rg * 350
         cost_breakdown.append({"Subcatchment": sub, "LID Type": "Rain Garden", "Cost": cost})
-        total_cost += cost
-    if pp > 0:
-        cost = pp * area_multiplier * 20
-        cost_breakdown.append({"Subcatchment": sub, "LID Type": "Permeable Pavement", "Cost": cost})
         total_cost += cost
     if rb > 0:
         cost = rb * 200
@@ -389,12 +378,12 @@ for sub, config in st.session_state.user_lid_config.items():
 
 # Tide gate cost
 if tide_gate_enabled == "YES":
-    tide_cost = 22500  # Average estimate
+    tide_cost = 60000  # Average estimate
     cost_breakdown.append({"Subcatchment": "Watershed Outfall", "LID Type": "Tide Gate", "Cost": tide_cost})
     total_cost += tide_cost
 
 if cost_breakdown:
-    st.markdown("### 📊 Estimated Cost by Subcatchment and LID Type")
+    st.markdown("Estimated Cost by Subcatchment and LID Type")
     cost_df = pd.DataFrame(cost_breakdown)
 
     chart = alt.Chart(cost_df).mark_bar().encode(
@@ -406,6 +395,6 @@ if cost_breakdown:
 
     st.altair_chart(chart, use_container_width=True)
 
-    st.markdown(f"### 💰 Total Estimated Cost (Including Tide Gate): **${total_cost:,.2f}**")
+    st.markdown(f"Total Estimated Cost: **${total_cost:,.2f}**")
 else:
     st.info("No infrastructure improvements (gray or green) have been added to the simulation yet.")
