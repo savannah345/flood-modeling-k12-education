@@ -251,7 +251,7 @@ J96              -1.968     5.153      0          0          0
 [OUTFALLS]
 ;;Name           Elevation  Type       Stage Data       Gated    Route To        
 ;;-------------- ---------- ---------- ---------------- -------- ----------------
-outfall          -6.3       TIMESERIES tide             NO                      
+outfall          -6.3       TIMESERIES tide             YES                      
 
 [STORAGE]
 ;;Name           Elev.    MaxDepth   InitDepth  Shape       Curve Name/Params            SurDepth Fevap    Psi      Ksat     IMD     

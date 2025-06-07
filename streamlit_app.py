@@ -227,6 +227,8 @@ if st.button("Run Baseline Scenario SWMM Simulation"):
 if 'baseline_runoff_df' in st.session_state:
     st.markdown("### 📈 Baseline Subcatchment Runoff Summary (Pre-LID)")
     df_baseline = st.session_state['baseline_runoff_df'].copy()
+    df_baseline = df_baseline[df_baseline['Subcatchment'].str.startswith("Sub_")]
+
 
     if unit in ['cm', 'mm']:
         multiplier = 2.54 if unit == 'cm' else 25.4
