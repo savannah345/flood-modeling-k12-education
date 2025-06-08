@@ -98,45 +98,46 @@ Sub_9            rain_gage J9              4.517812 42       345.456  3.89     0
 [SUBAREAS]
 ;;Subcatchment   N-Imperv   N-Perv     S-Imperv   S-Perv     PctZero    RouteTo    PctRouted 
 ;;-------------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
-Sub_1            0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_10           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_11           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_12           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_13           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_14           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_15           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_16           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_17           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_18           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_19           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_2            0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_20           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_21           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_22           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_23           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_24           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_25           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_26           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_27           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_28           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_29           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_3            0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_30           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_31           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_32           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_33           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_34           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_35           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_36           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_37           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_38           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_39           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_4            0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_5            0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_6            0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_7            0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_8            0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_9            0.01       0.1        0.05       0.05       25         OUTLET    
+Sub_1            0.01       0.1        0.05       0.05       25         PERVIOUS   30 
+Sub_10           0.01       0.1        0.05       0.05       25         PERVIOUS   30  
+Sub_10           0.01       0.1        0.05       0.05       25         PERVIOUS   30 
+Sub_11           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_12           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_13           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_14           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_15           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_16           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_17           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_18           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_19           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_2            0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_20           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_21           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_22           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_23           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_24           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_25           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_26           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_27           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_28           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_29           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_3            0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_30           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_31           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_32           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_33           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_34           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_35           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_36           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_37           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_38           0.01       0.1        0.05       0.05       25         PERVIOUS   30 
+Sub_39           0.01       0.1        0.05       0.05       25         PERVIOUS   30 
+Sub_4            0.01       0.1        0.05       0.05       25         PERVIOUS   30 
+Sub_5            0.01       0.1        0.05       0.05       25         PERVIOUS   30 
+Sub_6            0.01       0.1        0.05       0.05       25         PERVIOUS   30 
+Sub_7            0.01       0.1        0.05       0.05       25         PERVIOUS   30 
+Sub_8            0.01       0.1        0.05       0.05       25         PERVIOUS   30 
+Sub_9            0.01       0.1        0.05       0.05       25         PERVIOUS   30 
 
 [INFILTRATION]
 ;;Subcatchment   Param1     Param2     Param3     Param4     Param5    
@@ -190,7 +191,7 @@ rain_barrel      DRAIN      0          0.5        6          6          0       
 
 rain_garden      RG
 rain_garden      SURFACE    6          0.25       0.1        1.0        5         
-rain_garden      SOIL       18         .453       0.2        0.1        0.43       10.0       4.33      
+rain_garden      SOIL       24         .453       0.2        0.1        0.43       10.0       4.33      
 rain_garden      STORAGE    0          0.75       0.5        0          NO        
 
 

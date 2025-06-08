@@ -258,7 +258,7 @@ st.image(
 # Cost data placeholders
 data = {
     "Infrastructure": ["80 sq.ft. Rain Garden", "55 gallon Rain Barrel", "Tide Gate (10'x5')"],
-    "Estimated Installation Cost": ["$450", "$200", "60000"]
+    "Estimated Installation Cost": ["$250", "$100", "60000"]
 }
 cost_df = pd.DataFrame(data)
 st.subheader("Estimated Costs for Flood Mitigation Options")
@@ -300,8 +300,8 @@ if selected_subs:
     st.markdown('<div class="lid-table-container">', unsafe_allow_html=True)
     for idx, row in df[df["NAME"].isin(selected_subs)].iterrows():
         sub    = row["NAME"]
-        rg_max = int(row["MaxNumber_RG_DEM_considered"])
-        rb_max = int(row["MaxRainBarrell_number"])
+        rg_max = int(row["Max_RG_DEM_Considered"])
+        rb_max = int(row["MaxNumber_RB"])
         cls    = "lid-row alt-row" if idx%2==0 else "lid-row"
         st.markdown(f'<div class="{cls}">', unsafe_allow_html=True)
         c1, c2, c3, c4, c5 = st.columns([1,1.2,1.2,1.2,1.2])
@@ -326,7 +326,7 @@ if selected_subs:
         rg = cfg.get("rain_gardens", 0)
         rb = cfg.get("rain_barrels", 0)
         if rg > 0:
-            cost = rg * 350
+            cost = rg * 250
             cost_breakdown.append({
                 "Subcatchment": sub,
                 "LID Type": "Rain Garden",
@@ -334,7 +334,7 @@ if selected_subs:
             })
             total_cost += cost
         if rb > 0:
-            cost = rb * 200
+            cost = rb * 100
             cost_breakdown.append({
                 "Subcatchment": sub,
                 "LID Type": "Rain Barrel",
@@ -377,23 +377,72 @@ if selected_subs:
 else:
     st.info("You haven't selected any subcatchments to update.")
 
-def generate_lid_usage_lines(lid_config, excel_path="/workspaces/flood-modeling-k12-education/raster_cells_per_sub.xlsx"):
-    df_excel = pd.read_excel(excel_path)
+def generate_lid_usage_lines(lid_config,
+                             excel_path="/workspaces/flood-modeling-k12-education/raster_cells_per_sub.xlsx"):
+    df = pd.read_excel(excel_path)
     lines = []
+
+    # template matching your desired column widths
+    tpl = (
+        "{sub:<15}"     # Subcatchment, left-justified width 15
+        "{proc:<16}"    # LID Process, left-justified width 16
+        "{num:>7}"      # Number, right-justified width 7
+        "{area:>8}"     # Area, right-justified width 8
+        "{width:>7}"    # Width, right-justified width 7
+        "{initsat:>8}"  # InitSat, right-justified width 8
+        "{fromimp:>8}"  # FromImp, right-justified width 8
+        "{toperv:>8}"   # ToPerv, right-justified width 8
+        "{rptfile:>24}" # RptFile, right-justified width 24
+        "{drainto:>16}" # DrainTo, right-justified width 16
+        "{fromperv:>9}" # FromPerv, right-justified width 9
+    )
+
     for sub, cfg in lid_config.items():
-        try:
-            imperv_ft2 = df_excel.loc[df_excel["NAME"]==sub, "Impervious_ft2"].values[0]
-        except IndexError:
+        # find the subcatchment row
+        row = df.loc[df["NAME"] == sub]
+        if row.empty:
             continue
+        imperv = float(row["Impervious_ft2"].iloc[0])
+        perv   = float(row["Pervious_ft2"].iloc[0])
+
+        # rain barrels
         rb = cfg.get("rain_barrels", 0)
-        if rb>0:
-            pct = (rb*595)/imperv_ft2*100
-            lines.append(f"{sub:<17}rain_barrel      {rb:<7}2.95     0     0     {pct:.2f}     0     *     *     0")
-        rg = cfg.get("rain_gardens",0)
-        if rg>0:
-            pct = (rg*1000)/imperv_ft2*100
-            lines.append(f"{sub:<17}rain_garden      {rg:<7}85.0     0     0     {pct:.2f}     0     *     *     0")
+        if rb > 0:
+            pct_imp = (rb * 595) / imperv * 100
+            lines.append(tpl.format(
+                sub=sub,
+                proc="rain_barrel",
+                num=rb,
+                area=f"{2.95:.2f}",
+                width=0,
+                initsat=0,
+                fromimp=f"{pct_imp:.2f}",
+                toperv=1,
+                rptfile="*",
+                drainto="*",
+                fromperv=0
+            ))
+
+        # rain gardens
+        rg = cfg.get("rain_gardens", 0)
+        if rg > 0:
+            pct_perv = (rg * 1000) / perv * 100
+            lines.append(tpl.format(
+                sub=sub,
+                proc="rain_garden",
+                num=rg,
+                area=f"{85:.0f}",
+                width=0,
+                initsat=0,
+                fromimp=0,
+                toperv=1,
+                rptfile="*",
+                drainto="*",
+                fromperv=f"{pct_perv:.2f}"
+            ))
+
     return lines
+
 
 # === Run Scenario With LIDs ===
 if st.button("Run Scenario With Selected LID Improvements"):
