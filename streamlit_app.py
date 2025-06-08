@@ -141,7 +141,6 @@ def extract_runoff_and_lid_data(rpt_file):
                     "Subcatchment": parts[0],
                     "Imperv Runoff (in)": float(parts[5]),
                     "Perv Runoff (in)": float(parts[6]),
-                    "Total Runoff (in)": float(parts[7])
                 })
 
     runoff_df = pd.DataFrame(runoff_data)
@@ -195,8 +194,7 @@ if st.button("Run Baseline Scenario SWMM Simulation"):
 
         # Example LID usage (should be generated from user input)
         lid_usage = [
-            "Sub_1 rain_garden 1 100 0 100 0 0 * * 0",
-            "Sub_2 rain_barrel 1 50 0 0 0 0 * * 0"
+            ";"
         ]
 
         # === Update INP File
@@ -232,7 +230,7 @@ if 'baseline_runoff_df' in st.session_state:
 
     if unit in ['cm', 'mm']:
         multiplier = 2.54 if unit == 'cm' else 25.4
-        for col in ['Impervious Runoff (in)', 'Pervious Runoff (in)', 'Total Runoff (in)']:
+        for col in ['Impervious Runoff (in)', 'Pervious Runoff (in)']:
             new_col = col.replace('(in)', f'({unit})')
             df_baseline[new_col] = df_baseline[col] * multiplier
         df_baseline.drop(columns=[col for col in df_baseline.columns if '(in)' in col], inplace=True)
@@ -249,8 +247,8 @@ st.image(
 
 # Cost data (example values, you can adjust)
 data = {
-    "Infrastructure": ["25 sq.ft. Rain Garden", "50 gallon Rain Barrel", "Tide Gate (10'x5')"],
-    "Estimated Installation Cost": ["$350", "$200", "60,000"]
+    "Infrastructure": ["80 sq.ft. Rain Garden", "55 gallon Rain Barrel", "Tide Gate (10'x5')"],
+    "Estimated Installation Cost": ["$450", "$200", "60,000"]
 }
 
 
@@ -398,3 +396,90 @@ if cost_breakdown:
     st.markdown(f"Total Estimated Cost: **${total_cost:,.2f}**")
 else:
     st.info("No infrastructure improvements (gray or green) have been added to the simulation yet.")
+
+def generate_lid_usage_lines(lid_config, excel_path="/workspaces/flood-modeling-k12-education/raster_cells_per_sub.xlsx"):
+    import pandas as pd
+    df = pd.read_excel(excel_path)
+    lid_lines = []
+
+    for sub, config in lid_config.items():
+        try:
+            imperv_ft2 = df.loc[df["NAME"] == sub, "Impervious_ft2"].values[0]
+        except IndexError:
+            continue  # skip if sub not found
+
+        rb_count = config.get("rain_barrels", 0)
+        if rb_count > 0:
+            rb_from_imp = (rb_count * 595) / imperv_ft2 * 100
+            line = f"{sub:<17}rain_barrel      {rb_count:<7}2.95     0     0     {rb_from_imp:.2f}     0     *     *     0"
+            lid_lines.append(line)
+
+        rg_count = config.get("rain_gardens", 0)
+        if rg_count > 0:
+            rg_from_imp = (rg_count * 1000) / imperv_ft2 * 100
+            line = f"{sub:<17}rain_garden      {rg_count:<7}85.0     0     0     {rg_from_imp:.2f}     0     *     *     0"
+            lid_lines.append(line)
+
+    return lid_lines
+
+
+if st.button("Run Scenario With Selected LID Improvements"):
+    try:
+        # Step 1: Regenerate rainfall and tide curves
+        total_inches = convert_units(rain_inches, unit)
+        tide_minutes, tide_vals = generate_tide_curve(moon_phase, unit)
+        rain_minutes, rain_vals = align_rainfall_to_tide(
+            total_inches, duration_minutes, tide_vals,
+            align=align, method=method
+        )
+        rain_lines = format_timeseries("rain_gage_timeseries", rain_minutes, rain_vals)
+        tide_lines = format_timeseries("tide", tide_minutes, tide_vals)
+
+        # Step 2: Generate LID_USAGE lines
+        lid_usage = generate_lid_usage_lines(st.session_state.user_lid_config)
+
+        if not lid_usage:
+            st.warning("No LID improvements selected. Nothing to simulate.")
+        else:
+            # Step 3: Update and run SWMM
+            update_inp_file(
+                "swmm_project.inp", "updated_model.inp",
+                rain_lines, tide_lines, lid_usage,
+                tide_gate_enabled
+            )
+
+            with Simulation("updated_model.inp") as sim:
+                sim.execute()
+
+            time.sleep(5)  # allow report to generate
+            runoff_df = extract_runoff_and_lid_data("updated_model.rpt")
+
+            # Step 4: Compare to baseline
+            if 'baseline_runoff_df' not in st.session_state:
+                st.error("Baseline results not found. Run baseline scenario first.")
+            else:
+                df_baseline = st.session_state['baseline_runoff_df'].copy()
+                df_latest = runoff_df[runoff_df['Subcatchment'].str.startswith("Sub_")].copy()
+
+                if unit in ['cm', 'mm']:
+                    multiplier = 2.54 if unit == 'cm' else 25.4
+                    for col in ['Impervious Runoff (in)', 'Pervious Runoff (in)']:
+                        new_col = col.replace('(in)', f'({unit})')
+                        df_latest[new_col] = df_latest[col] * multiplier
+                        df_baseline[new_col] = df_baseline[col] * multiplier
+                    df_latest.drop(columns=[col for col in df_latest.columns if '(in)' in col], inplace=True)
+                    df_baseline.drop(columns=[col for col in df_baseline.columns if '(in)' in col], inplace=True)
+
+                st.subheader("Updated Runoff Summary with LID Improvements")
+                st.dataframe(df_latest, use_container_width=True)
+
+                st.subheader("💧 Comparison: Before vs After (Δ Runoff in selected units)")
+                diff_df = df_latest.copy()
+                diff_df['Subcatchment'] = diff_df['Subcatchment']
+                for col in [col for col in df_latest.columns if col.endswith(f'({unit})')]:
+                    diff_df[col] = df_baseline.set_index("Subcatchment")[col] - df_latest.set_index("Subcatchment")[col]
+
+                st.dataframe(diff_df, use_container_width=True)
+
+    except Exception as e:
+        st.error(f"❌ LID Simulation failed: {e}")
