@@ -1,10 +1,9 @@
 import streamlit as st
 import pandas as pd
 import altair as alt
-import time 
+import time
 import numpy as np
 import re
-import openpyxl
 from pyswmm import Simulation
 from rainfall_and_tide_generator import (
     generate_rainfall,
@@ -15,44 +14,84 @@ from rainfall_and_tide_generator import (
     moon_tide_ranges
 )
 
-st.set_page_config(page_title="High Stakes, High Water: A Watershed Design Challenge for Coastal Resilience", layout="centered")
+# --- Configuration ---
+simulation_date = "06/01/2025"
+template_inp     = "swmm_project.inp"
+output_inp       = "updated_model.inp"
 
+st.set_page_config(
+    page_title="High Stakes, High Water: A Watershed Design Challenge for Coastal Resilience",
+    layout="centered"
+)
 st.title("High Stakes, High Water: A Watershed Design Challenge for Coastal Resilience")
 
 # === User Inputs ===
-duration_minutes = st.selectbox("Storm Duration", options=pf_df["Duration_Minutes"],
-                                format_func=lambda x: f"{x // 60} hr")
+duration_minutes = st.selectbox(
+    "Storm Duration",
+    options=pf_df["Duration_Minutes"],
+    format_func=lambda x: f"{x // 60} hr"
+)
+return_period = st.selectbox("Return Period (years)", pf_df.columns[1:])
+# pf_df values are in inches
+rain_inches = float(pf_df.loc[
+    pf_df["Duration_Minutes"] == duration_minutes,
+    return_period
+].values[0])
 
-return_period = st.selectbox("Return Period (years)", options=pf_df.columns[1:])
-rain_inches = pf_df.loc[pf_df["Duration_Minutes"] == duration_minutes, return_period].values[0]
+unit        = st.selectbox("Rainfall Units", ["inches", "cm", "mm"])
+method      = st.radio("Rainfall Shape", ["Normal", "Randomized"])
+moon_phase  = st.selectbox("Moon Phase", list(moon_tide_ranges.keys()))
+tide_align  = st.radio(
+    "Tide Alignment",
+    ["Peak aligned with High Tide", "Peak aligned with Low Tide"]
+)
+align_mode  = "peak" if "High" in tide_align else "low"
 
-unit = st.selectbox("Rainfall Units", ["inches", "cm", "mm"])
-method = st.radio("Rainfall Shape", ["Normal", "Randomized"])
-moon_phase = st.selectbox("Moon Phase", list(moon_tide_ranges.keys()))
-tide_align = st.radio("Tide Alignment", ["Peak aligned with High Tide", "Peak aligned with Low Tide"])
-align_option = "peak" if "High" in tide_align else "low"
-align = "peak" if "High" in tide_align else "dip"
+# --- Generate SWMM-curves (always inches & feet) ---
+tide_sim_minutes, tide_sim_curve = generate_tide_curve(moon_phase, "inches")
+rain_sim_minutes, rain_sim_curve = align_rainfall_to_tide(
+    rain_inches,
+    duration_minutes,
+    tide_sim_curve,
+    align=align_mode,
+    method=method
+)
 
-# === Generate Tide & Rainfall ===
-converted_inches = convert_units(rain_inches, unit)
-tide_minutes, tide_curve = generate_tide_curve(moon_phase, unit)
-rain_minutes, rain_curve = align_rainfall_to_tide(converted_inches, duration_minutes, tide_curve, align_option, method)
+# --- Generate display-curves based on selected unit ---
+if unit == "inches":
+    display_rain_curve = rain_sim_curve
+    display_tide_curve = tide_sim_curve
+    tide_disp_unit    = "ft"
+elif unit == "cm":
+    display_rain_curve = rain_sim_curve * 2.54
+    display_tide_curve = tide_sim_curve * 0.3048 * 100
+    tide_disp_unit    = "m"
+else:  # mm
+    display_rain_curve = rain_sim_curve * 25.4
+    display_tide_curve = tide_sim_curve * 0.3048 * 1000
+    tide_disp_unit    = "m"
+
+time_hours = np.array(rain_sim_minutes) / 60
 
 # === Display Rainfall Chart ===
 df_rain = pd.DataFrame({
-    "Time (hours)": np.array(rain_minutes) / 60,
-    f"Rainfall ({unit})": rain_curve
+    "Time (hours)": time_hours,
+    f"Rainfall ({unit})": display_rain_curve
 })
 st.subheader("Rainfall Distribution")
-rain_chart = alt.Chart(df_rain).mark_line().encode(
-    x=alt.X('Time (hours)', title='Time (hours)'),
-    y=alt.Y(f'Rainfall ({unit})', title=f'Rainfall ({unit})')
-).properties(title="Rainfall Distribution")
-
+rain_chart = (
+    alt.Chart(df_rain)
+       .mark_line()
+       .encode(
+           x="Time (hours)",
+           y=f"Rainfall ({unit})"
+       )
+       .properties(title="Rainfall Distribution")
+)
 st.altair_chart(rain_chart, use_container_width=True)
 
 # === Rainfall CSV Download ===
-csv_rain = df_rain.to_csv(index=False).encode('utf-8')
+csv_rain = df_rain.to_csv(index=False).encode("utf-8")
 st.download_button(
     label="⬇️ Download Rainfall Data (CSV)",
     data=csv_rain,
@@ -60,24 +99,25 @@ st.download_button(
     mime="text/csv"
 )
 
-
 # === Display Tide Chart ===
-tide_unit = "meters" if unit in ["cm", "mm"] else "feet"
 df_tide = pd.DataFrame({
-    "Time (hours)": np.array(tide_minutes) / 60,
-    f"Tide ({tide_unit})": tide_curve
+    "Time (hours)": time_hours,
+    f"Tide ({tide_disp_unit})": display_tide_curve
 })
 st.subheader("Tide Profile")
-tide_chart = alt.Chart(df_tide).mark_line().encode(
-    x=alt.X('Time (hours)', title='Time (hours)'),
-    y=alt.Y(f'Tide ({tide_unit})', title=f'Tide ({tide_unit})')
-).properties(title="Tide Profile")
-
+tide_chart = (
+    alt.Chart(df_tide)
+       .mark_line()
+       .encode(
+           x="Time (hours)",
+           y=f"Tide ({tide_disp_unit})"
+       )
+       .properties(title="Tide Profile")
+)
 st.altair_chart(tide_chart, use_container_width=True)
 
-
 # === Tide CSV Download ===
-csv_tide = df_tide.to_csv(index=False).encode('utf-8')
+csv_tide = df_tide.to_csv(index=False).encode("utf-8")
 st.download_button(
     label="⬇️ Download Tide Data (CSV)",
     data=csv_tide,
@@ -91,395 +131,322 @@ st.image(
     use_container_width=True
 )
 
-
+# === INP File Updater ===
 def update_inp_file(template_path, output_path,
-                    rain_lines, tide_lines, lid_usage,
-                    tide_gate_enabled):
-    with open(template_path, "r") as f:
-        text = f.read()
-
+                    rain_lines, tide_lines,
+                    lid_lines, gate_flag):
+    text = open(template_path).read()
     text = text.replace("$RAINFALL_TIMESERIES$", "\n".join(rain_lines))
-    text = text.replace("$TIDE_TIMESERIES$", "\n".join(tide_lines))
-    text = text.replace("$LID_USAGE$", "\n".join(lid_usage))
-    text = text.replace("$TIDE_GATE_CONTROL$", tide_gate_enabled)
+    text = text.replace("$TIDE_TIMESERIES$",    "\n".join(tide_lines))
+    text = text.replace("$LID_USAGE$",           "\n".join(lid_lines))
+    text = text.replace("$TIDE_GATE_CONTROL$",    gate_flag)
+    open(output_path, "w").write(text)
 
-    with open(output_path, "w") as f:
-        f.write(text)
+# === Time-series Formatter ===
+def format_timeseries(name, minutes, values, date):
+    lines = []
+    for m, v in zip(minutes, values):
+        hh = int(m) // 60
+        mm = int(m) % 60
+        lines.append(f"{name} {date} {hh:02d}:{mm:02d} {v:.5f}")
+    return lines
 
-def format_timeseries(name, minutes, values):
-    return [f"{name} 06/01/2025 {int(m)//60:02d}:{int(m)%60:02d} {v:.5f}" for m, v in zip(minutes, values)]
-
-# === Runoff and LID Data Extraction ===
+# === Report Parser ===
 def extract_runoff_and_lid_data(rpt_file):
-    with open(rpt_file) as f:
-        lines = f.readlines()
-
+    lines = open(rpt_file).read().splitlines()
     runoff_section = False
-    runoff_data = []
-
+    data = []
     for line in lines:
-        # Detect section headers
         if "Subcatchment Runoff Summary" in line:
             runoff_section = True
-            lid_section = False
             continue
-
-
-        # Skip dashed separators and blank lines
-        if "----" in line or line.strip() == "":
+        if runoff_section and line.strip()=="" and data:
+            break
+        if not runoff_section:
             continue
-
-        # Skip units row or any text row that contains non-numeric "in" or headers
-        if "Subcatchment" in line or "Inflow" in line:
+        if line.startswith("----") or line.strip().startswith("Subcatchment"):
             continue
+        parts = line.split()
+        if len(parts) < 7:
+            continue
+        try:
+            imperv = float(parts[5])
+            perv   = float(parts[6])
+        except ValueError:
+            continue
+        data.append({
+            "Subcatchment": parts[0],
+            "Impervious Runoff (in)": imperv,
+            "Pervious Runoff   (in)": perv
+        })
+    return pd.DataFrame(data)
 
-        # Parse Runoff section
-        if runoff_section:
-            parts = line.split()
-            if len(parts) >= 11 and all(p.replace('.', '', 1).replace('-', '', 1).isdigit() for p in parts[4:7] + [parts[10]]):
-                runoff_data.append({
-                    "Subcatchment": parts[0],
-                    "Imperv Runoff (in)": float(parts[5]),
-                    "Perv Runoff (in)": float(parts[6]),
-                })
-
-    runoff_df = pd.DataFrame(runoff_data)
-    runoff_df.rename(columns={
-        "Imperv Runoff (in)": "Impervious Runoff (in)",
-        "Perv Runoff (in)": "Pervious Runoff (in)"
-    }, inplace=True)
-    return runoff_df
-
-
-
-st.subheader("Tide Gate")
-st.image(
-    "/workspaces/flood-modeling-k12-education/Images/tide_gate.png",
-    use_container_width=True
-)
-
-
-# === Tide Gate Option ===
-st.subheader("Tide Gate Option")
+# === Scenario Summary ===
 tide_gate_enabled = "YES" if st.checkbox("Include Tide Gate at Outfall?", value=False) else "NO"
-
-scenario_summary = f"""
-### Selected Scenario Summary  
-- **Storm Duration:** {duration_minutes // 60} hours  
-- **Return Period:** {return_period} year  
+st.markdown(f"""
+### Selected Scenario Summary
+- **Storm Duration:** {duration_minutes//60} hr  
+- **Return Period:** {return_period} yr  
 - **Moon Phase:** {moon_phase}  
-- **Tide Alignment:** {"Rainfall aligned with high tide" if align == "peak" else "Rainfall aligned with low tide"}  
-- **Tide Gate Enabled:** {"Yes" if tide_gate_enabled == "YES" else "No"}  
-- **Units:** {unit}
-"""
-st.markdown(scenario_summary)
+- **Tide Alignment:** {'High Tide Peak' if align_mode=='peak' else 'Low Tide Dip'}  
+- **Tide Gate Enabled:** {'Yes' if tide_gate_enabled=='YES' else 'No'}  
+- **Display Units:** {unit}
+""")
 
-
-# === Simulation Trigger
+# === Run Baseline Scenario ===
 if st.button("Run Baseline Scenario SWMM Simulation"):
     try:
-        # Convert rainfall total based on unit
-        total_inches = convert_units(rain_inches, unit)
-
-        # Generate rainfall and tide curves
-        tide_minutes, tide_vals = generate_tide_curve(moon_phase, unit)
-        rain_minutes, rain_vals = align_rainfall_to_tide(
-            total_inches, duration_minutes, tide_vals,
-            align=align, method=method
+        rain_lines = format_timeseries(
+            "rain_gage_timeseries",
+            rain_sim_minutes, rain_sim_curve,
+            simulation_date
         )
-
-        # Format time series
-        rain_lines = format_timeseries("rain_gage_timeseries", rain_minutes, rain_vals)
-        tide_lines = format_timeseries("tide", tide_minutes, tide_vals)
-
-        # Example LID usage (should be generated from user input)
-        lid_usage = [
-            ";"
-        ]
-
-        # === Update INP File
+        tide_lines = format_timeseries(
+            "tide",
+            tide_sim_minutes, tide_sim_curve,
+            simulation_date
+        )
+        lid_lines = [";"]
         update_inp_file(
-            "swmm_project.inp", "updated_model.inp",
-            rain_lines, tide_lines, lid_usage,
-            tide_gate_enabled
+            template_inp, output_inp,
+            rain_lines, tide_lines,
+            lid_lines, tide_gate_enabled
         )
 
-        # === Run Simulation
-        with Simulation("updated_model.inp") as sim:
+        with Simulation(output_inp) as sim:
             sim.execute()
-        st.success("Baseline Scenario Complete!")
+            sim.close()
+        time.sleep(1)
 
-        time.sleep(5)  # Wait 5 seconds
+        df_runoff = extract_runoff_and_lid_data("updated_model.rpt")
+        df_base   = df_runoff[df_runoff["Subcatchment"].str.startswith("Sub_")]
 
-        runoff_df = extract_runoff_and_lid_data("updated_model.rpt")
+        # Convert for display
+        if unit == "inches":
+            df_disp = df_base.rename(columns={
+                "Impervious Runoff (in)":    "Impervious Runoff (inches)",
+                "Pervious Runoff   (in)":    "Pervious Runoff (inches)"
+            })
+        else:
+            factor = 2.54 if unit=="cm" else 25.4
+            df_disp = pd.DataFrame({
+                "Subcatchment": df_base["Subcatchment"],
+                f"Impervious Runoff ({unit})":
+                    df_base["Impervious Runoff (in)"] * factor,
+                f"Pervious Runoff ({unit})":
+                    df_base["Pervious Runoff   (in)"] * factor
+            })
 
-        st.subheader("Subcatchment Runoff Summary")
-        # Save the original results under a separate key
-        st.session_state['baseline_runoff_df'] = runoff_df.copy()
-        st.session_state['latest_runoff_df'] = runoff_df.copy()  # optional if you want a live-updated version for LID runs
+        st.session_state["baseline_df"] = df_disp
+        st.success("Baseline scenario complete!")
 
     except Exception as e:
-        st.error(f"❌ Simulation failed: {e}")
+        st.error(f"Baseline simulation failed: {e}")
 
+# === Show Baseline Results ===
+if "baseline_df" in st.session_state:
+    st.subheader("Baseline Subcatchment Runoff Summary (Pre-intervention)")
+    st.dataframe(st.session_state["baseline_df"], use_container_width=True)
 
-if 'baseline_runoff_df' in st.session_state:
-    st.markdown("Baseline Subcatchment Runoff Summary (Pre-intervention)")
-    df_baseline = st.session_state['baseline_runoff_df'].copy()
-    df_baseline = df_baseline[df_baseline['Subcatchment'].str.startswith("Sub_")]
-
-
-    if unit in ['cm', 'mm']:
-        multiplier = 2.54 if unit == 'cm' else 25.4
-        for col in ['Impervious Runoff (in)', 'Pervious Runoff (in)']:
-            new_col = col.replace('(in)', f'({unit})')
-            df_baseline[new_col] = df_baseline[col] * multiplier
-        df_baseline.drop(columns=[col for col in df_baseline.columns if '(in)' in col], inplace=True)
-
-    st.dataframe(df_baseline, use_container_width=True)
-
-
+# === Low Impact Developments (LIDs) UI & Cost ===
 st.subheader("Low Impact Developments (LIDs)")
 st.image(
     "/workspaces/flood-modeling-k12-education/Images/green_infrastructure_options.png",
     use_container_width=True
 )
 
-
-# Cost data (example values, you can adjust)
+# Cost data placeholders
 data = {
     "Infrastructure": ["80 sq.ft. Rain Garden", "55 gallon Rain Barrel", "Tide Gate (10'x5')"],
-    "Estimated Installation Cost": ["$450", "$200", "60,000"]
+    "Estimated Installation Cost": ["$450", "$200", "60000"]
 }
-
-
-# Create DataFrame
 cost_df = pd.DataFrame(data)
-
-# Display in Streamlit
 st.subheader("Estimated Costs for Flood Mitigation Options")
-st.table(cost_df)  # Use st.dataframe(cost_df) if you want scroll/sort features
+st.table(cost_df)
 
-
-        # === Load and sort subcatchments ===
+# Load & sort subcatchments
 def extract_number(name):
-    match = re.search(r"_(\d+)", name)
-    return int(match.group(1)) if match else float('inf')
+    m = re.search(r"_(\d+)", name)
+    return int(m.group(1)) if m else float("inf")
 
 df = pd.read_excel("/workspaces/flood-modeling-k12-education/raster_cells_per_sub.xlsx")
 df = df.sort_values(by="NAME", key=lambda x: x.map(extract_number)).reset_index(drop=True)
 
 st.title("Add LIDs")
-
 if "user_lid_config" not in st.session_state:
-    st.session_state.user_lid_config = {}
+    st.session_state["user_lid_config"] = {}
 
-# === Step 1: Let student choose if they want to intervene ===
 available_subs = df["NAME"].tolist()
 selected_subs = st.multiselect(
     "Select subcatchments to add rain gardens or rain barrels",
     options=available_subs,
-    help="If you want to test different LID options, choose one or more subcatchments to adjust."
+    help="Pick one or more to configure LIDs."
 )
 
-# === Step 2: Only show the configuration table if something is selected ===
 if selected_subs:
-    # === Styling ===
     st.markdown("""
         <style>
-        .lid-table-container {
-            max-height: 600px;
-            overflow-y: scroll;
-            border: 1px solid #ccc;
-        }
-        .lid-row {
-            display: grid;
-            grid-template-columns: 1.0fr 1.2fr 1.5fr 1.2fr 1.2fr;
-            padding: 6px 5px;
-            font-size: 16px;
-            align-items: center;
-            border-bottom: 1px solid #ccc;
-        }
-        .alt-row {
-            background-color: #f9f9f9;
-        }
-        .lid-cell input {
-            font-size: 16px !important;
-            text-align: center !important;
-        }
+        .lid-table-container { max-height:600px; overflow-y:scroll; border:1px solid #ccc; }
+        .lid-row { display:grid; grid-template-columns:1fr 1.2fr 1.2fr 1.2fr 1.2fr; padding:6px; font-size:16px; align-items:center; border-bottom:1px solid #ccc; }
+        .alt-row { background-color:#f9f9f9; }
         </style>
     """, unsafe_allow_html=True)
-
-    # === Header ===
     st.markdown("""
-    <div class="lid-row" style="font-weight:bold; background-color:#ddd;">
-        <div>Subcatchment</div>
-        <div>Max Rain Gardens</div>
-        <div>Your Rain Gardens</div>
-        <div>Max Rain Barrels</div>
-        <div>Your Rain Barrels</div>
-    </div>
+        <div class="lid-row" style="font-weight:bold;background:#ddd;">
+          <div>Subcatchment</div><div>Max Rain Gardens</div><div>Your Rain Gardens</div>
+          <div>Max Rain Barrels</div><div>Your Rain Barrels</div>
+        </div>
     """, unsafe_allow_html=True)
-
-    # === Start Table Container ===
     st.markdown('<div class="lid-table-container">', unsafe_allow_html=True)
-
-    # === Table Rows ===
     for idx, row in df[df["NAME"].isin(selected_subs)].iterrows():
-        sub = row["NAME"]
+        sub    = row["NAME"]
         rg_max = int(row["MaxNumber_RG_DEM_considered"])
         rb_max = int(row["MaxRainBarrell_number"])
-
-        row_class = "lid-row alt-row" if idx % 2 == 0 else "lid-row"
-
-        st.markdown(f'<div class="{row_class}">', unsafe_allow_html=True)
-        col1, col2, col3, col6, col7 = st.columns([1.0, 1.2, 1.2, 1.2, 1.2])
-
-        with col1: st.markdown(f"**{sub}**", unsafe_allow_html=True)
-        with col2: st.markdown(f"<div style='text-align: center;'>{rg_max}</div>", unsafe_allow_html=True)
-        with col3:
-            rg_val = st.number_input("", 0, rg_max, 0, step=5, key=f"rg_{sub}", label_visibility="collapsed")
-        with col6: st.markdown(f"<div style='text-align: center;'>{rb_max}</div>", unsafe_allow_html=True)
-        with col7:
-            rb_val = st.number_input("", 0, rb_max, 0, step=5, key=f"rb_{sub}", label_visibility="collapsed")
+        cls    = "lid-row alt-row" if idx%2==0 else "lid-row"
+        st.markdown(f'<div class="{cls}">', unsafe_allow_html=True)
+        c1, c2, c3, c4, c5 = st.columns([1,1.2,1.2,1.2,1.2])
+        with c1: st.markdown(f"**{sub}**", unsafe_allow_html=True)
+        with c2: st.markdown(f"<div style='text-align:center'>{rg_max}</div>", unsafe_allow_html=True)
+        with c3: rg_val = st.number_input("", 0, rg_max, 0, step=5, key=f"rg_{sub}", label_visibility="collapsed")
+        with c4: st.markdown(f"<div style='text-align:center'>{rb_max}</div>", unsafe_allow_html=True)
+        with c5: rb_val = st.number_input("", 0, rb_max, 0, step=5, key=f"rb_{sub}", label_visibility="collapsed")
         st.markdown("</div>", unsafe_allow_html=True)
-
-        st.session_state.user_lid_config[sub] = {
+        st.session_state["user_lid_config"][sub] = {
             "rain_gardens": rg_val,
             "rain_barrels": rb_val
         }
-
     st.markdown('</div>', unsafe_allow_html=True)
 
+        # === Compute & Display LID Costs ===
+    total_cost = 0
+    cost_breakdown = []
+
+    # 1) Per‐subcatchment costs
+    for sub, cfg in st.session_state["user_lid_config"].items():
+        rg = cfg.get("rain_gardens", 0)
+        rb = cfg.get("rain_barrels", 0)
+        if rg > 0:
+            cost = rg * 350
+            cost_breakdown.append({
+                "Subcatchment": sub,
+                "LID Type": "Rain Garden",
+                "Cost": cost
+            })
+            total_cost += cost
+        if rb > 0:
+            cost = rb * 200
+            cost_breakdown.append({
+                "Subcatchment": sub,
+                "LID Type": "Rain Barrel",
+                "Cost": cost
+            })
+            total_cost += cost
+
+    # 2) Tide gate cost
+    if tide_gate_enabled == "YES":
+        tide_cost = 60000
+        cost_breakdown.append({
+            "Subcatchment": "Watershed Outfall",
+            "LID Type": "Tide Gate",
+            "Cost": tide_cost
+        })
+        total_cost += tide_cost
+
+    if cost_breakdown:
+        cost_df = pd.DataFrame(cost_breakdown)
+
+        # Stacked bar chart of Cost by Subcatchment & LID Type
+        chart = (
+            alt.Chart(cost_df)
+            .mark_bar()
+            .encode(
+                x=alt.X("Subcatchment:N", title="Subcatchment"),
+                y=alt.Y("Cost:Q", title="Cost", stack="zero"),
+                color=alt.Color("LID Type:N", legend=alt.Legend(title="LID Type")),
+                tooltip=["Subcatchment","LID Type","Cost"]
+            )
+            .properties(width=650, height=350)
+        )
+        st.altair_chart(chart, use_container_width=True)
+
+        # Total cost below the chart
+        st.markdown(f"**Total Estimated Cost: ${total_cost:,.2f}**")
+    else:
+        st.info("No infrastructure improvements have been added.")
 
 else:
     st.info("You haven't selected any subcatchments to update.")
 
-total_cost = 0
-cost_breakdown = []
-
-for sub, config in st.session_state.user_lid_config.items():
-    rg = config["rain_gardens"]
-    rb = config["rain_barrels"]
-    
-    if rg + rb == 0:
-        continue
-
-    area_multiplier = 1 if unit == "inches" else 10.7639
-    if rg > 0:
-        cost = rg * 350
-        cost_breakdown.append({"Subcatchment": sub, "LID Type": "Rain Garden", "Cost": cost})
-        total_cost += cost
-    if rb > 0:
-        cost = rb * 200
-        cost_breakdown.append({"Subcatchment": sub, "LID Type": "Rain Barrels", "Cost": cost})
-        total_cost += cost
-
-# Tide gate cost
-if tide_gate_enabled == "YES":
-    tide_cost = 60000  # Average estimate
-    cost_breakdown.append({"Subcatchment": "Watershed Outfall", "LID Type": "Tide Gate", "Cost": tide_cost})
-    total_cost += tide_cost
-
-if cost_breakdown:
-    st.markdown("Estimated Cost by Subcatchment and LID Type")
-    cost_df = pd.DataFrame(cost_breakdown)
-
-    chart = alt.Chart(cost_df).mark_bar().encode(
-        x=alt.X("Subcatchment:N", title="Subcatchment"),
-        y=alt.Y("Cost:Q", title="Cost ($)", stack="zero"),
-        color=alt.Color("LID Type:N", legend=alt.Legend(title="LID Type")),
-        tooltip=["Subcatchment", "LID Type", "Cost"]
-    ).properties(width=650, height=350)
-
-    st.altair_chart(chart, use_container_width=True)
-
-    st.markdown(f"Total Estimated Cost: **${total_cost:,.2f}**")
-else:
-    st.info("No infrastructure improvements (gray or green) have been added to the simulation yet.")
-
 def generate_lid_usage_lines(lid_config, excel_path="/workspaces/flood-modeling-k12-education/raster_cells_per_sub.xlsx"):
-    import pandas as pd
-    df = pd.read_excel(excel_path)
-    lid_lines = []
-
-    for sub, config in lid_config.items():
+    df_excel = pd.read_excel(excel_path)
+    lines = []
+    for sub, cfg in lid_config.items():
         try:
-            imperv_ft2 = df.loc[df["NAME"] == sub, "Impervious_ft2"].values[0]
+            imperv_ft2 = df_excel.loc[df_excel["NAME"]==sub, "Impervious_ft2"].values[0]
         except IndexError:
-            continue  # skip if sub not found
+            continue
+        rb = cfg.get("rain_barrels", 0)
+        if rb>0:
+            pct = (rb*595)/imperv_ft2*100
+            lines.append(f"{sub:<17}rain_barrel      {rb:<7}2.95     0     0     {pct:.2f}     0     *     *     0")
+        rg = cfg.get("rain_gardens",0)
+        if rg>0:
+            pct = (rg*1000)/imperv_ft2*100
+            lines.append(f"{sub:<17}rain_garden      {rg:<7}85.0     0     0     {pct:.2f}     0     *     *     0")
+    return lines
 
-        rb_count = config.get("rain_barrels", 0)
-        if rb_count > 0:
-            rb_from_imp = (rb_count * 595) / imperv_ft2 * 100
-            line = f"{sub:<17}rain_barrel      {rb_count:<7}2.95     0     0     {rb_from_imp:.2f}     0     *     *     0"
-            lid_lines.append(line)
-
-        rg_count = config.get("rain_gardens", 0)
-        if rg_count > 0:
-            rg_from_imp = (rg_count * 1000) / imperv_ft2 * 100
-            line = f"{sub:<17}rain_garden      {rg_count:<7}85.0     0     0     {rg_from_imp:.2f}     0     *     *     0"
-            lid_lines.append(line)
-
-    return lid_lines
-
-
+# === Run Scenario With LIDs ===
 if st.button("Run Scenario With Selected LID Improvements"):
-    try:
-        # Step 1: Regenerate rainfall and tide curves
-        total_inches = convert_units(rain_inches, unit)
-        tide_minutes, tide_vals = generate_tide_curve(moon_phase, unit)
-        rain_minutes, rain_vals = align_rainfall_to_tide(
-            total_inches, duration_minutes, tide_vals,
-            align=align, method=method
-        )
-        rain_lines = format_timeseries("rain_gage_timeseries", rain_minutes, rain_vals)
-        tide_lines = format_timeseries("tide", tide_minutes, tide_vals)
-
-        # Step 2: Generate LID_USAGE lines
-        lid_usage = generate_lid_usage_lines(st.session_state.user_lid_config)
-
-        if not lid_usage:
-            st.warning("No LID improvements selected. Nothing to simulate.")
-        else:
-            # Step 3: Update and run SWMM
-            update_inp_file(
-                "swmm_project.inp", "updated_model.inp",
-                rain_lines, tide_lines, lid_usage,
-                tide_gate_enabled
+    if "baseline_df" not in st.session_state:
+        st.error("Please run the baseline scenario first.")
+    else:
+        try:
+            rain_lines = format_timeseries(
+                "rain_gage_timeseries",
+                rain_sim_minutes, rain_sim_curve,
+                simulation_date
             )
+            tide_lines = format_timeseries(
+                "tide",
+                tide_sim_minutes, tide_sim_curve,
+                simulation_date
+            )
+            lid_lines = generate_lid_usage_lines(st.session_state["user_lid_config"])
+            if not lid_lines:
+                st.warning("No LIDs selected.")
+                st.stop()
 
-            with Simulation("updated_model.inp") as sim:
+            update_inp_file(
+                template_inp, output_inp,
+                rain_lines, tide_lines,
+                lid_lines, tide_gate_enabled
+            )
+            with Simulation(output_inp) as sim:
                 sim.execute()
+                sim.close()
+            time.sleep(1)
 
-            time.sleep(5)  # allow report to generate
-            runoff_df = extract_runoff_and_lid_data("updated_model.rpt")
+            df_runoff = extract_runoff_and_lid_data("updated_model.rpt")
+            df_latest = df_runoff[df_runoff["Subcatchment"].str.startswith("Sub_")]
 
-            # Step 4: Compare to baseline
-            if 'baseline_runoff_df' not in st.session_state:
-                st.error("Baseline results not found. Run baseline scenario first.")
+            # Convert for display
+            if unit=="inches":
+                df_disp = df_latest.rename(columns={
+                    "Impervious Runoff (in)": "Impervious Runoff (inches)",
+                    "Pervious Runoff   (in)": "Pervious Runoff (inches)"
+                })
             else:
-                df_baseline = st.session_state['baseline_runoff_df'].copy()
-                df_latest = runoff_df[runoff_df['Subcatchment'].str.startswith("Sub_")].copy()
+                factor = 2.54 if unit=="cm" else 25.4
+                df_disp = pd.DataFrame({
+                    "Subcatchment": df_latest["Subcatchment"],
+                    f"Impervious Runoff ({unit})":
+                        df_latest["Impervious Runoff (in)"] * factor,
+                    f"Pervious Runoff ({unit})":
+                        df_latest["Pervious Runoff   (in)"] * factor
+                })
 
-                if unit in ['cm', 'mm']:
-                    multiplier = 2.54 if unit == 'cm' else 25.4
-                    for col in ['Impervious Runoff (in)', 'Pervious Runoff (in)']:
-                        new_col = col.replace('(in)', f'({unit})')
-                        df_latest[new_col] = df_latest[col] * multiplier
-                        df_baseline[new_col] = df_baseline[col] * multiplier
-                    df_latest.drop(columns=[col for col in df_latest.columns if '(in)' in col], inplace=True)
-                    df_baseline.drop(columns=[col for col in df_baseline.columns if '(in)' in col], inplace=True)
+            st.subheader("Updated Runoff Summary with LID Improvements")
+            st.dataframe(df_disp, use_container_width=True)
 
-                st.subheader("Updated Runoff Summary with LID Improvements")
-                st.dataframe(df_latest, use_container_width=True)
-
-                st.subheader("💧 Comparison: Before vs After (Δ Runoff in selected units)")
-                diff_df = df_latest.copy()
-                diff_df['Subcatchment'] = diff_df['Subcatchment']
-                for col in [col for col in df_latest.columns if col.endswith(f'({unit})')]:
-                    diff_df[col] = df_baseline.set_index("Subcatchment")[col] - df_latest.set_index("Subcatchment")[col]
-
-                st.dataframe(diff_df, use_container_width=True)
-
-    except Exception as e:
-        st.error(f"❌ LID Simulation failed: {e}")
+        except Exception as e:
+            st.error(f"LID simulation failed: {e}")
