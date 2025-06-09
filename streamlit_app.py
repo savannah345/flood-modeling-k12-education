@@ -6,6 +6,8 @@ import numpy as np
 import re
 import matplotlib.pyplot as plt
 from datetime import timedelta
+import matplotlib.dates as mdates
+from datetime import datetime
 from pyswmm import Simulation, Links
 from rainfall_and_tide_generator import (
     generate_rainfall,
@@ -183,15 +185,12 @@ def extract_runoff_and_lid_data(rpt_file):
         })
     return pd.DataFrame(data)
 
-# === Scenario Summary ===
-tide_gate_enabled = "YES" if st.checkbox("Include Tide Gate at Outfall?", value=False) else "NO"
 st.markdown(f"""
 ### Selected Scenario Summary
 - **Storm Duration:** {duration_minutes//60} hr  
 - **Return Period:** {return_period} yr  
 - **Moon Phase:** {moon_phase}  
 - **Tide Alignment:** {'High Tide Peak' if align_mode=='peak' else 'Low Tide Dip'}  
-- **Tide Gate Enabled:** {'Yes' if tide_gate_enabled=='YES' else 'No'}  
 - **Display Units:** {unit}
 """)
 
@@ -209,38 +208,46 @@ if st.button("Run Baseline Scenario SWMM Simulation"):
             simulation_date
         )
         lid_lines = [";"]
-        update_inp_file(
-            template_inp, output_inp,
-            rain_lines, tide_lines,
-            lid_lines, tide_gate_enabled
-        )
-
-        link_id = "C18_2"
+        
         full_depth = 8.0  # ft (known from XSECTIONS)
+        report_interval = timedelta(minutes=5)
 
-        # === Run simulation and sample every 5 minutes (60 × 5sec steps)
-
-
-        ROUTING_STEP_SEC = 5
-        REPORT_STEP_MIN = 5
-
-        report_interval = timedelta(minutes=REPORT_STEP_MIN)
-
-        depth_pct = []
-        timestamps = []
-
+        # Run baseline WITHOUT tide gate
+        update_inp_file(template_inp, output_inp, rain_lines, tide_lines, lid_lines, "NO")
+        depth_pct_no_gate, timestamps = [], []
         with Simulation(output_inp) as sim:
-            link = Links(sim)[link_id]
+            link = Links(sim)["C18_2"]
             last_report_time = None
             for step in sim:
                 current_time = sim.current_time
                 if last_report_time is None or (current_time - last_report_time) >= report_interval:
-                    depth = link.depth
-                    pct = (depth / full_depth) * 100 if full_depth > 0 else 0
-                    depth_pct.append(pct)
+                    pct = (link.depth / full_depth) * 100
+                    depth_pct_no_gate.append(pct)
                     timestamps.append(current_time.strftime("%H:%M"))
                     last_report_time = current_time
+        st.session_state["baseline_fill"] = depth_pct_no_gate
+        st.session_state["baseline_timestamps"] = timestamps
 
+        # After NO gate simulation
+        df_base_nogate = extract_runoff_and_lid_data("updated_model.rpt")
+        st.session_state["df_base_nogate"] = df_base_nogate
+
+        # Run baseline WITH tide gate
+        update_inp_file(template_inp, output_inp, rain_lines, tide_lines, lid_lines, "YES")
+        depth_pct_gate, _ = [], []
+        with Simulation(output_inp) as sim:
+            link = Links(sim)["C18_2"]
+            last_report_time = None
+            for step in sim:
+                current_time = sim.current_time
+                if last_report_time is None or (current_time - last_report_time) >= report_interval:
+                    pct = (link.depth / full_depth) * 100
+                    depth_pct_gate.append(pct)
+                    last_report_time = current_time
+        st.session_state["baseline_gate_fill"] = depth_pct_gate
+
+        df_base_gate = extract_runoff_and_lid_data("updated_model.rpt")
+        st.session_state["df_base_gate"] = df_base_gate
 
         df_runoff = extract_runoff_and_lid_data("updated_model.rpt")
         df_base   = df_runoff[df_runoff["Subcatchment"].str.startswith("Sub_")]
@@ -261,14 +268,41 @@ if st.button("Run Baseline Scenario SWMM Simulation"):
                     df_base["Pervious Runoff   (in)"] * factor
             })
 
-        st.session_state["pipe_depth_pct"] = depth_pct
-        st.session_state["pipe_timestamps"] = timestamps
-
         st.session_state["baseline_df"] = df_disp
         st.success("Baseline scenario complete!")
 
     except Exception as e:
         st.error(f"Baseline simulation failed: {e}")
+
+if "df_base_nogate" in st.session_state:
+    st.subheader("Baseline Runoff (No Tide Gate)")
+
+    df_no = st.session_state["df_base_nogate"].copy()
+
+    # Optional unit conversion
+    if unit != "inches":
+        factor = 2.54 if unit == "cm" else 25.4
+        df_no["Impervious Runoff (in)"] *= factor
+        df_no["Pervious Runoff   (in)"] *= factor
+        df_no.columns = ["Subcatchment",
+                         f"Impervious Runoff ({unit})",
+                         f"Pervious Runoff ({unit})"]
+    else:
+        df_no.columns = ["Subcatchment",
+                         "Impervious Runoff (in)",
+                         "Pervious Runoff (in)"]
+
+    st.dataframe(df_no, use_container_width=True)
+
+    # Optional download
+    csv_no_gate = df_no.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label="⬇️ Download Baseline Runoff (No Tide Gate)",
+        data=csv_no_gate,
+        file_name="baseline_runoff_no_gate.csv",
+        mime="text/csv"
+    )
+
 
 
 st.subheader("Pipes")
@@ -276,40 +310,6 @@ st.image(
     "/workspaces/flood-modeling-k12-education/Images/model_with_pipes.png",
     use_container_width=True
 )
-
-
-# === Show Pipe Fill Slider and Bar (if data exists) ===
-if "pipe_depth_pct" in st.session_state and "pipe_timestamps" in st.session_state:
-    st.subheader("Pipe Fill Over Time")
-
-    hour_labels = st.session_state["pipe_timestamps"]
-    frame = st.select_slider(
-        "Select Hour",
-        options=list(range(len(hour_labels))),
-        format_func=lambda i: hour_labels[i],
-        value=0
-    )
-
-    val = st.session_state["pipe_depth_pct"][frame]
-    timestamp = hour_labels[frame]
-    color = "red" if val > 95 else "blue"
-
-    col1, col2, col3 = st.columns([2, 2, 2])
-    with col2:
-        st.subheader("Culvert Capacity")
-        fig, ax = plt.subplots(figsize=(1, 1.6))
-        ax.bar([""], [val], color=color)
-        ax.set_ylim(0, 110)
-        ax.set_ylabel("% Full")
-        ax.set_title(f"{timestamp}", fontsize=8)
-        st.pyplot(fig)
-
-
-
-# === Show Baseline Results ===
-if "baseline_df" in st.session_state:
-    st.subheader("Baseline Subcatchment Runoff Summary (Pre-intervention)")
-    st.dataframe(st.session_state["baseline_df"], use_container_width=True)
 
 # === Low Impact Developments (LIDs) UI & Cost ===
 st.subheader("Low Impact Developments (LIDs)")
@@ -413,7 +413,8 @@ if selected_subs:
             total_cost += cost
 
     # 2) Tide gate cost
-    if tide_gate_enabled == "YES":
+    # If user placed any LIDs, we assume tide gate is used because both LID runs include it
+    if any(v["rain_gardens"] > 0 or v["rain_barrels"] > 0 for v in st.session_state["user_lid_config"].values()):
         tide_cost = 60000
         cost_breakdown.append({
             "Subcatchment": "Watershed Outfall",
@@ -421,6 +422,7 @@ if selected_subs:
             "Cost": tide_cost
         })
         total_cost += tide_cost
+
 
     if cost_breakdown:
         cost_df = pd.DataFrame(cost_breakdown)
@@ -535,15 +537,42 @@ if st.button("Run Scenario With Selected LID Improvements"):
                 st.warning("No LIDs selected.")
                 st.stop()
 
-            update_inp_file(
-                template_inp, output_inp,
-                rain_lines, tide_lines,
-                lid_lines, tide_gate_enabled
-            )
+            full_depth = 8.0  # ft
+            report_interval = timedelta(minutes=5)
+
+            update_inp_file(template_inp, output_inp, rain_lines, tide_lines, lid_lines, "NO")
+            depth_pct_lid, timestamps = [], []
             with Simulation(output_inp) as sim:
-                sim.execute()
-                sim.close()
-            time.sleep(1)
+                link = Links(sim)["C18_2"]
+                last_report_time = None
+                for step in sim:
+                    current_time = sim.current_time
+                    if last_report_time is None or (current_time - last_report_time) >= report_interval:
+                        pct = (link.depth / full_depth) * 100
+                        depth_pct_lid.append(pct)
+                        timestamps.append(current_time.strftime("%H:%M"))
+                        last_report_time = current_time
+            st.session_state["lid_fill"] = depth_pct_lid
+            st.session_state["lid_timestamps"] = timestamps
+
+            df_lid_nogate = extract_runoff_and_lid_data("updated_model.rpt")
+            st.session_state["df_lid_nogate"] = df_lid_nogate
+
+            update_inp_file(template_inp, output_inp, rain_lines, tide_lines, lid_lines, "YES")
+            depth_pct_lid_gate, _ = [], []
+            with Simulation(output_inp) as sim:
+                link = Links(sim)["C18_2"]
+                last_report_time = None
+                for step in sim:
+                    current_time = sim.current_time
+                    if last_report_time is None or (current_time - last_report_time) >= report_interval:
+                        pct = (link.depth / full_depth) * 100
+                        depth_pct_lid_gate.append(pct)
+                        last_report_time = current_time
+            st.session_state["lid_gate_fill"] = depth_pct_lid_gate
+            
+            df_lid_gate = extract_runoff_and_lid_data("updated_model.rpt")
+            st.session_state["df_lid_gate"] = df_lid_gate
 
             df_runoff = extract_runoff_and_lid_data("updated_model.rpt")
             df_latest = df_runoff[df_runoff["Subcatchment"].str.startswith("Sub_")]
@@ -569,3 +598,37 @@ if st.button("Run Scenario With Selected LID Improvements"):
 
         except Exception as e:
             st.error(f"LID simulation failed: {e}")
+
+
+if all(key in st.session_state for key in [
+    "baseline_fill", "baseline_gate_fill",
+    "lid_fill", "lid_gate_fill",
+    "baseline_timestamps"
+]):
+    st.subheader("Culvert Capacity Over Time (All Scenarios)")
+
+    time_labels = st.session_state["baseline_timestamps"]
+    
+    # Convert to datetime for proper tick formatting
+    time_objects = [datetime.strptime(t, "%H:%M") for t in time_labels]
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(time_objects, st.session_state["baseline_fill"], label="Baseline", linewidth=2)
+    ax.plot(time_objects, st.session_state["baseline_gate_fill"], label="Baseline + Tide Gate", linestyle="--", linewidth=2)
+    ax.plot(time_objects, st.session_state["lid_fill"], label="With LIDs", linestyle="-.", linewidth=2)
+    ax.plot(time_objects, st.session_state["lid_gate_fill"], label="LIDs + Tide Gate", linestyle=":", linewidth=2)
+
+    ax.set_ylabel("Culvert Fill (%)")
+    ax.set_xlabel("Time")
+    ax.set_ylim(0, 110)
+    ax.set_title("Culvert Capacity Comparison")
+
+    # Show only hourly ticks
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+    ax.xaxis.set_major_locator(mdates.HourLocator())
+
+    ax.legend()
+    ax.grid(False)
+    fig.autofmt_xdate()  # Auto-format x-axis for better label spacing
+    st.pyplot(fig)
+

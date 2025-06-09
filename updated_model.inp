@@ -198,7 +198,49 @@ rain_garden      STORAGE    0          0.75       0.5        0          NO
 [LID_USAGE]
 ;;Subcatchment   LID Process      Number  Area       Width      InitSat    FromImp    ToPerv     RptFile                  DrainTo          FromPerv  
 ;;-------------- ---------------- ------- ---------- ---------- ---------- ---------- ---------- ------------------------ ---------------- ----------
-;
+Sub_33         rain_barrel          50    2.95      0       0   25.67       1                       *               *        0
+Sub_14         rain_barrel         240    2.95      0       0   42.33       1                       *               *        0
+Sub_14         rain_garden         100      85      0       0       0       1                       *               *    32.02
+Sub_15         rain_barrel          62    2.95      0       0   38.74       1                       *               *        0
+Sub_15         rain_garden          31      85      0       0       0       1                       *               *    47.60
+Sub_16         rain_barrel          25    2.95      0       0   25.19       1                       *               *        0
+Sub_16         rain_garden           4      85      0       0       0       1                       *               *     6.32
+Sub_17         rain_barrel          35    2.95      0       0   23.55       1                       *               *        0
+Sub_17         rain_garden          25      85      0       0       0       1                       *               *    19.69
+Sub_18         rain_barrel          45    2.95      0       0   51.44       1                       *               *        0
+Sub_19         rain_barrel          45    2.95      0       0   36.52       1                       *               *        0
+Sub_19         rain_garden           5      85      0       0       0       1                       *               *    24.41
+Sub_20         rain_barrel          95    2.95      0       0   19.73       1                       *               *        0
+Sub_20         rain_garden          40      85      0       0       0       1                       *               *    18.50
+Sub_21         rain_barrel          40    2.95      0       0   30.93       1                       *               *        0
+Sub_24         rain_barrel          80    2.95      0       0   30.99       1                       *               *        0
+Sub_24         rain_garden          30      85      0       0       0       1                       *               *    28.65
+Sub_25         rain_barrel          40    2.95      0       0   38.98       1                       *               *        0
+Sub_26         rain_barrel         112    2.95      0       0   39.73       1                       *               *        0
+Sub_26         rain_garden          13      85      0       0       0       1                       *               *    11.50
+Sub_27         rain_barrel          39    2.95      0       0   34.81       1                       *               *        0
+Sub_28         rain_barrel         150    2.95      0       0   27.40       1                       *               *        0
+Sub_28         rain_garden          30      85      0       0       0       1                       *               *    22.03
+Sub_29         rain_barrel          70    2.95      0       0   28.20       1                       *               *        0
+Sub_30         rain_barrel          50    2.95      0       0   35.10       1                       *               *        0
+Sub_31         rain_barrel          40    2.95      0       0   26.28       1                       *               *        0
+Sub_31         rain_garden          16      85      0       0       0       1                       *               *    44.56
+Sub_32         rain_barrel         150    2.95      0       0   34.78       1                       *               *        0
+Sub_34         rain_barrel          30    2.95      0       0   27.51       1                       *               *        0
+Sub_34         rain_garden          16      85      0       0       0       1                       *               *    46.11
+Sub_35         rain_barrel          30    2.95      0       0   21.21       1                       *               *        0
+Sub_35         rain_garden          15      85      0       0       0       1                       *               *    41.50
+Sub_36         rain_barrel          21    2.95      0       0   40.39       1                       *               *        0
+Sub_36         rain_garden          15      85      0       0       0       1                       *               *    47.68
+Sub_13         rain_barrel          60    2.95      0       0   37.11       1                       *               *        0
+Sub_13         rain_garden          10      85      0       0       0       1                       *               *    10.59
+Sub_12         rain_barrel          55    2.95      0       0   28.65       1                       *               *        0
+Sub_12         rain_garden          15      85      0       0       0       1                       *               *    12.81
+Sub_37         rain_barrel          30    2.95      0       0   28.08       1                       *               *        0
+Sub_38         rain_barrel          50    2.95      0       0   21.33       1                       *               *        0
+Sub_38         rain_garden          10      85      0       0       0       1                       *               *    19.73
+Sub_39         rain_barrel         120    2.95      0       0   24.39       1                       *               *        0
+Sub_39         rain_garden         100      85      0       0       0       1                       *               *    43.97
 
 [JUNCTIONS]
 ;;Name           Elevation  MaxDepth   InitDepth  SurDepth   Aponded   
