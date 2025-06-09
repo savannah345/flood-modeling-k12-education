@@ -4,7 +4,9 @@ import altair as alt
 import time
 import numpy as np
 import re
-from pyswmm import Simulation
+import matplotlib.pyplot as plt
+from datetime import timedelta
+from pyswmm import Simulation, Links
 from rainfall_and_tide_generator import (
     generate_rainfall,
     convert_units,
@@ -213,10 +215,32 @@ if st.button("Run Baseline Scenario SWMM Simulation"):
             lid_lines, tide_gate_enabled
         )
 
+        link_id = "C18_2"
+        full_depth = 8.0  # ft (known from XSECTIONS)
+
+        # === Run simulation and sample every 5 minutes (60 × 5sec steps)
+
+
+        ROUTING_STEP_SEC = 5
+        REPORT_STEP_MIN = 5
+
+        report_interval = timedelta(minutes=REPORT_STEP_MIN)
+
+        depth_pct = []
+        timestamps = []
+
         with Simulation(output_inp) as sim:
-            sim.execute()
-            sim.close()
-        time.sleep(1)
+            link = Links(sim)[link_id]
+            last_report_time = None
+            for step in sim:
+                current_time = sim.current_time
+                if last_report_time is None or (current_time - last_report_time) >= report_interval:
+                    depth = link.depth
+                    pct = (depth / full_depth) * 100 if full_depth > 0 else 0
+                    depth_pct.append(pct)
+                    timestamps.append(current_time.strftime("%H:%M"))
+                    last_report_time = current_time
+
 
         df_runoff = extract_runoff_and_lid_data("updated_model.rpt")
         df_base   = df_runoff[df_runoff["Subcatchment"].str.startswith("Sub_")]
@@ -237,11 +261,50 @@ if st.button("Run Baseline Scenario SWMM Simulation"):
                     df_base["Pervious Runoff   (in)"] * factor
             })
 
+        st.session_state["pipe_depth_pct"] = depth_pct
+        st.session_state["pipe_timestamps"] = timestamps
+
         st.session_state["baseline_df"] = df_disp
         st.success("Baseline scenario complete!")
 
     except Exception as e:
         st.error(f"Baseline simulation failed: {e}")
+
+
+st.subheader("Pipes")
+st.image(
+    "/workspaces/flood-modeling-k12-education/Images/model_with_pipes.png",
+    use_container_width=True
+)
+
+
+# === Show Pipe Fill Slider and Bar (if data exists) ===
+if "pipe_depth_pct" in st.session_state and "pipe_timestamps" in st.session_state:
+    st.subheader("Pipe Fill Over Time")
+
+    hour_labels = st.session_state["pipe_timestamps"]
+    frame = st.select_slider(
+        "Select Hour",
+        options=list(range(len(hour_labels))),
+        format_func=lambda i: hour_labels[i],
+        value=0
+    )
+
+    val = st.session_state["pipe_depth_pct"][frame]
+    timestamp = hour_labels[frame]
+    color = "red" if val > 95 else "blue"
+
+    col1, col2, col3 = st.columns([2, 2, 2])
+    with col2:
+        st.subheader("Culvert Capacity")
+        fig, ax = plt.subplots(figsize=(1, 1.6))
+        ax.bar([""], [val], color=color)
+        ax.set_ylim(0, 110)
+        ax.set_ylabel("% Full")
+        ax.set_title(f"{timestamp}", fontsize=8)
+        st.pyplot(fig)
+
+
 
 # === Show Baseline Results ===
 if "baseline_df" in st.session_state:
@@ -255,9 +318,16 @@ st.image(
     use_container_width=True
 )
 
+st.image(
+    "/workspaces/flood-modeling-k12-education/Images/amounts.png",
+    use_container_width=True
+)
+
+
+
 # Cost data placeholders
 data = {
-    "Infrastructure": ["80 sq.ft. Rain Garden", "55 gallon Rain Barrel", "Tide Gate (10'x5')"],
+    "Infrastructure": ["85 sq.ft. Rain Garden", "50 gallon Rain Barrel", "Tide Gate (10'x5')"],
     "Estimated Installation Cost": ["$250", "$100", "60000"]
 }
 cost_df = pd.DataFrame(data)

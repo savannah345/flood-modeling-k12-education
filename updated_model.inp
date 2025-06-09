@@ -20,7 +20,7 @@ END_TIME             23:45:00
 SWEEP_START          01/01
 SWEEP_END            12/31
 DRY_DAYS             0
-REPORT_STEP          00:01:00
+REPORT_STEP          00:05:00
 WET_STEP             00:05:00
 DRY_STEP             00:05:00
 ROUTING_STEP         5
@@ -98,45 +98,46 @@ Sub_9            rain_gage J9              4.517812 42       345.456  3.89     0
 [SUBAREAS]
 ;;Subcatchment   N-Imperv   N-Perv     S-Imperv   S-Perv     PctZero    RouteTo    PctRouted 
 ;;-------------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
-Sub_1            0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_10           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_11           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_12           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_13           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_14           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_15           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_16           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_17           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_18           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_19           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_2            0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_20           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_21           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_22           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_23           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_24           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_25           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_26           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_27           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_28           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_29           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_3            0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_30           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_31           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_32           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_33           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_34           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_35           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_36           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_37           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_38           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_39           0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_4            0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_5            0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_6            0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_7            0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_8            0.01       0.1        0.05       0.05       25         OUTLET    
-Sub_9            0.01       0.1        0.05       0.05       25         OUTLET    
+Sub_1            0.01       0.1        0.05       0.05       25         PERVIOUS   30 
+Sub_10           0.01       0.1        0.05       0.05       25         PERVIOUS   30  
+Sub_10           0.01       0.1        0.05       0.05       25         PERVIOUS   30 
+Sub_11           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_12           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_13           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_14           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_15           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_16           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_17           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_18           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_19           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_2            0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_20           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_21           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_22           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_23           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_24           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_25           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_26           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_27           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_28           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_29           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_3            0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_30           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_31           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_32           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_33           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_34           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_35           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_36           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_37           0.01       0.1        0.05       0.05       25         PERVIOUS   30    
+Sub_38           0.01       0.1        0.05       0.05       25         PERVIOUS   30 
+Sub_39           0.01       0.1        0.05       0.05       25         PERVIOUS   30 
+Sub_4            0.01       0.1        0.05       0.05       25         PERVIOUS   30 
+Sub_5            0.01       0.1        0.05       0.05       25         PERVIOUS   30 
+Sub_6            0.01       0.1        0.05       0.05       25         PERVIOUS   30 
+Sub_7            0.01       0.1        0.05       0.05       25         PERVIOUS   30 
+Sub_8            0.01       0.1        0.05       0.05       25         PERVIOUS   30 
+Sub_9            0.01       0.1        0.05       0.05       25         PERVIOUS   30 
 
 [INFILTRATION]
 ;;Subcatchment   Param1     Param2     Param3     Param4     Param5    
@@ -197,17 +198,7 @@ rain_garden      STORAGE    0          0.75       0.5        0          NO
 [LID_USAGE]
 ;;Subcatchment   LID Process      Number  Area       Width      InitSat    FromImp    ToPerv     RptFile                  DrainTo          FromPerv  
 ;;-------------- ---------------- ------- ---------- ---------- ---------- ---------- ---------- ------------------------ ---------------- ----------
-Sub_6          rain_garden           5      85      0       0       0       1                       *               *    46.27
-Sub_19         rain_barrel          40    2.95      0       0   32.46       1                       *               *        0
-Sub_19         rain_garden           5      85      0       0       0       1                       *               *    24.41
-Sub_26         rain_barrel          50    2.95      0       0   17.74       1                       *               *        0
-Sub_26         rain_garden          10      85      0       0       0       1                       *               *     8.85
-Sub_33         rain_barrel          30    2.95      0       0   15.40       1                       *               *        0
-Sub_33         rain_garden           5      85      0       0       0       1                       *               *    21.52
-Sub_36         rain_barrel          10    2.95      0       0   19.23       1                       *               *        0
-Sub_36         rain_garden          10      85      0       0       0       1                       *               *    31.78
-Sub_39         rain_barrel          20    2.95      0       0    4.06       1                       *               *        0
-Sub_39         rain_garden          50      85      0       0       0       1                       *               *    21.99
+;
 
 [JUNCTIONS]
 ;;Name           Elevation  MaxDepth   InitDepth  SurDepth   Aponded   
@@ -417,66 +408,66 @@ rain_gage_timeseries 06/01/2025 02:00 0.00000
 rain_gage_timeseries 06/01/2025 02:15 0.00000
 rain_gage_timeseries 06/01/2025 02:30 0.00000
 rain_gage_timeseries 06/01/2025 02:45 0.00000
-rain_gage_timeseries 06/01/2025 03:00 0.00453
-rain_gage_timeseries 06/01/2025 03:15 0.00957
-rain_gage_timeseries 06/01/2025 03:30 0.01890
-rain_gage_timeseries 06/01/2025 03:45 0.03488
-rain_gage_timeseries 06/01/2025 04:00 0.06012
-rain_gage_timeseries 06/01/2025 04:15 0.09680
-rain_gage_timeseries 06/01/2025 04:30 0.14562
-rain_gage_timeseries 06/01/2025 04:45 0.20465
-rain_gage_timeseries 06/01/2025 05:00 0.26867
-rain_gage_timeseries 06/01/2025 05:15 0.32952
-rain_gage_timeseries 06/01/2025 05:30 0.37757
-rain_gage_timeseries 06/01/2025 05:45 0.40416
-rain_gage_timeseries 06/01/2025 06:00 0.40416
-rain_gage_timeseries 06/01/2025 06:15 0.37757
-rain_gage_timeseries 06/01/2025 06:30 0.32952
-rain_gage_timeseries 06/01/2025 06:45 0.26867
-rain_gage_timeseries 06/01/2025 07:00 0.20465
-rain_gage_timeseries 06/01/2025 07:15 0.14562
-rain_gage_timeseries 06/01/2025 07:30 0.09680
-rain_gage_timeseries 06/01/2025 07:45 0.06012
-rain_gage_timeseries 06/01/2025 08:00 0.03488
-rain_gage_timeseries 06/01/2025 08:15 0.01890
-rain_gage_timeseries 06/01/2025 08:30 0.00957
-rain_gage_timeseries 06/01/2025 08:45 0.00453
-rain_gage_timeseries 06/01/2025 09:00 0.00000
-rain_gage_timeseries 06/01/2025 09:15 0.00000
-rain_gage_timeseries 06/01/2025 09:30 0.00000
-rain_gage_timeseries 06/01/2025 09:45 0.00000
-rain_gage_timeseries 06/01/2025 10:00 0.00000
-rain_gage_timeseries 06/01/2025 10:15 0.00000
-rain_gage_timeseries 06/01/2025 10:30 0.00000
-rain_gage_timeseries 06/01/2025 10:45 0.00000
-rain_gage_timeseries 06/01/2025 11:00 0.00000
-rain_gage_timeseries 06/01/2025 11:15 0.00000
-rain_gage_timeseries 06/01/2025 11:30 0.00000
-rain_gage_timeseries 06/01/2025 11:45 0.00000
-rain_gage_timeseries 06/01/2025 12:00 0.00000
-rain_gage_timeseries 06/01/2025 12:15 0.00000
-rain_gage_timeseries 06/01/2025 12:30 0.00000
-rain_gage_timeseries 06/01/2025 12:45 0.00000
-rain_gage_timeseries 06/01/2025 13:00 0.00000
-rain_gage_timeseries 06/01/2025 13:15 0.00000
-rain_gage_timeseries 06/01/2025 13:30 0.00000
-rain_gage_timeseries 06/01/2025 13:45 0.00000
-rain_gage_timeseries 06/01/2025 14:00 0.00000
-rain_gage_timeseries 06/01/2025 14:15 0.00000
-rain_gage_timeseries 06/01/2025 14:30 0.00000
-rain_gage_timeseries 06/01/2025 14:45 0.00000
-rain_gage_timeseries 06/01/2025 15:00 0.00000
-rain_gage_timeseries 06/01/2025 15:15 0.00000
-rain_gage_timeseries 06/01/2025 15:30 0.00000
-rain_gage_timeseries 06/01/2025 15:45 0.00000
-rain_gage_timeseries 06/01/2025 16:00 0.00000
-rain_gage_timeseries 06/01/2025 16:15 0.00000
-rain_gage_timeseries 06/01/2025 16:30 0.00000
-rain_gage_timeseries 06/01/2025 16:45 0.00000
-rain_gage_timeseries 06/01/2025 17:00 0.00000
-rain_gage_timeseries 06/01/2025 17:15 0.00000
-rain_gage_timeseries 06/01/2025 17:30 0.00000
-rain_gage_timeseries 06/01/2025 17:45 0.00000
+rain_gage_timeseries 06/01/2025 03:00 0.00000
+rain_gage_timeseries 06/01/2025 03:15 0.00000
+rain_gage_timeseries 06/01/2025 03:30 0.00000
+rain_gage_timeseries 06/01/2025 03:45 0.00000
+rain_gage_timeseries 06/01/2025 04:00 0.00000
+rain_gage_timeseries 06/01/2025 04:15 0.00000
+rain_gage_timeseries 06/01/2025 04:30 0.00000
+rain_gage_timeseries 06/01/2025 04:45 0.00000
+rain_gage_timeseries 06/01/2025 05:00 0.00000
+rain_gage_timeseries 06/01/2025 05:15 0.00000
+rain_gage_timeseries 06/01/2025 05:30 0.00000
+rain_gage_timeseries 06/01/2025 05:45 0.00000
+rain_gage_timeseries 06/01/2025 06:00 0.00325
+rain_gage_timeseries 06/01/2025 06:15 0.00473
+rain_gage_timeseries 06/01/2025 06:30 0.00676
+rain_gage_timeseries 06/01/2025 06:45 0.00952
+rain_gage_timeseries 06/01/2025 07:00 0.01320
+rain_gage_timeseries 06/01/2025 07:15 0.01798
+rain_gage_timeseries 06/01/2025 07:30 0.02412
+rain_gage_timeseries 06/01/2025 07:45 0.03181
+rain_gage_timeseries 06/01/2025 08:00 0.04129
+rain_gage_timeseries 06/01/2025 08:15 0.05273
+rain_gage_timeseries 06/01/2025 08:30 0.06624
+rain_gage_timeseries 06/01/2025 08:45 0.08187
+rain_gage_timeseries 06/01/2025 09:00 0.09955
+rain_gage_timeseries 06/01/2025 09:15 0.11910
+rain_gage_timeseries 06/01/2025 09:30 0.14018
+rain_gage_timeseries 06/01/2025 09:45 0.16232
+rain_gage_timeseries 06/01/2025 10:00 0.18493
+rain_gage_timeseries 06/01/2025 10:15 0.20727
+rain_gage_timeseries 06/01/2025 10:30 0.22857
+rain_gage_timeseries 06/01/2025 10:45 0.24797
+rain_gage_timeseries 06/01/2025 11:00 0.26467
+rain_gage_timeseries 06/01/2025 11:15 0.27794
+rain_gage_timeseries 06/01/2025 11:30 0.28714
+rain_gage_timeseries 06/01/2025 11:45 0.29186
+rain_gage_timeseries 06/01/2025 12:00 0.29186
+rain_gage_timeseries 06/01/2025 12:15 0.28714
+rain_gage_timeseries 06/01/2025 12:30 0.27794
+rain_gage_timeseries 06/01/2025 12:45 0.26467
+rain_gage_timeseries 06/01/2025 13:00 0.24797
+rain_gage_timeseries 06/01/2025 13:15 0.22857
+rain_gage_timeseries 06/01/2025 13:30 0.20727
+rain_gage_timeseries 06/01/2025 13:45 0.18493
+rain_gage_timeseries 06/01/2025 14:00 0.16232
+rain_gage_timeseries 06/01/2025 14:15 0.14018
+rain_gage_timeseries 06/01/2025 14:30 0.11910
+rain_gage_timeseries 06/01/2025 14:45 0.09955
+rain_gage_timeseries 06/01/2025 15:00 0.08187
+rain_gage_timeseries 06/01/2025 15:15 0.06624
+rain_gage_timeseries 06/01/2025 15:30 0.05273
+rain_gage_timeseries 06/01/2025 15:45 0.04129
+rain_gage_timeseries 06/01/2025 16:00 0.03181
+rain_gage_timeseries 06/01/2025 16:15 0.02412
+rain_gage_timeseries 06/01/2025 16:30 0.01798
+rain_gage_timeseries 06/01/2025 16:45 0.01320
+rain_gage_timeseries 06/01/2025 17:00 0.00952
+rain_gage_timeseries 06/01/2025 17:15 0.00676
+rain_gage_timeseries 06/01/2025 17:30 0.00473
+rain_gage_timeseries 06/01/2025 17:45 0.00325
 rain_gage_timeseries 06/01/2025 18:00 0.00000
 rain_gage_timeseries 06/01/2025 18:15 0.00000
 rain_gage_timeseries 06/01/2025 18:30 0.00000
@@ -501,102 +492,102 @@ rain_gage_timeseries 06/01/2025 23:00 0.00000
 rain_gage_timeseries 06/01/2025 23:15 0.00000
 rain_gage_timeseries 06/01/2025 23:30 0.00000
 rain_gage_timeseries 06/01/2025 23:45 0.00000
-tide 06/01/2025 00:00 0.20000
-tide 06/01/2025 00:15 0.21283
-tide 06/01/2025 00:30 0.25111
-tide 06/01/2025 00:45 0.31418
-tide 06/01/2025 01:00 0.40096
-tide 06/01/2025 01:15 0.50997
-tide 06/01/2025 01:30 0.63934
-tide 06/01/2025 01:45 0.78686
-tide 06/01/2025 02:00 0.95000
-tide 06/01/2025 02:15 1.12597
-tide 06/01/2025 02:30 1.31177
-tide 06/01/2025 02:45 1.50421
-tide 06/01/2025 03:00 1.70000
-tide 06/01/2025 03:15 1.89579
-tide 06/01/2025 03:30 2.08823
-tide 06/01/2025 03:45 2.27403
-tide 06/01/2025 04:00 2.45000
-tide 06/01/2025 04:15 2.61314
-tide 06/01/2025 04:30 2.76066
-tide 06/01/2025 04:45 2.89003
-tide 06/01/2025 05:00 2.99904
-tide 06/01/2025 05:15 3.08582
-tide 06/01/2025 05:30 3.14889
-tide 06/01/2025 05:45 3.18717
-tide 06/01/2025 06:00 3.20000
-tide 06/01/2025 06:15 3.18717
-tide 06/01/2025 06:30 3.14889
-tide 06/01/2025 06:45 3.08582
-tide 06/01/2025 07:00 2.99904
-tide 06/01/2025 07:15 2.89003
-tide 06/01/2025 07:30 2.76066
-tide 06/01/2025 07:45 2.61314
-tide 06/01/2025 08:00 2.45000
-tide 06/01/2025 08:15 2.27403
-tide 06/01/2025 08:30 2.08823
-tide 06/01/2025 08:45 1.89579
-tide 06/01/2025 09:00 1.70000
-tide 06/01/2025 09:15 1.50421
-tide 06/01/2025 09:30 1.31177
-tide 06/01/2025 09:45 1.12597
-tide 06/01/2025 10:00 0.95000
-tide 06/01/2025 10:15 0.78686
-tide 06/01/2025 10:30 0.63934
-tide 06/01/2025 10:45 0.50997
-tide 06/01/2025 11:00 0.40096
-tide 06/01/2025 11:15 0.31418
-tide 06/01/2025 11:30 0.25111
-tide 06/01/2025 11:45 0.21283
-tide 06/01/2025 12:00 0.20000
-tide 06/01/2025 12:15 0.21283
-tide 06/01/2025 12:30 0.25111
-tide 06/01/2025 12:45 0.31418
-tide 06/01/2025 13:00 0.40096
-tide 06/01/2025 13:15 0.50997
-tide 06/01/2025 13:30 0.63934
-tide 06/01/2025 13:45 0.78686
-tide 06/01/2025 14:00 0.95000
-tide 06/01/2025 14:15 1.12597
-tide 06/01/2025 14:30 1.31177
-tide 06/01/2025 14:45 1.50421
-tide 06/01/2025 15:00 1.70000
-tide 06/01/2025 15:15 1.89579
-tide 06/01/2025 15:30 2.08823
-tide 06/01/2025 15:45 2.27403
-tide 06/01/2025 16:00 2.45000
-tide 06/01/2025 16:15 2.61314
-tide 06/01/2025 16:30 2.76066
-tide 06/01/2025 16:45 2.89003
-tide 06/01/2025 17:00 2.99904
-tide 06/01/2025 17:15 3.08582
-tide 06/01/2025 17:30 3.14889
-tide 06/01/2025 17:45 3.18717
-tide 06/01/2025 18:00 3.20000
-tide 06/01/2025 18:15 3.18717
-tide 06/01/2025 18:30 3.14889
-tide 06/01/2025 18:45 3.08582
-tide 06/01/2025 19:00 2.99904
-tide 06/01/2025 19:15 2.89003
-tide 06/01/2025 19:30 2.76066
-tide 06/01/2025 19:45 2.61314
-tide 06/01/2025 20:00 2.45000
-tide 06/01/2025 20:15 2.27403
-tide 06/01/2025 20:30 2.08823
-tide 06/01/2025 20:45 1.89579
-tide 06/01/2025 21:00 1.70000
-tide 06/01/2025 21:15 1.50421
-tide 06/01/2025 21:30 1.31177
-tide 06/01/2025 21:45 1.12597
-tide 06/01/2025 22:00 0.95000
-tide 06/01/2025 22:15 0.78686
-tide 06/01/2025 22:30 0.63934
-tide 06/01/2025 22:45 0.50997
-tide 06/01/2025 23:00 0.40096
-tide 06/01/2025 23:15 0.31418
-tide 06/01/2025 23:30 0.25111
-tide 06/01/2025 23:45 0.21283
+tide 06/01/2025 00:00 -1.50000
+tide 06/01/2025 00:15 -1.48631
+tide 06/01/2025 00:30 -1.44548
+tide 06/01/2025 00:45 -1.37821
+tide 06/01/2025 01:00 -1.28564
+tide 06/01/2025 01:15 -1.16937
+tide 06/01/2025 01:30 -1.03137
+tide 06/01/2025 01:45 -0.87402
+tide 06/01/2025 02:00 -0.70000
+tide 06/01/2025 02:15 -0.51229
+tide 06/01/2025 02:30 -0.31411
+tide 06/01/2025 02:45 -0.10884
+tide 06/01/2025 03:00 0.10000
+tide 06/01/2025 03:15 0.30884
+tide 06/01/2025 03:30 0.51411
+tide 06/01/2025 03:45 0.71229
+tide 06/01/2025 04:00 0.90000
+tide 06/01/2025 04:15 1.07402
+tide 06/01/2025 04:30 1.23137
+tide 06/01/2025 04:45 1.36937
+tide 06/01/2025 05:00 1.48564
+tide 06/01/2025 05:15 1.57821
+tide 06/01/2025 05:30 1.64548
+tide 06/01/2025 05:45 1.68631
+tide 06/01/2025 06:00 1.70000
+tide 06/01/2025 06:15 1.68631
+tide 06/01/2025 06:30 1.64548
+tide 06/01/2025 06:45 1.57821
+tide 06/01/2025 07:00 1.48564
+tide 06/01/2025 07:15 1.36937
+tide 06/01/2025 07:30 1.23137
+tide 06/01/2025 07:45 1.07402
+tide 06/01/2025 08:00 0.90000
+tide 06/01/2025 08:15 0.71229
+tide 06/01/2025 08:30 0.51411
+tide 06/01/2025 08:45 0.30884
+tide 06/01/2025 09:00 0.10000
+tide 06/01/2025 09:15 -0.10884
+tide 06/01/2025 09:30 -0.31411
+tide 06/01/2025 09:45 -0.51229
+tide 06/01/2025 10:00 -0.70000
+tide 06/01/2025 10:15 -0.87402
+tide 06/01/2025 10:30 -1.03137
+tide 06/01/2025 10:45 -1.16937
+tide 06/01/2025 11:00 -1.28564
+tide 06/01/2025 11:15 -1.37821
+tide 06/01/2025 11:30 -1.44548
+tide 06/01/2025 11:45 -1.48631
+tide 06/01/2025 12:00 -1.50000
+tide 06/01/2025 12:15 -1.48631
+tide 06/01/2025 12:30 -1.44548
+tide 06/01/2025 12:45 -1.37821
+tide 06/01/2025 13:00 -1.28564
+tide 06/01/2025 13:15 -1.16937
+tide 06/01/2025 13:30 -1.03137
+tide 06/01/2025 13:45 -0.87402
+tide 06/01/2025 14:00 -0.70000
+tide 06/01/2025 14:15 -0.51229
+tide 06/01/2025 14:30 -0.31411
+tide 06/01/2025 14:45 -0.10884
+tide 06/01/2025 15:00 0.10000
+tide 06/01/2025 15:15 0.30884
+tide 06/01/2025 15:30 0.51411
+tide 06/01/2025 15:45 0.71229
+tide 06/01/2025 16:00 0.90000
+tide 06/01/2025 16:15 1.07402
+tide 06/01/2025 16:30 1.23137
+tide 06/01/2025 16:45 1.36937
+tide 06/01/2025 17:00 1.48564
+tide 06/01/2025 17:15 1.57821
+tide 06/01/2025 17:30 1.64548
+tide 06/01/2025 17:45 1.68631
+tide 06/01/2025 18:00 1.70000
+tide 06/01/2025 18:15 1.68631
+tide 06/01/2025 18:30 1.64548
+tide 06/01/2025 18:45 1.57821
+tide 06/01/2025 19:00 1.48564
+tide 06/01/2025 19:15 1.36937
+tide 06/01/2025 19:30 1.23137
+tide 06/01/2025 19:45 1.07402
+tide 06/01/2025 20:00 0.90000
+tide 06/01/2025 20:15 0.71229
+tide 06/01/2025 20:30 0.51411
+tide 06/01/2025 20:45 0.30884
+tide 06/01/2025 21:00 0.10000
+tide 06/01/2025 21:15 -0.10884
+tide 06/01/2025 21:30 -0.31411
+tide 06/01/2025 21:45 -0.51229
+tide 06/01/2025 22:00 -0.70000
+tide 06/01/2025 22:15 -0.87402
+tide 06/01/2025 22:30 -1.03137
+tide 06/01/2025 22:45 -1.16937
+tide 06/01/2025 23:00 -1.28564
+tide 06/01/2025 23:15 -1.37821
+tide 06/01/2025 23:30 -1.44548
+tide 06/01/2025 23:45 -1.48631
 
 [REPORT]
 ;;Reporting Options
