@@ -131,7 +131,7 @@ st.download_button(
 
 st.subheader("Watershed with Subcatchments")
 st.image(
-    "/workspaces/flood-modeling-k12-education/watersheds.png",
+    "watersheds.png",
     use_container_width=True
 )
 
@@ -307,19 +307,19 @@ if "df_base_nogate" in st.session_state:
 
 st.subheader("Pipes")
 st.image(
-    "/workspaces/flood-modeling-k12-education/model_with_pipes.png",
+    "model_with_pipes.png",
     use_container_width=True
 )
 
 # === Low Impact Developments (LIDs) UI & Cost ===
 st.subheader("Low Impact Developments (LIDs)")
 st.image(
-    "/workspaces/flood-modeling-k12-education/green_infrastructure_options.png",
+    "green_infrastructure_options.png",
     use_container_width=True
 )
 
 st.image(
-    "/workspaces/flood-modeling-k12-education/amounts.png",
+    "amounts.png",
     use_container_width=True
 )
 
