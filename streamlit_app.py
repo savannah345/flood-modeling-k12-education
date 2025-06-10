@@ -339,7 +339,7 @@ def extract_number(name):
     m = re.search(r"_(\d+)", name)
     return int(m.group(1)) if m else float("inf")
 
-df = pd.read_excel("/workspaces/flood-modeling-k12-education/raster_cells_per_sub.xlsx")
+df = pd.read_excel("raster_cells_per_sub.xlsx")
 df = df.sort_values(by="NAME", key=lambda x: x.map(extract_number)).reset_index(drop=True)
 
 st.title("Add LIDs")
@@ -450,7 +450,7 @@ else:
     st.info("You haven't selected any subcatchments to update.")
 
 def generate_lid_usage_lines(lid_config,
-                             excel_path="/workspaces/flood-modeling-k12-education/raster_cells_per_sub.xlsx"):
+                             excel_path="raster_cells_per_sub.xlsx"):
     df = pd.read_excel(excel_path)
     lines = []
 
