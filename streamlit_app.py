@@ -209,14 +209,14 @@ if st.button("Run Baseline Scenario SWMM Simulation"):
         )
         lid_lines = [";"]
         
-        full_depth = 8.0  # ft (known from XSECTIONS)
+        full_depth = 10.0  # ft (known from XSECTIONS)
         report_interval = timedelta(minutes=5)
 
         # Run baseline WITHOUT tide gate
         update_inp_file(template_inp, output_inp, rain_lines, tide_lines, lid_lines, "NO")
         depth_pct_no_gate, timestamps = [], []
         with Simulation(output_inp) as sim:
-            link = Links(sim)["C18_2"]
+            link = Links(sim)["C70_1"]
             last_report_time = None
             for step in sim:
                 current_time = sim.current_time
@@ -236,7 +236,7 @@ if st.button("Run Baseline Scenario SWMM Simulation"):
         update_inp_file(template_inp, output_inp, rain_lines, tide_lines, lid_lines, "YES")
         depth_pct_gate, _ = [], []
         with Simulation(output_inp) as sim:
-            link = Links(sim)["C18_2"]
+            link = Links(sim)["C70_1"]
             last_report_time = None
             for step in sim:
                 current_time = sim.current_time
@@ -537,13 +537,13 @@ if st.button("Run Scenario With Selected LID Improvements"):
                 st.warning("No LIDs selected.")
                 st.stop()
 
-            full_depth = 8.0  # ft
+            full_depth = 10.0  # ft
             report_interval = timedelta(minutes=5)
 
             update_inp_file(template_inp, output_inp, rain_lines, tide_lines, lid_lines, "NO")
             depth_pct_lid, timestamps = [], []
             with Simulation(output_inp) as sim:
-                link = Links(sim)["C18_2"]
+                link = Links(sim)["C70_1"]
                 last_report_time = None
                 for step in sim:
                     current_time = sim.current_time
@@ -561,7 +561,7 @@ if st.button("Run Scenario With Selected LID Improvements"):
             update_inp_file(template_inp, output_inp, rain_lines, tide_lines, lid_lines, "YES")
             depth_pct_lid_gate, _ = [], []
             with Simulation(output_inp) as sim:
-                link = Links(sim)["C18_2"]
+                link = Links(sim)["C70_1"]
                 last_report_time = None
                 for step in sim:
                     current_time = sim.current_time
