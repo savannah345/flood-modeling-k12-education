@@ -193,7 +193,7 @@ if st.button("Run Baseline Scenario SWMM Simulation"):
         update_inp_file(template_inp, "baseline_nogate.inp", rain_lines, tide_lines, lid_lines, "NO")
         depth_pct_no_gate, timestamps = [], []
         with Simulation("baseline_nogate.inp") as sim:
-            link = Links(sim)["C70_2"]
+            link = Links(sim)["C70_1"]
             last_report_time = None
             for step in sim:
                 current_time = sim.current_time
@@ -217,7 +217,7 @@ if st.button("Run Baseline Scenario SWMM Simulation"):
         update_inp_file(template_inp, "baseline_gate.inp", rain_lines, tide_lines, lid_lines, "YES")
         depth_pct_gate, _ = [], []
         with Simulation("baseline_gate.inp") as sim:
-            link = Links(sim)["C70_2"]
+            link = Links(sim)["C70_1"]
             last_report_time = None
             for step in sim:
                 current_time = sim.current_time
@@ -516,7 +516,7 @@ if st.button("Run Scenario With Selected LID Improvements"):
             update_inp_file(template_inp, "lid_nogate.inp", rain_lines, tide_lines, lid_lines, "NO")
             depth_pct_lid, timestamps = [], []
             with Simulation("lid_nogate.inp") as sim:
-                link = Links(sim)["C70_2"]
+                link = Links(sim)["C70_1"]
                 last_report_time = None
                 for step in sim:
                     current_time = sim.current_time
@@ -534,7 +534,7 @@ if st.button("Run Scenario With Selected LID Improvements"):
             update_inp_file(template_inp, "updated_model.inp", rain_lines, tide_lines, lid_lines, "YES")
             depth_pct_lid_gate, _ = [], []
             with Simulation("lid_gate.inp") as sim:
-                link = Links(sim)["C70_2"]
+                link = Links(sim)["C70_1"]
                 last_report_time = None
                 for step in sim:
                     current_time = sim.current_time
