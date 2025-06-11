@@ -296,8 +296,6 @@ st.image(
     use_container_width=True
 )
 
-
-
 # Cost data placeholders
 data = {
     "Infrastructure": ["85 sq.ft. Rain Garden", "50 gallon Rain Barrel", "Tide Gate (10'x5')"],
@@ -453,7 +451,7 @@ def generate_lid_usage_lines(lid_config,
         # rain barrels
         rb = cfg.get("rain_barrels", 0)
         if rb > 0:
-            pct_imp = (rb * 595) / imperv * 100
+            pct_imp = (rb * 300) / imperv * 100
             lines.append(tpl.format(
                 sub=sub,
                 proc="rain_barrel",
@@ -471,7 +469,7 @@ def generate_lid_usage_lines(lid_config,
         # rain gardens
         rg = cfg.get("rain_gardens", 0)
         if rg > 0:
-            pct_perv = (rg * 1000) / perv * 100
+            pct_perv = (rg * 500) / perv * 100
             lines.append(tpl.format(
                 sub=sub,
                 proc="rain_garden",
