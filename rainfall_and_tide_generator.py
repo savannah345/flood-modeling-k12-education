@@ -20,8 +20,6 @@ def convert_units(value_in_inches, unit):
         return value_in_inches
     elif unit == "cm":
         return value_in_inches * 2.54
-    elif unit == "mm":
-        return value_in_inches * 25.4
     else:
         raise ValueError("Unsupported unit.")
 
@@ -53,7 +51,7 @@ def generate_tide_curve(moon_phase, unit):
     tide_min, tide_max = moon_tide_ranges[moon_phase]
     minutes_full = np.arange(0, 1440, 1)
     tide_full = ((np.sin(2 * np.pi * minutes_full / 720 - np.pi / 2) + 1) / 2) * (tide_max - tide_min) + tide_min
-    if unit in ["cm", "mm"]:
+    if unit in ["cm"]:
         tide_full = tide_full * 0.3048
     minutes_15 = np.arange(0, 1440, 15)
     tide_15 = tide_full[minutes_15]

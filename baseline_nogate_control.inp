@@ -198,10 +198,7 @@ rain_garden      STORAGE    0          0.75       0.5        0          NO
 [LID_USAGE]
 ;;Subcatchment   LID Process      Number  Area       Width      InitSat    FromImp    ToPerv     RptFile                  DrainTo          FromPerv  
 ;;-------------- ---------------- ------- ---------- ---------- ---------- ---------- ---------- ------------------------ ---------------- ----------
-Sub_37         rain_barrel          20    2.95      0       0   18.72       1                       *               *        0
-Sub_37         rain_garden           5      85      0       0       0       1                       *               *    27.63
-Sub_39         rain_barrel          20    2.95      0       0    4.06       1                       *               *        0
-Sub_39         rain_garden          25      85      0       0       0       1                       *               *    10.99
+;
 
 [JUNCTIONS]
 ;;Name           Elevation  MaxDepth   InitDepth  SurDepth   Aponded   
@@ -251,7 +248,7 @@ J96              -1.968     5.153      0          0          0
 [OUTFALLS]
 ;;Name           Elevation  Type       Stage Data       Gated    Route To        
 ;;-------------- ---------- ---------- ---------------- -------- ----------------
-outfall          -6.3       TIMESERIES tide             YES                      
+outfall          -6.3       TIMESERIES tide             NO                      
 
 [STORAGE]
 ;;Name           Elev.    MaxDepth   InitDepth  Shape       Curve Name/Params            SurDepth Fevap    Psi      Ksat     IMD     
@@ -599,3 +596,11 @@ CONTROLS   NO
 SUBCATCHMENTS ALL
 NODES ALL
 LINKS ALL
+
+[CONTROL RULES]
+
+RULE OpenTideGate
+IF NODE outfall HEAD < LINK C70_2 DEPTH
+THEN LINK C70_2 STATUS = OPEN
+ELSE LINK C70_2 STATUS = CLOSED
+PRIORITY 1

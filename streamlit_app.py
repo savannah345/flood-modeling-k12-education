@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from datetime import timedelta
 import matplotlib.dates as mdates
 from datetime import datetime
-from pyswmm import Simulation, Links
+from pyswmm import Simulation, Links, Nodes
 from rainfall_and_tide_generator import (
     generate_rainfall,
     convert_units,
@@ -21,7 +21,6 @@ from rainfall_and_tide_generator import (
 # --- Configuration ---
 simulation_date = "06/01/2025"
 template_inp     = "swmm_project.inp"
-output_inp       = "updated_model.inp"
 
 st.set_page_config(
     page_title="High Stakes, High Water: A Watershed Design Challenge for Coastal Resilience",
@@ -42,7 +41,7 @@ rain_inches = float(pf_df.loc[
     return_period
 ].values[0])
 
-unit        = st.selectbox("Rainfall Units", ["inches", "cm", "mm"])
+unit        = st.selectbox("Rainfall Units", ["inches", "centimeters"])
 method      = st.radio("Rainfall Shape", ["Normal", "Randomized"])
 moon_phase  = st.selectbox("Moon Phase", list(moon_tide_ranges.keys()))
 tide_align  = st.radio(
@@ -66,14 +65,16 @@ if unit == "inches":
     display_rain_curve = rain_sim_curve
     display_tide_curve = tide_sim_curve
     tide_disp_unit    = "ft"
-elif unit == "cm":
+elif unit == "centimeters":
     display_rain_curve = rain_sim_curve * 2.54
     display_tide_curve = tide_sim_curve * 0.3048 * 100
     tide_disp_unit    = "m"
-else:  # mm
-    display_rain_curve = rain_sim_curve * 25.4
-    display_tide_curve = tide_sim_curve * 0.3048 * 1000
-    tide_disp_unit    = "m"
+
+# --- Store display values and timestamps for Excel export ---
+st.session_state["rain_minutes"] = rain_sim_minutes
+st.session_state["tide_minutes"] = tide_sim_minutes
+st.session_state["display_rain_curve"] = display_rain_curve
+st.session_state["display_tide_curve"] = display_tide_curve
 
 time_hours = np.array(rain_sim_minutes) / 60
 
@@ -94,15 +95,6 @@ rain_chart = (
 )
 st.altair_chart(rain_chart, use_container_width=True)
 
-# === Rainfall CSV Download ===
-csv_rain = df_rain.to_csv(index=False).encode("utf-8")
-st.download_button(
-    label="⬇️ Download Rainfall Data (CSV)",
-    data=csv_rain,
-    file_name="rainfall_profile.csv",
-    mime="text/csv"
-)
-
 # === Display Tide Chart ===
 df_tide = pd.DataFrame({
     "Time (hours)": time_hours,
@@ -119,21 +111,6 @@ tide_chart = (
        .properties(title="Tide Profile")
 )
 st.altair_chart(tide_chart, use_container_width=True)
-
-# === Tide CSV Download ===
-csv_tide = df_tide.to_csv(index=False).encode("utf-8")
-st.download_button(
-    label="⬇️ Download Tide Data (CSV)",
-    data=csv_tide,
-    file_name="tide_profile.csv",
-    mime="text/csv"
-)
-
-st.subheader("Watershed with Subcatchments")
-st.image(
-    "watersheds.png",
-    use_container_width=True
-)
 
 # === INP File Updater ===
 def update_inp_file(template_path, output_path,
@@ -209,14 +186,14 @@ if st.button("Run Baseline Scenario SWMM Simulation"):
         )
         lid_lines = [";"]
         
-        full_depth = 10.0  # ft (known from XSECTIONS)
+        full_depth = 10.0  # ft 
         report_interval = timedelta(minutes=5)
 
         # Run baseline WITHOUT tide gate
-        update_inp_file(template_inp, output_inp, rain_lines, tide_lines, lid_lines, "NO")
+        update_inp_file(template_inp, "baseline_nogate.inp", rain_lines, tide_lines, lid_lines, "NO")
         depth_pct_no_gate, timestamps = [], []
-        with Simulation(output_inp) as sim:
-            link = Links(sim)["C70_1"]
+        with Simulation("baseline_nogate.inp") as sim:
+            link = Links(sim)["C70_2"]
             last_report_time = None
             for step in sim:
                 current_time = sim.current_time
@@ -232,11 +209,15 @@ if st.button("Run Baseline Scenario SWMM Simulation"):
         df_base_nogate = extract_runoff_and_lid_data("updated_model.rpt")
         st.session_state["df_base_nogate"] = df_base_nogate
 
+        df_runoff = extract_runoff_and_lid_data("updated_model.rpt")
+        df_base   = df_runoff[df_runoff["Subcatchment"].str.startswith("Sub_")]
+
+
         # Run baseline WITH tide gate
-        update_inp_file(template_inp, output_inp, rain_lines, tide_lines, lid_lines, "YES")
+        update_inp_file(template_inp, "baseline_gate.inp", rain_lines, tide_lines, lid_lines, "YES")
         depth_pct_gate, _ = [], []
-        with Simulation(output_inp) as sim:
-            link = Links(sim)["C70_1"]
+        with Simulation("baseline_gate.inp") as sim:
+            link = Links(sim)["C70_2"]
             last_report_time = None
             for step in sim:
                 current_time = sim.current_time
@@ -248,9 +229,6 @@ if st.button("Run Baseline Scenario SWMM Simulation"):
 
         df_base_gate = extract_runoff_and_lid_data("updated_model.rpt")
         st.session_state["df_base_gate"] = df_base_gate
-
-        df_runoff = extract_runoff_and_lid_data("updated_model.rpt")
-        df_base   = df_runoff[df_runoff["Subcatchment"].str.startswith("Sub_")]
 
         # Convert for display
         if unit == "inches":
@@ -294,20 +272,15 @@ if "df_base_nogate" in st.session_state:
 
     st.dataframe(df_no, use_container_width=True)
 
-    # Optional download
-    csv_no_gate = df_no.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        label="⬇️ Download Baseline Runoff (No Tide Gate)",
-        data=csv_no_gate,
-        file_name="baseline_runoff_no_gate.csv",
-        mime="text/csv"
-    )
-
-
-
 st.subheader("Pipes")
 st.image(
     "model_with_pipes.png",
+    use_container_width=True
+)
+
+st.subheader("Watershed with Subcatchments")
+st.image(
+    "watersheds.png",
     use_container_width=True
 )
 
@@ -540,10 +513,10 @@ if st.button("Run Scenario With Selected LID Improvements"):
             full_depth = 10.0  # ft
             report_interval = timedelta(minutes=5)
 
-            update_inp_file(template_inp, output_inp, rain_lines, tide_lines, lid_lines, "NO")
+            update_inp_file(template_inp, "lid_nogate.inp", rain_lines, tide_lines, lid_lines, "NO")
             depth_pct_lid, timestamps = [], []
-            with Simulation(output_inp) as sim:
-                link = Links(sim)["C70_1"]
+            with Simulation("lid_nogate.inp") as sim:
+                link = Links(sim)["C70_2"]
                 last_report_time = None
                 for step in sim:
                     current_time = sim.current_time
@@ -558,10 +531,10 @@ if st.button("Run Scenario With Selected LID Improvements"):
             df_lid_nogate = extract_runoff_and_lid_data("updated_model.rpt")
             st.session_state["df_lid_nogate"] = df_lid_nogate
 
-            update_inp_file(template_inp, output_inp, rain_lines, tide_lines, lid_lines, "YES")
+            update_inp_file(template_inp, "updated_model.inp", rain_lines, tide_lines, lid_lines, "YES")
             depth_pct_lid_gate, _ = [], []
-            with Simulation(output_inp) as sim:
-                link = Links(sim)["C70_1"]
+            with Simulation("lid_gate.inp") as sim:
+                link = Links(sim)["C70_2"]
                 last_report_time = None
                 for step in sim:
                     current_time = sim.current_time
@@ -573,28 +546,6 @@ if st.button("Run Scenario With Selected LID Improvements"):
             
             df_lid_gate = extract_runoff_and_lid_data("updated_model.rpt")
             st.session_state["df_lid_gate"] = df_lid_gate
-
-            df_runoff = extract_runoff_and_lid_data("updated_model.rpt")
-            df_latest = df_runoff[df_runoff["Subcatchment"].str.startswith("Sub_")]
-
-            # Convert for display
-            if unit=="inches":
-                df_disp = df_latest.rename(columns={
-                    "Impervious Runoff (in)": "Impervious Runoff (inches)",
-                    "Pervious Runoff   (in)": "Pervious Runoff (inches)"
-                })
-            else:
-                factor = 2.54 if unit=="cm" else 25.4
-                df_disp = pd.DataFrame({
-                    "Subcatchment": df_latest["Subcatchment"],
-                    f"Impervious Runoff ({unit})":
-                        df_latest["Impervious Runoff (in)"] * factor,
-                    f"Pervious Runoff ({unit})":
-                        df_latest["Pervious Runoff   (in)"] * factor
-                })
-
-            st.subheader("Updated Runoff Summary with LID Improvements")
-            st.dataframe(df_disp, use_container_width=True)
 
         except Exception as e:
             st.error(f"LID simulation failed: {e}")
@@ -632,3 +583,68 @@ if all(key in st.session_state for key in [
     fig.autofmt_xdate()  # Auto-format x-axis for better label spacing
     st.pyplot(fig)
 
+import io
+
+# === Export Excel Report ===
+if st.button("Download Full Excel Report"):
+    try:
+        timestamps_rain = st.session_state.get("rain_minutes", [])  # Use actual rainfall timestamps
+        rain_curve = st.session_state.get("display_rain_curve", [])
+
+        timestamps_tide = st.session_state.get("tide_minutes", [])  # Use actual tide timestamps
+        tide_curve = st.session_state.get("display_tide_curve", [])
+
+        # === Sanity check lengths
+        if len(timestamps_rain) != len(rain_curve):
+            st.error("Mismatch in rainfall timestamps and values.")
+        elif len(timestamps_tide) != len(tide_curve):
+            st.error("Mismatch in tide timestamps and values.")
+        else:
+            # Summary Info
+            summary_data = {
+                "Storm Duration (hr)": [duration_minutes // 60],
+                "Return Period (yr)": [return_period],
+                "Moon Phase": [moon_phase],
+                "Tide Alignment": [tide_align],
+                "Display Units": [unit]
+            }
+            df_summary = pd.DataFrame(summary_data)
+
+            # Rainfall
+            df_rain = pd.DataFrame({
+                "Timestamp (min)": timestamps_rain,
+                f"Rainfall ({unit})": rain_curve
+            })
+
+            # Tide
+            df_tide = pd.DataFrame({
+                "Timestamp (min)": timestamps_tide,
+                f"Tide ({'ft' if unit == 'inches' else 'm'})": tide_curve
+            })
+
+            # Culvert Fill Comparison
+            df_capacity = pd.DataFrame({
+                "Timestamp": st.session_state.get("baseline_timestamps", []),
+                "Baseline": st.session_state.get("baseline_fill", []),
+                "Baseline + Tide Gate": st.session_state.get("baseline_gate_fill", []),
+                "With LIDs": st.session_state.get("lid_fill", []),
+                "LIDs + Tide Gate": st.session_state.get("lid_gate_fill", [])
+            })
+
+            # Create Excel file in memory
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                df_summary.to_excel(writer, sheet_name="Scenario Summary", index=False)
+                df_rain.to_excel(writer, sheet_name="Rainfall Curve", index=False)
+                df_tide.to_excel(writer, sheet_name="Tide Curve", index=False)
+                df_capacity.to_excel(writer, sheet_name="Culvert Capacity", index=False)
+
+            output.seek(0)
+            st.download_button(
+                label="📥 Download Excel Report",
+                data=output,
+                file_name="FloodSimulationReport.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+    except Exception as e:
+        st.error(f"Failed to create Excel report: {e}")
