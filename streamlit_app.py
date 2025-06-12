@@ -5,6 +5,7 @@ import time
 import numpy as np
 import re
 import io
+import os
 import shutil 
 import matplotlib.pyplot as plt
 from datetime import timedelta
@@ -114,16 +115,50 @@ tide_chart = (
 )
 st.altair_chart(tide_chart, use_container_width=True)
 
-# === INP File Updater ===
-def update_inp_file(template_path, output_path,
-                    rain_lines, tide_lines,
-                    lid_lines, gate_flag):
-    text = open(template_path).read()
+def run_swmm_scenario(
+    scenario_name,
+    rain_lines,
+    tide_lines,
+    lid_lines,
+    gate_flag,
+    full_depth=10.0,
+    report_interval=timedelta(minutes=5),
+    template_path="swmm_project.inp"
+):
+    inp_file = f"{scenario_name}.inp"
+    rpt_file = f"{scenario_name}.rpt"
+    out_file = f"{scenario_name}.out"
+
+    # --- 1. Create .inp file ---
+    with open(template_path, "r") as f:
+        text = f.read()
     text = text.replace("$RAINFALL_TIMESERIES$", "\n".join(rain_lines))
-    text = text.replace("$TIDE_TIMESERIES$",    "\n".join(tide_lines))
-    text = text.replace("$LID_USAGE$",           "\n".join(lid_lines))
-    text = text.replace("$TIDE_GATE_CONTROL$",    gate_flag)
-    open(output_path, "w").write(text)
+    text = text.replace("$TIDE_TIMESERIES$", "\n".join(tide_lines))
+    text = text.replace("$LID_USAGE$", "\n".join(lid_lines))
+    text = text.replace("$TIDE_GATE_CONTROL$", gate_flag)
+    with open(inp_file, "w") as f:
+        f.write(text)
+
+    # --- 2. Run simulation ---
+    depth_pct, timestamps = [], []
+    with Simulation(inp_file) as sim:
+        link = Links(sim)["C70_1"]
+        last_report_time = None
+        for step in sim:
+            current_time = sim.current_time
+            if last_report_time is None or (current_time - last_report_time) >= report_interval:
+                pct = (link.depth / full_depth) * 100
+                depth_pct.append(pct)
+                timestamps.append(current_time.strftime("%H:%M"))
+                last_report_time = current_time
+
+    # --- 3. Move .rpt/.out to unique names ---
+    if os.path.exists("updated_model.rpt"):
+        shutil.move("updated_model.rpt", rpt_file)
+    if os.path.exists("updated_model.out"):
+        shutil.move("updated_model.out", out_file)
+
+    return depth_pct, timestamps, rpt_file
 
 # === Time-series Formatter ===
 def format_timeseries(name, minutes, values, date):
@@ -176,83 +211,41 @@ st.markdown(f"""
 # === Run Baseline Scenario ===
 if st.button("Run Baseline Scenario SWMM Simulation"):
     try:
-        rain_lines = format_timeseries(
-            "rain_gage_timeseries",
-            rain_sim_minutes, rain_sim_curve,
-            simulation_date
-        )
-        tide_lines = format_timeseries(
-            "tide",
-            tide_sim_minutes, tide_sim_curve,
-            simulation_date
-        )
-        lid_lines = [";"]
-        
-        full_depth = 10.0  # ft 
-        report_interval = timedelta(minutes=5)
+        rain_lines = format_timeseries("rain_gage_timeseries", rain_sim_minutes, rain_sim_curve, simulation_date)
+        tide_lines = format_timeseries("tide", tide_sim_minutes, tide_sim_curve, simulation_date)
+        lid_lines  = [";"]  # No LIDs in baseline
 
-        # Run baseline WITHOUT tide gate
-        update_inp_file(template_inp, "baseline_nogate.inp", rain_lines, tide_lines, lid_lines, "NO")
-        depth_pct_no_gate, timestamps = [], []
-        with Simulation("baseline_nogate.inp") as sim:
-            link = Links(sim)["C70_1"]
-            last_report_time = None
-            for step in sim:
-                current_time = sim.current_time
-                if last_report_time is None or (current_time - last_report_time) >= report_interval:
-                    pct = (link.depth / full_depth) * 100
-                    depth_pct_no_gate.append(pct)
-                    timestamps.append(current_time.strftime("%H:%M"))
-                    last_report_time = current_time
-        st.session_state["baseline_fill"] = depth_pct_no_gate
-        st.session_state["baseline_timestamps"] = timestamps
+        # Run both baseline scenarios
+        fill_nogate, time_nogate, rpt1 = run_swmm_scenario("baseline_nogate", rain_lines, tide_lines, lid_lines, "NO")
+        fill_gate,   time_gate,   rpt2 = run_swmm_scenario("baseline_gate",   rain_lines, tide_lines, lid_lines, "YES")
 
-        shutil.copy("updated_model.rpt", "baseline_nogate.rpt")
+        # Save culvert depth fills + time
+        st.session_state["baseline_fill"] = fill_nogate
+        st.session_state["baseline_timestamps"] = time_nogate
+        st.session_state["baseline_gate_fill"] = fill_gate
 
-        # After NO gate simulation
-        df_base_nogate = extract_runoff_and_lid_data("updated_model.rpt")
-        st.session_state["df_base_nogate"] = df_base_nogate
+        # Parse runoff data from RPTs
+        df1 = extract_runoff_and_lid_data(rpt1)
+        df2 = extract_runoff_and_lid_data(rpt2)
+        st.session_state["df_base_nogate"] = df1
+        st.session_state["df_base_gate"] = df2
 
-        df_runoff = extract_runoff_and_lid_data("updated_model.rpt")
-        df_base   = df_runoff[df_runoff["Subcatchment"].str.startswith("Sub_")]
-
-        # Run baseline WITH tide gate
-        update_inp_file(template_inp, "baseline_gate.inp", rain_lines, tide_lines, lid_lines, "YES")
-        depth_pct_gate, _ = [], []
-        with Simulation("baseline_gate.inp") as sim:
-            link = Links(sim)["C70_1"]
-            last_report_time = None
-            for step in sim:
-                current_time = sim.current_time
-                if last_report_time is None or (current_time - last_report_time) >= report_interval:
-                    pct = (link.depth / full_depth) * 100
-                    depth_pct_gate.append(pct)
-                    last_report_time = current_time
-        st.session_state["baseline_gate_fill"] = depth_pct_gate
-
-        shutil.copy("updated_model.rpt", "baseline_gate.rpt")
-
-        df_base_gate = extract_runoff_and_lid_data("updated_model.rpt")
-        st.session_state["df_base_gate"] = df_base_gate
-
-        # Convert for display
+        # Unit conversion for final display table
         if unit == "inches":
-            df_disp = df_base.rename(columns={
-                "Impervious Runoff (in)":    "Impervious Runoff (inches)",
-                "Pervious Runoff   (in)":    "Pervious Runoff (inches)"
+            df_disp = df1.rename(columns={
+                "Impervious Runoff (in)": "Impervious Runoff (inches)",
+                "Pervious Runoff   (in)": "Pervious Runoff (inches)"
             })
         else:
-            factor = 2.54 if unit=="cm" else 25.4
+            factor = 2.54 if unit == "centimeters" else 25.4
             df_disp = pd.DataFrame({
-                "Subcatchment": df_base["Subcatchment"],
-                f"Impervious Runoff ({unit})":
-                    df_base["Impervious Runoff (in)"] * factor,
-                f"Pervious Runoff ({unit})":
-                    df_base["Pervious Runoff   (in)"] * factor
+                "Subcatchment": df1["Subcatchment"],
+                f"Impervious Runoff ({unit})": df1["Impervious Runoff (in)"] * factor,
+                f"Pervious Runoff ({unit})": df1["Pervious Runoff   (in)"] * factor
             })
 
         st.session_state["baseline_df"] = df_disp
-        st.success("Baseline scenario complete!")
+        st.success("Baseline scenarios complete!")
 
     except Exception as e:
         st.error(f"Baseline simulation failed: {e}")
@@ -312,8 +305,10 @@ st.table(cost_df)
 
 # Load & sort subcatchments
 def extract_number(name):
+    if not isinstance(name, str):
+        return float('inf')  # Push non-string or missing names to the bottom
     m = re.search(r"_(\d+)", name)
-    return int(m.group(1)) if m else float("inf")
+    return int(m.group(1)) if m else float('inf')
 
 df = pd.read_excel("raster_cells_per_sub.xlsx")
 df = df.sort_values(by="NAME", key=lambda x: x.map(extract_number)).reset_index(drop=True)
@@ -490,67 +485,34 @@ def generate_lid_usage_lines(lid_config,
 
     return lines
 
-# === Run Scenario With LIDs ===
+# === Run Scenario With Selected LID Improvements ===
 if st.button("Run Scenario With Selected LID Improvements"):
     if "baseline_df" not in st.session_state:
         st.error("Please run the baseline scenario first.")
     else:
         try:
-            rain_lines = format_timeseries(
-                "rain_gage_timeseries",
-                rain_sim_minutes, rain_sim_curve,
-                simulation_date
-            )
-            tide_lines = format_timeseries(
-                "tide",
-                tide_sim_minutes, tide_sim_curve,
-                simulation_date
-            )
+            rain_lines = format_timeseries("rain_gage_timeseries", rain_sim_minutes, rain_sim_curve, simulation_date)
+            tide_lines = format_timeseries("tide", tide_sim_minutes, tide_sim_curve, simulation_date)
             lid_lines = generate_lid_usage_lines(st.session_state["user_lid_config"])
             if not lid_lines:
                 st.warning("No LIDs selected.")
                 st.stop()
 
-            full_depth = 10.0  # ft
-            report_interval = timedelta(minutes=5)
+            # Run LID-only and LID+Gate scenarios
+            fill_lid, time_lid, rpt3 = run_swmm_scenario("lid_nogate", rain_lines, tide_lines, lid_lines, "NO")
+            fill_lid_gate, _, rpt4   = run_swmm_scenario("lid_gate", rain_lines, tide_lines, lid_lines, "YES")
 
-            update_inp_file(template_inp, "lid_nogate.inp", rain_lines, tide_lines, lid_lines, "NO")
-            depth_pct_lid, timestamps = [], []
-            with Simulation("lid_nogate.inp") as sim:
-                link = Links(sim)["C70_1"]
-                last_report_time = None
-                for step in sim:
-                    current_time = sim.current_time
-                    if last_report_time is None or (current_time - last_report_time) >= report_interval:
-                        pct = (link.depth / full_depth) * 100
-                        depth_pct_lid.append(pct)
-                        timestamps.append(current_time.strftime("%H:%M"))
-                        last_report_time = current_time
-            st.session_state["lid_fill"] = depth_pct_lid
-            st.session_state["lid_timestamps"] = timestamps
-           
-            shutil.copy("updated_model.rpt", "lid_nogate.rpt")
+            # Store simulation results
+            st.session_state["lid_fill"] = fill_lid
+            st.session_state["lid_timestamps"] = time_lid
+            st.session_state["lid_gate_fill"] = fill_lid_gate
 
-            df_lid_nogate = extract_runoff_and_lid_data("updated_model.rpt")
-            st.session_state["df_lid_nogate"] = df_lid_nogate
-
-            update_inp_file(template_inp, "updated_model.inp", rain_lines, tide_lines, lid_lines, "YES")
-            depth_pct_lid_gate, _ = [], []
-            with Simulation("lid_gate.inp") as sim:
-                link = Links(sim)["C70_1"]
-                last_report_time = None
-                for step in sim:
-                    current_time = sim.current_time
-                    if last_report_time is None or (current_time - last_report_time) >= report_interval:
-                        pct = (link.depth / full_depth) * 100
-                        depth_pct_lid_gate.append(pct)
-                        last_report_time = current_time
-            st.session_state["lid_gate_fill"] = depth_pct_lid_gate
-            
-            shutil.copy("updated_model.rpt", "lid_gate.rpt")
-
-            df_lid_gate = extract_runoff_and_lid_data("updated_model.rpt")
+            df_lid = extract_runoff_and_lid_data(rpt3)
+            df_lid_gate = extract_runoff_and_lid_data(rpt4)
+            st.session_state["df_lid_nogate"] = df_lid
             st.session_state["df_lid_gate"] = df_lid_gate
+
+            st.success("LID scenarios complete!")
 
         except Exception as e:
             st.error(f"LID simulation failed: {e}")
@@ -579,7 +541,7 @@ if all(key in st.session_state for key in [
     ax.set_title("Culvert Capacity Comparison")
 
     # Show only hourly ticks
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%#I %p'))
     ax.xaxis.set_major_locator(mdates.HourLocator())
 
     ax.legend()
@@ -587,27 +549,88 @@ if all(key in st.session_state for key in [
     fig.autofmt_xdate()  # Auto-format x-axis for better label spacing
     st.pyplot(fig)
 
-
 def extract_volumes_from_rpt(rpt_path):
     try:
         with open(rpt_path, 'r') as f:
-            text = f.read()
-        outfall = re.search(r'outfall\s+\d+\.\d+\s+\d+\.\d+\s+([\d\.]+)', text)
-        rain    = re.search(r'Total Precipitation .*?([\d\.]+)', text)
-        infil   = re.search(r'Infiltration Loss .*?([\d\.]+)', text)
-        runoff  = re.search(r'Surface Runoff .*?([\d\.]+)', text)
+            lines = f.readlines()
+
+        outflow = None
+        infiltration = None
+        runoff = None
+        rainfall = None
+        flooding = 0.0
+
+        in_outfall_section = False
+        in_continuity_section = False
+        in_flooding_section = False
+
+        for i, line in enumerate(lines):
+            # === Outfall Loading Summary ===
+            if "Outfall Loading Summary" in line:
+                in_outfall_section = True
+                continue
+            if in_outfall_section:
+                if line.strip().startswith("System"):
+                    parts = line.split()
+                    if len(parts) >= 5:
+                        try:
+                            outflow = float(parts[-1]) * 1e6  # Convert from MG to gallons
+                        except ValueError:
+                            outflow = None
+                    in_outfall_section = False  # Done after "System" line
+
+            # === Runoff Quantity Continuity ===
+            if "Runoff Quantity Continuity" in line:
+                in_continuity_section = True
+                continue
+            if in_continuity_section:
+                if "Total Precipitation" in line:
+                    rainfall = float(line.split()[-2])
+                elif "Infiltration Loss" in line:
+                    infiltration = float(line.split()[-2])
+                elif "Surface Runoff" in line:
+                    runoff = float(line.split()[-2])
+                elif "Continuity Error" in line:
+                    in_continuity_section = False
+
+            # === Node Flooding Summary ===
+            if "Node Flooding Summary" in line:
+                in_flooding_section = True
+                continue
+            if in_flooding_section:
+                if line.strip() == "" or "Node" in line:
+                    continue
+                elif "--------" in line:
+                    continue
+                else:
+                    parts = line.split()
+                    if len(parts) >= 6:
+                        try:
+                            flooding += float(parts[5]) * 1e6  # Convert MG to gallons
+                        except ValueError:
+                            pass
 
         return {
-            "Outflow (10⁶ gal)": float(outfall.group(1)) if outfall else None,
-            "Rainfall (ac-ft)": float(rain.group(1)) if rain else None,
-            "Infiltration (ac-ft)": float(infil.group(1)) if infil else None,
-            "Runoff (ac-ft)": float(runoff.group(1)) if runoff else None
+            "Outflow (gallons)": outflow,
+            "Rainfall (ac-ft)": rainfall,
+            "Infiltration (ac-ft)": infiltration,
+            "Runoff (ac-ft)": runoff,
+            "Flooding (gallons)": flooding
         }
-    except:
-        return {"Outflow (10⁶ gal)": None, "Rainfall (ac-ft)": None,
-                "Infiltration (ac-ft)": None, "Runoff (ac-ft)": None}
 
-st.subheader("Water Balance Summary (from RPT files)")
+    except Exception as e:
+        print(f"Failed to parse RPT file: {e}")
+        return {
+            "Outflow (gallons)": None,
+            "Rainfall (ac-ft)": None,
+            "Infiltration (ac-ft)": None,
+            "Runoff (ac-ft)": None,
+            "Flooding (gallons)": None
+        }
+
+# === Water Balance Summary (Only show if RPT data exists) ===
+df_balance = None
+results = []
 
 rpt_scenarios = {
     "Baseline (No Tide Gate)": "baseline_nogate.rpt",
@@ -616,105 +639,146 @@ rpt_scenarios = {
     "LID + Tide Gate": "lid_gate.rpt"
 }
 
-results = []
 for name, path in rpt_scenarios.items():
-    metrics = extract_volumes_from_rpt(path)
-    metrics["Scenario"] = name
-    results.append(metrics)
-
-df_balance = pd.DataFrame(results).set_index("Scenario")
-st.dataframe(df_balance)
-st.session_state["df_balance"] = df_balance  # Save for Excel later
-
-
-# === Export Excel Report ===
-if st.button("Download Full Excel Report"):
     try:
-        # --- Retrieve Curves and Check ---
-        timestamps_rain = st.session_state.get("rain_minutes", [])
-        rain_curve = st.session_state.get("display_rain_curve", [])
+        metrics = extract_volumes_from_rpt(path)
+        if any(v is not None for k, v in metrics.items() if k != "Scenario"):
+            metrics["Scenario"] = name
+            results.append(metrics)
+    except:
+        continue
 
-        timestamps_tide = st.session_state.get("tide_minutes", [])
-        tide_curve = st.session_state.get("display_tide_curve", [])
+if results:
+    df_balance = pd.DataFrame(results).set_index("Scenario")
 
-        if len(timestamps_rain) != len(rain_curve):
-            st.error("Mismatch in rainfall timestamps and values.")
-        elif len(timestamps_tide) != len(tide_curve):
-            st.error("Mismatch in tide timestamps and values.")
+    # Convert volumes to ft³ or m³
+    convert_to_m3 = unit == "centimeters"
+
+    GAL_TO_FT3 = 0.133681
+    ACF_TO_FT3 = 43560
+    FT3_TO_M3 = 0.0283168
+
+    def convert(val, from_unit):
+        if from_unit == "gallons":
+            val_ft3 = val * GAL_TO_FT3
+        elif from_unit == "ac-ft":
+            val_ft3 = val * ACF_TO_FT3
         else:
-            # === Scenario Summary ===
-            df_summary = pd.DataFrame([{
-                "Storm Duration (hr)": duration_minutes // 60,
-                "Return Period (yr)": return_period,
-                "Moon Phase": moon_phase,
-                "Tide Alignment": tide_align,
-                "Display Units": unit
-            }])
+            val_ft3 = val
+        return val_ft3 * FT3_TO_M3 if convert_to_m3 else val_ft3
 
-            # === Rainfall and Tide Curves ===
-            df_rain = pd.DataFrame({
-                "Timestamp (min)": timestamps_rain,
-                f"Rainfall ({unit})": rain_curve
-            })
+    # Reorder and convert metrics
+    df_converted = pd.DataFrame(index=df_balance.index)
+    df_converted["Flooded Volume"] = df_balance["Flooding (gallons)"].apply(lambda x: convert(x, "gallons"))
+    df_converted["Outflow Volume"] = df_balance["Outflow (gallons)"].apply(lambda x: convert(x, "gallons"))
+    df_converted["Infiltration"] = df_balance["Infiltration (ac-ft)"].apply(lambda x: convert(x, "ac-ft"))
+    df_converted["Surface Runoff"] = df_balance["Runoff (ac-ft)"].apply(lambda x: convert(x, "ac-ft"))
 
-            df_tide = pd.DataFrame({
-                "Timestamp (min)": timestamps_tide,
-                f"Tide ({'ft' if unit == 'inches' else 'meters'})": tide_curve
-            })
+    unit_label = "m³" if convert_to_m3 else "ft³"
+    df_converted = df_converted.round(0)  # clean display
 
-            # === Culvert Fill (Capacity) Summary ===
-            df_capacity = pd.DataFrame({
-                "Timestamp": st.session_state.get("baseline_timestamps", []),
-                "Baseline": st.session_state.get("baseline_fill", []),
-                "Baseline + Tide Gate": st.session_state.get("baseline_gate_fill", []),
-                "With LIDs": st.session_state.get("lid_fill", []),
-                "LIDs + Tide Gate": st.session_state.get("lid_gate_fill", [])
-            })
+    st.subheader(f"Water Balance Summary ({unit_label})")
+    st.dataframe(df_converted)
+    st.session_state["df_balance"] = df_converted  # for Excel export
 
-            # === Outfall and Flooding Summary ===
-            df_outflow = pd.DataFrame({
-                "Scenario": [
-                    "Baseline (No Tide Gate)",
-                    "Baseline + Tide Gate",
-                    "LID (No Tide Gate)",
-                    "LID + Tide Gate"
-                ],
-                "Outflow (gallons)": [
-                    st.session_state.get("outflow_nogate", 0),
-                    st.session_state.get("outflow_gate", 0),
-                    st.session_state.get("outflow_lid_nogate", 0),
-                    st.session_state.get("outflow_lid_gate", 0)
-                ],
-                "Flooding (gallons)": [
-                    st.session_state.get("flood_nogate", 0),
-                    st.session_state.get("flood_gate", 0),
-                    st.session_state.get("flood_lid_nogate", 0),
-                    st.session_state.get("flood_lid_gate", 0)
-                ]
-            })
 
-            # === RPT Water Balance Metrics ===
-            df_balance = st.session_state.get("df_balance", pd.DataFrame())
 
-            # === Write to Excel in memory ===
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                df_summary.to_excel(writer, sheet_name="Scenario Summary", index=False)
-                df_rain.to_excel(writer, sheet_name="Rainfall Curve", index=False)
-                df_tide.to_excel(writer, sheet_name="Tide Curve", index=False)
-                df_capacity.to_excel(writer, sheet_name="Culvert Capacity", index=False)
-                df_outflow.to_excel(writer, sheet_name="Outflow + Flooding", index=False)
+# === Export Excel Report (Single Click Download Button) ===
+output = io.BytesIO()
 
-                if not df_balance.empty:
-                    df_balance.to_excel(writer, sheet_name="Water Balance Summary")
+try:
+    # === 1. Scenario Summary Table ===
+    df_summary = pd.DataFrame([{
+        "Storm Duration (hr)": duration_minutes // 60,
+        "Return Period (yr)": return_period,
+        "Moon Phase": moon_phase,
+        "Tide Alignment": tide_align,
+        "Display Units": unit
+    }])
 
-            output.seek(0)
-            st.download_button(
-                label="📥 Download Excel Report",
-                data=output,
-                file_name="FloodSimulationReport.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    # === 2. Outflow + Flooding Summary ===
+    df_outflow = pd.DataFrame({
+        "Scenario": [
+            "Baseline (No Tide Gate)",
+            "Baseline + Tide Gate",
+            "LID (No Tide Gate)",
+            "LID + Tide Gate"
+        ],
+        "Outflow (gallons)": [
+            st.session_state.get("outflow_nogate", 0),
+            st.session_state.get("outflow_gate", 0),
+            st.session_state.get("outflow_lid_nogate", 0),
+            st.session_state.get("outflow_lid_gate", 0)
+        ],
+        "Flooding (gallons)": [
+            st.session_state.get("flood_nogate", 0),
+            st.session_state.get("flood_gate", 0),
+            st.session_state.get("flood_lid_nogate", 0),
+            st.session_state.get("flood_lid_gate", 0)
+        ]
+    })
+
+    # === 3. Water Balance Table ===
+    df_balance = st.session_state.get("df_balance", pd.DataFrame())
+
+    # === 4. Rainfall & Tide Curves ===
+    df_rain = pd.DataFrame({
+        "Timestamp (min)": st.session_state.get("rain_minutes", []),
+        f"Rainfall ({unit})": st.session_state.get("display_rain_curve", [])
+    })
+
+    df_tide = pd.DataFrame({
+        "Timestamp (min)": st.session_state.get("tide_minutes", []),
+        f"Tide ({'ft' if unit == 'inches' else 'meters'})": st.session_state.get("display_tide_curve", [])
+    })
+
+    # === Write All to Excel ===
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        # Write summary info
+        start_row = 0
+        df_summary.to_excel(writer, sheet_name="Scenario Summary", index=False, startrow=start_row)
+        start_row += len(df_summary) + 3
+        
+        if not df_balance.empty:
+            df_balance.reset_index().to_excel(
+                writer, sheet_name="Scenario Summary", index=False, startrow=start_row
             )
 
-    except Exception as e:
-        st.error(f"Failed to create Excel report: {e}")
+        # Write rainfall and tide curves
+        if not df_rain.empty:
+            df_rain.to_excel(writer, sheet_name="Rainfall Curve", index=False)
+
+        if not df_tide.empty:
+            df_tide.to_excel(writer, sheet_name="Tide Curve", index=False)
+
+        # === 5. Culvert Fill % ===
+        culvert_keys = [
+            "baseline_timestamps", "baseline_fill",
+            "baseline_gate_fill", "lid_fill", "lid_gate_fill"
+        ]
+        if all(k in st.session_state for k in culvert_keys):
+            lengths = [len(st.session_state[k]) for k in culvert_keys]
+            if len(set(lengths)) == 1:
+                df_culvert = pd.DataFrame({
+                    "Timestamp": st.session_state["baseline_timestamps"],
+                    "Baseline": st.session_state["baseline_fill"],
+                    "Baseline + Tide Gate": st.session_state["baseline_gate_fill"],
+                    "With LIDs": st.session_state["lid_fill"],
+                    "LIDs + Tide Gate": st.session_state["lid_gate_fill"]
+                })
+                df_culvert.to_excel(writer, sheet_name="Culvert Capacity", index=False)
+            else:
+                st.warning("Skipped culvert chart export due to mismatched array lengths.")
+
+    # Reset stream and allow download
+    output.seek(0)
+
+    st.download_button(
+        label="📥 Download Full Excel Report",
+        data=output,
+        file_name="FloodSimulationReport.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+except Exception as e:
+    st.error(f"Failed to create Excel report: {e}")

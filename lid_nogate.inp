@@ -198,10 +198,18 @@ rain_garden      STORAGE    0          0.75       0.5        0          NO
 [LID_USAGE]
 ;;Subcatchment   LID Process      Number  Area       Width      InitSat    FromImp    ToPerv     RptFile                  DrainTo          FromPerv  
 ;;-------------- ---------------- ------- ---------- ---------- ---------- ---------- ---------- ------------------------ ---------------- ----------
-Sub_37         rain_barrel          20    2.95      0       0   18.72       1                       *               *        0
-Sub_37         rain_garden           5      85      0       0       0       1                       *               *    27.63
-Sub_39         rain_barrel          20    2.95      0       0    4.06       1                       *               *        0
-Sub_39         rain_garden          25      85      0       0       0       1                       *               *    10.99
+Sub_5          rain_barrel          40    2.95      0       0   14.23       1                       *               *        0
+Sub_11         rain_garden           6     100      0       0       0       1                       *               *    23.94
+Sub_15         rain_barrel         100    2.95      0       0   31.50       1                       *               *        0
+Sub_15         rain_garden          50     100      0       0       0       1                       *               *    38.38
+Sub_14         rain_barrel         200    2.95      0       0   17.79       1                       *               *        0
+Sub_14         rain_garden         200     100      0       0       0       1                       *               *    32.02
+Sub_20         rain_barrel         300    2.95      0       0   31.41       1                       *               *        0
+Sub_20         rain_garden         100     100      0       0       0       1                       *               *    23.12
+Sub_39         rain_barrel         200    2.95      0       0   20.50       1                       *               *        0
+Sub_39         rain_garden         100     100      0       0       0       1                       *               *    21.99
+Sub_38         rain_barrel         100    2.95      0       0   21.51       1                       *               *        0
+Sub_38         rain_garden          30     100      0       0       0       1                       *               *    29.59
 
 [JUNCTIONS]
 ;;Name           Elevation  MaxDepth   InitDepth  SurDepth   Aponded   
