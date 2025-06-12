@@ -4,6 +4,8 @@ import altair as alt
 import time
 import numpy as np
 import re
+import io
+import shutil 
 import matplotlib.pyplot as plt
 from datetime import timedelta
 import matplotlib.dates as mdates
@@ -23,10 +25,10 @@ simulation_date = "06/01/2025"
 template_inp     = "swmm_project.inp"
 
 st.set_page_config(
-    page_title="High Stakes, High Water: A Watershed Design Challenge for Coastal Resilience",
+    page_title="CoastWise",
     layout="centered"
 )
-st.title("High Stakes, High Water: A Watershed Design Challenge for Coastal Resilience")
+st.title("CoastWise: A Gamified Watershed Design Toolkit for Coastal Resilience Using the Stormwater Management Model")
 
 # === User Inputs ===
 duration_minutes = st.selectbox(
@@ -68,7 +70,7 @@ if unit == "inches":
 elif unit == "centimeters":
     display_rain_curve = rain_sim_curve * 2.54
     display_tide_curve = tide_sim_curve * 0.3048 * 100
-    tide_disp_unit    = "m"
+    tide_disp_unit    = "meters"
 
 # --- Store display values and timestamps for Excel export ---
 st.session_state["rain_minutes"] = rain_sim_minutes
@@ -205,13 +207,14 @@ if st.button("Run Baseline Scenario SWMM Simulation"):
         st.session_state["baseline_fill"] = depth_pct_no_gate
         st.session_state["baseline_timestamps"] = timestamps
 
+        shutil.copy("updated_model.rpt", "baseline_nogate.rpt")
+
         # After NO gate simulation
         df_base_nogate = extract_runoff_and_lid_data("updated_model.rpt")
         st.session_state["df_base_nogate"] = df_base_nogate
 
         df_runoff = extract_runoff_and_lid_data("updated_model.rpt")
         df_base   = df_runoff[df_runoff["Subcatchment"].str.startswith("Sub_")]
-
 
         # Run baseline WITH tide gate
         update_inp_file(template_inp, "baseline_gate.inp", rain_lines, tide_lines, lid_lines, "YES")
@@ -226,6 +229,8 @@ if st.button("Run Baseline Scenario SWMM Simulation"):
                     depth_pct_gate.append(pct)
                     last_report_time = current_time
         st.session_state["baseline_gate_fill"] = depth_pct_gate
+
+        shutil.copy("updated_model.rpt", "baseline_gate.rpt")
 
         df_base_gate = extract_runoff_and_lid_data("updated_model.rpt")
         st.session_state["df_base_gate"] = df_base_gate
@@ -298,7 +303,7 @@ st.image(
 
 # Cost data placeholders
 data = {
-    "Infrastructure": ["85 sq.ft. Rain Garden", "50 gallon Rain Barrel", "Tide Gate (10'x5')"],
+    "Infrastructure": ["100 sq.ft. Rain Garden", "50 gallon Rain Barrel", "Tide Gate (10'x5')"],
     "Estimated Installation Cost": ["$250", "$100", "60000"]
 }
 cost_df = pd.DataFrame(data)
@@ -394,7 +399,6 @@ if selected_subs:
         })
         total_cost += tide_cost
 
-
     if cost_breakdown:
         cost_df = pd.DataFrame(cost_breakdown)
 
@@ -474,7 +478,7 @@ def generate_lid_usage_lines(lid_config,
                 sub=sub,
                 proc="rain_garden",
                 num=rg,
-                area=f"{85:.0f}",
+                area=f"{100:.0f}",
                 width=0,
                 initsat=0,
                 fromimp=0,
@@ -485,7 +489,6 @@ def generate_lid_usage_lines(lid_config,
             ))
 
     return lines
-
 
 # === Run Scenario With LIDs ===
 if st.button("Run Scenario With Selected LID Improvements"):
@@ -525,6 +528,8 @@ if st.button("Run Scenario With Selected LID Improvements"):
                         last_report_time = current_time
             st.session_state["lid_fill"] = depth_pct_lid
             st.session_state["lid_timestamps"] = timestamps
+           
+            shutil.copy("updated_model.rpt", "lid_nogate.rpt")
 
             df_lid_nogate = extract_runoff_and_lid_data("updated_model.rpt")
             st.session_state["df_lid_nogate"] = df_lid_nogate
@@ -542,12 +547,13 @@ if st.button("Run Scenario With Selected LID Improvements"):
                         last_report_time = current_time
             st.session_state["lid_gate_fill"] = depth_pct_lid_gate
             
+            shutil.copy("updated_model.rpt", "lid_gate.rpt")
+
             df_lid_gate = extract_runoff_and_lid_data("updated_model.rpt")
             st.session_state["df_lid_gate"] = df_lid_gate
 
         except Exception as e:
             st.error(f"LID simulation failed: {e}")
-
 
 if all(key in st.session_state for key in [
     "baseline_fill", "baseline_gate_fill",
@@ -581,46 +587,82 @@ if all(key in st.session_state for key in [
     fig.autofmt_xdate()  # Auto-format x-axis for better label spacing
     st.pyplot(fig)
 
-import io
+
+def extract_volumes_from_rpt(rpt_path):
+    try:
+        with open(rpt_path, 'r') as f:
+            text = f.read()
+        outfall = re.search(r'outfall\s+\d+\.\d+\s+\d+\.\d+\s+([\d\.]+)', text)
+        rain    = re.search(r'Total Precipitation .*?([\d\.]+)', text)
+        infil   = re.search(r'Infiltration Loss .*?([\d\.]+)', text)
+        runoff  = re.search(r'Surface Runoff .*?([\d\.]+)', text)
+
+        return {
+            "Outflow (10⁶ gal)": float(outfall.group(1)) if outfall else None,
+            "Rainfall (ac-ft)": float(rain.group(1)) if rain else None,
+            "Infiltration (ac-ft)": float(infil.group(1)) if infil else None,
+            "Runoff (ac-ft)": float(runoff.group(1)) if runoff else None
+        }
+    except:
+        return {"Outflow (10⁶ gal)": None, "Rainfall (ac-ft)": None,
+                "Infiltration (ac-ft)": None, "Runoff (ac-ft)": None}
+
+st.subheader("Water Balance Summary (from RPT files)")
+
+rpt_scenarios = {
+    "Baseline (No Tide Gate)": "baseline_nogate.rpt",
+    "Baseline + Tide Gate": "baseline_gate.rpt",
+    "LID (No Gate)": "lid_nogate.rpt",
+    "LID + Tide Gate": "lid_gate.rpt"
+}
+
+results = []
+for name, path in rpt_scenarios.items():
+    metrics = extract_volumes_from_rpt(path)
+    metrics["Scenario"] = name
+    results.append(metrics)
+
+df_balance = pd.DataFrame(results).set_index("Scenario")
+st.dataframe(df_balance)
+st.session_state["df_balance"] = df_balance  # Save for Excel later
+
 
 # === Export Excel Report ===
 if st.button("Download Full Excel Report"):
     try:
-        timestamps_rain = st.session_state.get("rain_minutes", [])  # Use actual rainfall timestamps
+        # --- Retrieve Curves and Check ---
+        timestamps_rain = st.session_state.get("rain_minutes", [])
         rain_curve = st.session_state.get("display_rain_curve", [])
 
-        timestamps_tide = st.session_state.get("tide_minutes", [])  # Use actual tide timestamps
+        timestamps_tide = st.session_state.get("tide_minutes", [])
         tide_curve = st.session_state.get("display_tide_curve", [])
 
-        # === Sanity check lengths
         if len(timestamps_rain) != len(rain_curve):
             st.error("Mismatch in rainfall timestamps and values.")
         elif len(timestamps_tide) != len(tide_curve):
             st.error("Mismatch in tide timestamps and values.")
         else:
-            # Summary Info
-            summary_data = {
-                "Storm Duration (hr)": [duration_minutes // 60],
-                "Return Period (yr)": [return_period],
-                "Moon Phase": [moon_phase],
-                "Tide Alignment": [tide_align],
-                "Display Units": [unit]
-            }
-            df_summary = pd.DataFrame(summary_data)
+            # === Scenario Summary ===
+            df_summary = pd.DataFrame([{
+                "Storm Duration (hr)": duration_minutes // 60,
+                "Return Period (yr)": return_period,
+                "Moon Phase": moon_phase,
+                "Tide Alignment": tide_align,
+                "Display Units": unit
+            }])
 
-            # Rainfall
+            # === Rainfall and Tide Curves ===
             df_rain = pd.DataFrame({
                 "Timestamp (min)": timestamps_rain,
                 f"Rainfall ({unit})": rain_curve
             })
 
-            # Tide
             df_tide = pd.DataFrame({
                 "Timestamp (min)": timestamps_tide,
-                f"Tide ({'ft' if unit == 'inches' else 'm'})": tide_curve
+                f"Tide ({'ft' if unit == 'inches' else 'meters'})": tide_curve
             })
 
-            # Culvert Fill Comparison
+            # === Culvert Fill (Capacity) Summary ===
             df_capacity = pd.DataFrame({
                 "Timestamp": st.session_state.get("baseline_timestamps", []),
                 "Baseline": st.session_state.get("baseline_fill", []),
@@ -629,13 +671,42 @@ if st.button("Download Full Excel Report"):
                 "LIDs + Tide Gate": st.session_state.get("lid_gate_fill", [])
             })
 
-            # Create Excel file in memory
+            # === Outfall and Flooding Summary ===
+            df_outflow = pd.DataFrame({
+                "Scenario": [
+                    "Baseline (No Tide Gate)",
+                    "Baseline + Tide Gate",
+                    "LID (No Tide Gate)",
+                    "LID + Tide Gate"
+                ],
+                "Outflow (gallons)": [
+                    st.session_state.get("outflow_nogate", 0),
+                    st.session_state.get("outflow_gate", 0),
+                    st.session_state.get("outflow_lid_nogate", 0),
+                    st.session_state.get("outflow_lid_gate", 0)
+                ],
+                "Flooding (gallons)": [
+                    st.session_state.get("flood_nogate", 0),
+                    st.session_state.get("flood_gate", 0),
+                    st.session_state.get("flood_lid_nogate", 0),
+                    st.session_state.get("flood_lid_gate", 0)
+                ]
+            })
+
+            # === RPT Water Balance Metrics ===
+            df_balance = st.session_state.get("df_balance", pd.DataFrame())
+
+            # === Write to Excel in memory ===
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
                 df_summary.to_excel(writer, sheet_name="Scenario Summary", index=False)
                 df_rain.to_excel(writer, sheet_name="Rainfall Curve", index=False)
                 df_tide.to_excel(writer, sheet_name="Tide Curve", index=False)
                 df_capacity.to_excel(writer, sheet_name="Culvert Capacity", index=False)
+                df_outflow.to_excel(writer, sheet_name="Outflow + Flooding", index=False)
+
+                if not df_balance.empty:
+                    df_balance.to_excel(writer, sheet_name="Water Balance Summary")
 
             output.seek(0)
             st.download_button(
@@ -644,5 +715,6 @@ if st.button("Download Full Excel Report"):
                 file_name="FloodSimulationReport.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
+
     except Exception as e:
         st.error(f"Failed to create Excel report: {e}")
