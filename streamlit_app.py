@@ -898,7 +898,7 @@ try:
     # === 4. Rainfall & Tide Curves ===
     df_rain = pd.DataFrame({
         "Timestamp (min)": st.session_state.get("rain_minutes", []),
-        f"Rainfall ({unit})": st.session_state.get("display_rain_curve", [])
+        f"Rainfall ({'in' if unit == 'U.S. Customary' else 'cm'})": st.session_state.get("display_rain_curve", [])
     })
 
     df_tide = pd.DataFrame({
