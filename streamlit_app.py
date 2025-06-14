@@ -272,6 +272,13 @@ st.image(
     "green_infrastructure_options.png",
     use_container_width=True
 )
+
+st.subheader("Low Impact Developments (LIDs) Storage")
+st.image(
+    "vols.png",
+    use_container_width=True
+)
+
 st.subheader("Land Use Land Cover used to determine the maximum number of LIDs for each subcatchment")
 st.image(
     "lulc_ledgend.png",
@@ -609,28 +616,16 @@ if all(key in st.session_state for key in [
 
 In this project, we tested six scenarios combining two types of flood interventions: **tide gates** and **LID (Low Impact Development) features** like rain gardens and rain barrels.
 
-#### Scenarios Tested
-- **Baseline (No Tide Gate, No LIDs)**
-- **Baseline + Tide Gate**
-- **LID (No Tide Gate)**
-- **LID + Tide Gate**
-- **Max LID (No Tide Gate)**
-- **Max LID + Tide Gate**
-
 #### How Tide Gates Work
 The **tide gate** acts like a one-way door:
 - It **blocks tidal water** from backing up into the system during high tide.
 - It **lets stormwater exit** when pressure inside the pipe is higher than the tide level.
-- This helps keep the pipe network from backing up and allows it to empty as the tide goes out.
 
 #### How LID Features Help
 **Rain gardens and barrels** reduce stormwater earlier in the system:
 - They **slow down** and **store** runoff close to where it falls.
 - This reduces how much water reaches the pipes — especially during small and moderate storms.
 - During **large storms**, their benefit at the outfall is smaller, but still helpful.
-
-#### Why Combine Them?
-The **Max LID** scenarios apply the greatest number of rain gardens and barrels across the watershed, showing the upper limit of what local infrastructure can do.
 
 Together, these six scenarios show how **both local solutions (like LIDs)** and **system-wide controls (like tide gates)** are needed to manage flooding—especially in coastal areas where rainfall and tides can overlap.
 
@@ -644,12 +639,12 @@ Together, these six scenarios show how **both local solutions (like LIDs)** and 
 
     # Define a color palette (or use any you prefer)
     colors = {
-        "Baseline": "#b3b0ab",             
-        "Baseline + Tide Gate": "#ff7f0e", 
-        "With LIDs": "#2ca02c",            
-        "LIDs + Tide Gate": "#d62728",     
-        "Max LIDs": "#ae7bdf",             
-        "Max LIDs + Tide Gate": "#b2ebbb"  
+        "Baseline": "#141413",             
+        "Baseline + Tide Gate": "#5c5dc6", 
+        "With LIDs": "#459145",            
+        "LIDs + Tide Gate": "#e7ef46",     
+        "Max LIDs": "#10f527",             
+        "Max LIDs + Tide Gate": "#ea1717"  
     }
 
     # Define a distinct style per line
@@ -658,8 +653,8 @@ Together, these six scenarios show how **both local solutions (like LIDs)** and 
         "Baseline + Tide Gate": "-",
         "With LIDs": "-.",
         "LIDs + Tide Gate": "-.",
-        "Max LIDs": (0, (3, 1, 1, 1)),     # Dash-dot-dot
-        "Max LIDs + Tide Gate": (0, (1, 1)) # Dotted
+        "Max LIDs": "--",     
+        "Max LIDs + Tide Gate": "-" 
     }
 
     # Create the figure
@@ -667,22 +662,22 @@ Together, these six scenarios show how **both local solutions (like LIDs)** and 
 
     # Plot each line with custom style
     ax.plot(time_objects, st.session_state["baseline_fill"],
-            label="Baseline", color=colors["Baseline"], linestyle=styles["Baseline"], linewidth=2)
+            label="Baseline", color=colors["Baseline"], linestyle=styles["Baseline"], linewidth=4)
 
     ax.plot(time_objects, st.session_state["baseline_gate_fill"],
-            label="Baseline + Tide Gate", color=colors["Baseline + Tide Gate"], linestyle=styles["Baseline + Tide Gate"], linewidth=2)
+            label="Baseline + Tide Gate", color=colors["Baseline + Tide Gate"], linestyle=styles["Baseline + Tide Gate"], linewidth=4)
 
     ax.plot(time_objects, st.session_state["lid_fill"],
-            label="With LIDs", color=colors["With LIDs"], linestyle=styles["With LIDs"], linewidth=2)
+            label="With LIDs", color=colors["With LIDs"], linestyle=styles["With LIDs"], linewidth=4)
 
     ax.plot(time_objects, st.session_state["lid_gate_fill"],
-            label="LIDs + Tide Gate", color=colors["LIDs + Tide Gate"], linestyle=styles["LIDs + Tide Gate"], linewidth=2)
+            label="LIDs + Tide Gate", color=colors["LIDs + Tide Gate"], linestyle=styles["LIDs + Tide Gate"], linewidth=4)
 
     ax.plot(time_objects, st.session_state["lid_max_fill"],
-            label="Max LIDs", color=colors["Max LIDs"], linestyle=styles["Max LIDs"], linewidth=2)
+            label="Max LIDs", color=colors["Max LIDs"], linestyle=styles["Max LIDs"], linewidth=4)
 
     ax.plot(time_objects, st.session_state["lid_max_gate_fill"],
-            label="Max LIDs + Tide Gate", color=colors["Max LIDs + Tide Gate"], linestyle=styles["Max LIDs + Tide Gate"], linewidth=2)
+            label="Max LIDs + Tide Gate", color=colors["Max LIDs + Tide Gate"], linestyle=styles["Max LIDs + Tide Gate"], linewidth=4)
 
 
     ax.set_ylabel("Culvert Fill (%)")
@@ -778,9 +773,9 @@ results = []
 rpt_scenarios = {
     "Baseline (No Tide Gate)": "baseline_nogate.rpt",
     "Baseline + Tide Gate": "baseline_gate.rpt",
-    "LID (No Gate)": "lid_nogate.rpt",
+    "LID (No Tide Gate)": "lid_nogate.rpt",
     "LID + Tide Gate": "lid_gate.rpt",
-    "Max LID (No Gate)": "lid_max_nogate.rpt",
+    "Max LID (No Tide Gate)": "lid_max_nogate.rpt",
     "Max LID + Tide Gate": "lid_max_gate.rpt"
 }
 
@@ -853,14 +848,17 @@ if results:
     df_converted["Outflow Volume"] = df_balance["Outflow (gallons)"].apply(lambda x: convert(x, "gallons"))
     df_converted["Infiltration"] = df_balance["Infiltration (ac-ft)"].apply(lambda x: convert(x, "ac-ft"))
     df_converted["Surface Runoff"] = df_balance["Runoff (ac-ft)"].apply(lambda x: convert(x, "ac-ft"))
+    
+    # --- Round numeric values to nearest whole number ---
+    df_converted = df_converted.round(0).astype(int)
 
     # --- Add Cost BEFORE formatting ---
     cost_lookup = {
         "Baseline (No Tide Gate)": 0,
         "Baseline + Tide Gate": 250000,
-        "LID (No Gate)": st.session_state.get("user_total_cost", 0) - 250000,
+        "LID (No Tide Gate)": st.session_state.get("user_total_cost", 0) - 250000,
         "LID + Tide Gate": st.session_state.get("user_total_cost", 0),
-        "Max LID (No Gate)": st.session_state.get("max_total_cost", 0) - 250000,
+        "Max LID (No Tide Gate)": st.session_state.get("max_total_cost", 0) - 250000,
         "Max LID + Tide Gate": st.session_state.get("max_total_cost", 0),
     }
     df_converted["Total Cost ($)"] = df_converted.index.map(cost_lookup)
