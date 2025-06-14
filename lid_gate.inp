@@ -198,15 +198,20 @@ rain_garden      STORAGE    0          0.75       0.5        0          NO
 [LID_USAGE]
 ;;Subcatchment   LID Process      Number  Area       Width      InitSat    FromImp    ToPerv     RptFile                  DrainTo          FromPerv  
 ;;-------------- ---------------- ------- ---------- ---------- ---------- ---------- ---------- ------------------------ ---------------- ----------
-Sub_28         rain_barrel         300    2.95      0       0   27.63       1                       *               *        0
-Sub_28         rain_garden          30     100      0       0       0       1                       *               *    11.02
-Sub_23         rain_barrel          25    2.95      0       0    9.21       1                       *               *        0
-Sub_23         rain_garden           5     100      0       0       0       1                       *               *     5.33
-Sub_21         rain_barrel         100    2.95      0       0   38.99       1                       *               *        0
-Sub_15         rain_barrel         120    2.95      0       0   37.80       1                       *               *        0
-Sub_15         rain_garden          35     100      0       0       0       1                       *               *    26.87
-Sub_14         rain_barrel         350    2.95      0       0   31.12       1                       *               *        0
-Sub_14         rain_garden          45     100      0       0       0       1                       *               *     7.20
+Sub_12         rain_garden          35     100      0       0       0       1                       *               *    14.94
+Sub_23         rain_barrel          50    2.95      0       0   18.43       1                       *               *        0
+Sub_14         rain_garden         200     100      0       0       0       1                       *               *    32.02
+Sub_11         rain_barrel           5    2.95      0       0    9.04       1                       *               *        0
+Sub_11         rain_garden           5     100      0       0       0       1                       *               *    19.95
+Sub_10         rain_barrel         100    2.95      0       0   40.76       1                       *               *        0
+Sub_19         rain_barrel         100    2.95      0       0   40.91       1                       *               *        0
+Sub_19         rain_garden          14     100      0       0       0       1                       *               *    34.17
+Sub_34         rain_barrel          60    2.95      0       0   27.74       1                       *               *        0
+Sub_34         rain_garden          30     100      0       0       0       1                       *               *    43.22
+Sub_35         rain_barrel          70    2.95      0       0   24.95       1                       *               *        0
+Sub_35         rain_garden          30     100      0       0       0       1                       *               *    41.50
+Sub_37         rain_garden          15     100      0       0       0       1                       *               *    41.45
+Sub_39         rain_garden         200     100      0       0       0       1                       *               *    43.97
 
 [JUNCTIONS]
 ;;Name           Elevation  MaxDepth   InitDepth  SurDepth   Aponded   
@@ -404,54 +409,54 @@ C96              CIRCULAR     1.25             0          0          0          
 ;;Name           Date       Time       Value     
 ;;-------------- ---------- ---------- ----------
 ;SCS_Type III_1in design storm, total rainfall = 1 in, rain interval = 15 minutes, rain units = in/hr., rain units = in/hr.
-rain_gage_timeseries 06/01/2025 00:00 0.00000
-rain_gage_timeseries 06/01/2025 00:15 0.00000
-rain_gage_timeseries 06/01/2025 00:30 0.00000
-rain_gage_timeseries 06/01/2025 00:45 0.00000
-rain_gage_timeseries 06/01/2025 01:00 0.00000
-rain_gage_timeseries 06/01/2025 01:15 0.00000
-rain_gage_timeseries 06/01/2025 01:30 0.00000
-rain_gage_timeseries 06/01/2025 01:45 0.00000
-rain_gage_timeseries 06/01/2025 02:00 0.00000
-rain_gage_timeseries 06/01/2025 02:15 0.00000
-rain_gage_timeseries 06/01/2025 02:30 0.00000
-rain_gage_timeseries 06/01/2025 02:45 0.00000
-rain_gage_timeseries 06/01/2025 03:00 0.00453
-rain_gage_timeseries 06/01/2025 03:15 0.00957
-rain_gage_timeseries 06/01/2025 03:30 0.01890
-rain_gage_timeseries 06/01/2025 03:45 0.03488
-rain_gage_timeseries 06/01/2025 04:00 0.06012
-rain_gage_timeseries 06/01/2025 04:15 0.09680
-rain_gage_timeseries 06/01/2025 04:30 0.14562
-rain_gage_timeseries 06/01/2025 04:45 0.20465
-rain_gage_timeseries 06/01/2025 05:00 0.26867
-rain_gage_timeseries 06/01/2025 05:15 0.32952
-rain_gage_timeseries 06/01/2025 05:30 0.37757
-rain_gage_timeseries 06/01/2025 05:45 0.40416
-rain_gage_timeseries 06/01/2025 06:00 0.40416
-rain_gage_timeseries 06/01/2025 06:15 0.37757
-rain_gage_timeseries 06/01/2025 06:30 0.32952
-rain_gage_timeseries 06/01/2025 06:45 0.26867
-rain_gage_timeseries 06/01/2025 07:00 0.20465
-rain_gage_timeseries 06/01/2025 07:15 0.14562
-rain_gage_timeseries 06/01/2025 07:30 0.09680
-rain_gage_timeseries 06/01/2025 07:45 0.06012
-rain_gage_timeseries 06/01/2025 08:00 0.03488
-rain_gage_timeseries 06/01/2025 08:15 0.01890
-rain_gage_timeseries 06/01/2025 08:30 0.00957
-rain_gage_timeseries 06/01/2025 08:45 0.00453
-rain_gage_timeseries 06/01/2025 09:00 0.00000
-rain_gage_timeseries 06/01/2025 09:15 0.00000
-rain_gage_timeseries 06/01/2025 09:30 0.00000
-rain_gage_timeseries 06/01/2025 09:45 0.00000
-rain_gage_timeseries 06/01/2025 10:00 0.00000
-rain_gage_timeseries 06/01/2025 10:15 0.00000
-rain_gage_timeseries 06/01/2025 10:30 0.00000
-rain_gage_timeseries 06/01/2025 10:45 0.00000
-rain_gage_timeseries 06/01/2025 11:00 0.00000
-rain_gage_timeseries 06/01/2025 11:15 0.00000
-rain_gage_timeseries 06/01/2025 11:30 0.00000
-rain_gage_timeseries 06/01/2025 11:45 0.00000
+rain_gage_timeseries 06/01/2025 00:00 0.00325
+rain_gage_timeseries 06/01/2025 00:15 0.00473
+rain_gage_timeseries 06/01/2025 00:30 0.00676
+rain_gage_timeseries 06/01/2025 00:45 0.00952
+rain_gage_timeseries 06/01/2025 01:00 0.01320
+rain_gage_timeseries 06/01/2025 01:15 0.01798
+rain_gage_timeseries 06/01/2025 01:30 0.02412
+rain_gage_timeseries 06/01/2025 01:45 0.03181
+rain_gage_timeseries 06/01/2025 02:00 0.04129
+rain_gage_timeseries 06/01/2025 02:15 0.05273
+rain_gage_timeseries 06/01/2025 02:30 0.06624
+rain_gage_timeseries 06/01/2025 02:45 0.08187
+rain_gage_timeseries 06/01/2025 03:00 0.09955
+rain_gage_timeseries 06/01/2025 03:15 0.11910
+rain_gage_timeseries 06/01/2025 03:30 0.14018
+rain_gage_timeseries 06/01/2025 03:45 0.16232
+rain_gage_timeseries 06/01/2025 04:00 0.18493
+rain_gage_timeseries 06/01/2025 04:15 0.20727
+rain_gage_timeseries 06/01/2025 04:30 0.22857
+rain_gage_timeseries 06/01/2025 04:45 0.24797
+rain_gage_timeseries 06/01/2025 05:00 0.26467
+rain_gage_timeseries 06/01/2025 05:15 0.27794
+rain_gage_timeseries 06/01/2025 05:30 0.28714
+rain_gage_timeseries 06/01/2025 05:45 0.29186
+rain_gage_timeseries 06/01/2025 06:00 0.29186
+rain_gage_timeseries 06/01/2025 06:15 0.28714
+rain_gage_timeseries 06/01/2025 06:30 0.27794
+rain_gage_timeseries 06/01/2025 06:45 0.26467
+rain_gage_timeseries 06/01/2025 07:00 0.24797
+rain_gage_timeseries 06/01/2025 07:15 0.22857
+rain_gage_timeseries 06/01/2025 07:30 0.20727
+rain_gage_timeseries 06/01/2025 07:45 0.18493
+rain_gage_timeseries 06/01/2025 08:00 0.16232
+rain_gage_timeseries 06/01/2025 08:15 0.14018
+rain_gage_timeseries 06/01/2025 08:30 0.11910
+rain_gage_timeseries 06/01/2025 08:45 0.09955
+rain_gage_timeseries 06/01/2025 09:00 0.08187
+rain_gage_timeseries 06/01/2025 09:15 0.06624
+rain_gage_timeseries 06/01/2025 09:30 0.05273
+rain_gage_timeseries 06/01/2025 09:45 0.04129
+rain_gage_timeseries 06/01/2025 10:00 0.03181
+rain_gage_timeseries 06/01/2025 10:15 0.02412
+rain_gage_timeseries 06/01/2025 10:30 0.01798
+rain_gage_timeseries 06/01/2025 10:45 0.01320
+rain_gage_timeseries 06/01/2025 11:00 0.00952
+rain_gage_timeseries 06/01/2025 11:15 0.00676
+rain_gage_timeseries 06/01/2025 11:30 0.00473
+rain_gage_timeseries 06/01/2025 11:45 0.00325
 rain_gage_timeseries 06/01/2025 12:00 0.00000
 rain_gage_timeseries 06/01/2025 12:15 0.00000
 rain_gage_timeseries 06/01/2025 12:30 0.00000

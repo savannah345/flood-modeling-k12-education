@@ -689,6 +689,10 @@ Together, these six scenarios show how **both local solutions (like LIDs)** and 
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%#I %p'))
     ax.xaxis.set_major_locator(mdates.HourLocator())
 
+    start_time = datetime.strptime("01:00", "%H:%M")
+    end_time = start_time + timedelta(hours=24)
+    ax.set_xlim([start_time, end_time])
+
     ax.legend()
     ax.grid(False)
     fig.autofmt_xdate()  # Auto-format x-axis for better label spacing
@@ -861,7 +865,7 @@ if results:
         "Max LID (No Tide Gate)": st.session_state.get("max_total_cost", 0) - 250000,
         "Max LID + Tide Gate": st.session_state.get("max_total_cost", 0),
     }
-    df_converted["Total Cost ($)"] = df_converted.index.map(cost_lookup)
+    df_converted["Total Cost ($)"] = df_converted.index.map(cost_lookup).astype(int)
 
     # --- Format for Display (not for Excel) ---
     unit_label = "m³" if convert_to_m3 else "ft³"
