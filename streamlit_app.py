@@ -690,7 +690,7 @@ Together, these six scenarios show how **both local solutions (like LIDs)** and 
     ax.xaxis.set_major_locator(mdates.HourLocator())
 
     start_time = datetime.strptime("01:00", "%H:%M")
-    end_time = start_time + timedelta(hours=24)
+    end_time = start_time + timedelta(hours=23)
     ax.set_xlim([start_time, end_time])
 
     ax.legend()
