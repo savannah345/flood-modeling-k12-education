@@ -266,6 +266,17 @@ if st.button("Run Baseline Scenario SWMM Simulation"):
     except Exception as e:
         st.error(f"Baseline simulation failed: {e}")
 
+# === Low Impact Developments (LIDs) UI & Cost ===
+st.subheader("Low Impact Developments (LIDs) options")
+st.image(
+    "green_infrastructure_options.png",
+    use_container_width=True
+)
+st.subheader("Land Use Land Cover used to determine the maximum number of LIDs for each subcatchment")
+st.image(
+    "lulc_ledgend.png",
+    use_container_width=True
+)
 
 st.subheader("Elevation showing old creek bed & Purple areas indicate where infiltration-based green infrastructure (rain gardens) are not recommended... Low lying areas where water accumulates.")
 st.image(
@@ -276,18 +287,6 @@ st.image(
 st.subheader("Stormwater Pipes, Inlets, and Outlet & Watershed with labeled Subcatchments. Interesting that some subcatchments do not have any nearby infrastructure.")
 st.image(
     "pipe_watersheds.png",
-    use_container_width=True
-)
-
-# === Low Impact Developments (LIDs) UI & Cost ===
-st.subheader("Low Impact Developments (LIDs) options")
-st.image(
-    "green_infrastructure_options.png",
-    use_container_width=True
-)
-st.subheader("Land Use Land Cover used to determine the maximum number of LIDs for each subcatchment")
-st.image(
-    "lulc_ledgend.png",
     use_container_width=True
 )
 
@@ -347,20 +346,114 @@ def extract_number(name):
 df = pd.read_excel("raster_cells_per_sub.xlsx")
 df = df.sort_values(by="NAME", key=lambda x: x.map(extract_number)).reset_index(drop=True)
 
-st.markdown("Use the checklist below to guide your investigation:")
+st.subheader("Steps to Explore LID Design Options:")
+st.markdown("""
+1. Run the scenario where the LID features (rain gardens, rain barrels) are **MAXED** out for ALL subcatchments.
+2. Find subcatchments **unsuitable** for rain gardens. Why can’t rain gardens be used there? (e.g., poor infiltration, former creek bed).
+3. Identify subcatchments with **high runoff** but no nearby stormwater pipes or culverts.
+4. Observe how your choices impact outflow, flooding, and infiltration.
+""")
 
-# Interactive checklist
-lid_checklist = {
-    "Add LID features (rain gardens, rain barrels) to different subcatchments.": False,
-    "Find subcatchments **unsuitable** for rain gardens. Why can’t rain gardens be used there? (e.g., poor infiltration, former creek bed)": False,
-    "Identify subcatchments with **high runoff** but no nearby stormwater pipes or culverts.": False,
-    "Observe how your choices impact outflow, flooding, and infiltration.": False,
-}
+def generate_lid_usage_lines(lid_config,
+                             excel_path="raster_cells_per_sub.xlsx"):
+    df = pd.read_excel(excel_path)
+    lines = []
 
-# Display checklist and update session state
-for item in lid_checklist:
-    lid_checklist[item] = st.checkbox(item, value=st.session_state.get(item, False))
-    st.session_state[item] = lid_checklist[item]
+    # template matching your desired column widths
+    tpl = (
+        "{sub:<15}"     # Subcatchment, left-justified width 15
+        "{proc:<16}"    # LID Process, left-justified width 16
+        "{num:>7}"      # Number, right-justified width 7
+        "{area:>8}"     # Area, right-justified width 8
+        "{width:>7}"    # Width, right-justified width 7
+        "{initsat:>8}"  # InitSat, right-justified width 8
+        "{fromimp:>8}"  # FromImp, right-justified width 8
+        "{toperv:>8}"   # ToPerv, right-justified width 8
+        "{rptfile:>24}" # RptFile, right-justified width 24
+        "{drainto:>16}" # DrainTo, right-justified width 16
+        "{fromperv:>9}" # FromPerv, right-justified width 9
+    )
+
+    for sub, cfg in lid_config.items():
+        # find the subcatchment row
+        row = df.loc[df["NAME"] == sub]
+        if row.empty:
+            continue
+        imperv = float(row["Impervious_ft2"].iloc[0])
+        perv   = float(row["Pervious_ft2"].iloc[0])
+
+        # rain barrels
+        rb = cfg.get("rain_barrels", 0)
+        if rb > 0:
+            pct_imp = (rb * 300) / imperv * 100
+            lines.append(tpl.format(
+                sub=sub,
+                proc="rain_barrel",
+                num=rb,
+                area=f"{2.95:.2f}",
+                width=0,
+                initsat=0,
+                fromimp=f"{pct_imp:.2f}",
+                toperv=1,
+                rptfile="*",
+                drainto="*",
+                fromperv=0
+            ))
+
+        # rain gardens
+        rg = cfg.get("rain_gardens", 0)
+        if rg > 0:
+            pct_perv = (rg * 500) / perv * 100
+            lines.append(tpl.format(
+                sub=sub,
+                proc="rain_garden",
+                num=rg,
+                area=f"{100:.0f}",
+                width=0,
+                initsat=0,
+                fromimp=0,
+                toperv=1,
+                rptfile="*",
+                drainto="*",
+                fromperv=f"{pct_perv:.2f}"
+            ))
+
+    return lines
+
+
+if st.button("Run Max LID Scenario"):
+    # Load max values
+    max_lid_config = {}
+    for idx, row in df.iterrows():
+        sub = row["NAME"]
+        rg_max = int(row["Max_RG_DEM_Considered"])
+        rb_max = int(row["MaxNumber_RB"])
+        max_lid_config[sub] = {"rain_gardens": rg_max, "rain_barrels": rb_max}
+
+    rain_lines = format_timeseries("rain_gage_timeseries", rain_sim_minutes, rain_sim_curve, simulation_date)
+    tide_lines = format_timeseries("tide", tide_sim_minutes, tide_sim_curve, simulation_date)
+    lid_lines = generate_lid_usage_lines(max_lid_config)
+
+    # Run SWMM with and without tide gate
+    fill_max_lid, time_max_lid, rpt5 = run_swmm_scenario("lid_max_nogate", rain_lines, tide_lines, lid_lines, "NO")
+    fill_max_gate, _, rpt6 = run_swmm_scenario("lid_max_gate", rain_lines, tide_lines, lid_lines, "YES")
+
+    # Store time series
+    st.session_state["lid_max_fill"] = fill_max_lid
+    st.session_state["lid_max_timestamps"] = time_max_lid
+    st.session_state["lid_max_gate_fill"] = fill_max_gate
+
+    # Extract runoff summary
+    st.session_state["df_lid_max_nogate"] = extract_runoff_and_lid_data(rpt5)
+    st.session_state["df_lid_max_gate"] = extract_runoff_and_lid_data(rpt6)
+
+    # Compute total cost
+    max_total_cost = (df["Max_RG_DEM_Considered"].sum() * 250 +
+                      df["MaxNumber_RB"].sum() * 100 +
+                      250000)  # include tide gate
+    st.session_state["max_total_cost"] = max_total_cost
+
+    st.success(f"Max LID scenarios complete! Estimated total cost: ${max_total_cost:,.0f}")
 
 if "user_lid_config" not in st.session_state:
     st.session_state["user_lid_config"] = {}
@@ -444,6 +537,7 @@ if selected_subs:
             "Cost": tide_cost
         })
         total_cost += tide_cost
+    st.session_state["user_total_cost"] = total_cost
 
     if cost_breakdown:
         cost_df = pd.DataFrame(cost_breakdown)
@@ -469,72 +563,6 @@ if selected_subs:
 
 else:
     st.info("You haven't selected any subcatchments to add LIDs.")
-
-def generate_lid_usage_lines(lid_config,
-                             excel_path="raster_cells_per_sub.xlsx"):
-    df = pd.read_excel(excel_path)
-    lines = []
-
-    # template matching your desired column widths
-    tpl = (
-        "{sub:<15}"     # Subcatchment, left-justified width 15
-        "{proc:<16}"    # LID Process, left-justified width 16
-        "{num:>7}"      # Number, right-justified width 7
-        "{area:>8}"     # Area, right-justified width 8
-        "{width:>7}"    # Width, right-justified width 7
-        "{initsat:>8}"  # InitSat, right-justified width 8
-        "{fromimp:>8}"  # FromImp, right-justified width 8
-        "{toperv:>8}"   # ToPerv, right-justified width 8
-        "{rptfile:>24}" # RptFile, right-justified width 24
-        "{drainto:>16}" # DrainTo, right-justified width 16
-        "{fromperv:>9}" # FromPerv, right-justified width 9
-    )
-
-    for sub, cfg in lid_config.items():
-        # find the subcatchment row
-        row = df.loc[df["NAME"] == sub]
-        if row.empty:
-            continue
-        imperv = float(row["Impervious_ft2"].iloc[0])
-        perv   = float(row["Pervious_ft2"].iloc[0])
-
-        # rain barrels
-        rb = cfg.get("rain_barrels", 0)
-        if rb > 0:
-            pct_imp = (rb * 300) / imperv * 100
-            lines.append(tpl.format(
-                sub=sub,
-                proc="rain_barrel",
-                num=rb,
-                area=f"{2.95:.2f}",
-                width=0,
-                initsat=0,
-                fromimp=f"{pct_imp:.2f}",
-                toperv=1,
-                rptfile="*",
-                drainto="*",
-                fromperv=0
-            ))
-
-        # rain gardens
-        rg = cfg.get("rain_gardens", 0)
-        if rg > 0:
-            pct_perv = (rg * 500) / perv * 100
-            lines.append(tpl.format(
-                sub=sub,
-                proc="rain_garden",
-                num=rg,
-                area=f"{100:.0f}",
-                width=0,
-                initsat=0,
-                fromimp=0,
-                toperv=1,
-                rptfile="*",
-                drainto="*",
-                fromperv=f"{pct_perv:.2f}"
-            ))
-
-    return lines
 
 # === Run Scenario With Selected LID Improvements ===
 if st.button("Run Scenario With Selected LID Improvements"):
@@ -571,20 +599,91 @@ if st.button("Run Scenario With Selected LID Improvements"):
 if all(key in st.session_state for key in [
     "baseline_fill", "baseline_gate_fill",
     "lid_fill", "lid_gate_fill",
+    "lid_max_fill", "lid_max_gate_fill",
     "baseline_timestamps"
 ]):
-    st.subheader("Culvert Capacity Over Time (All Scenarios)")
+
+    st.subheader("The Capacity of the Pipe Closest to the Outlet over Time (All Scenarios)")
+    st.markdown("""
+### Six Scenario Overview: Tide Gates + Green Infrastructure
+
+In this project, we tested six scenarios combining two types of flood interventions: **tide gates** and **LID (Low Impact Development) features** like rain gardens and rain barrels.
+
+#### Scenarios Tested
+- **Baseline (No Tide Gate, No LIDs)**
+- **Baseline + Tide Gate**
+- **LID (No Tide Gate)**
+- **LID + Tide Gate**
+- **Max LID (No Tide Gate)**
+- **Max LID + Tide Gate**
+
+#### How Tide Gates Work
+The **tide gate** acts like a one-way door:
+- It **blocks tidal water** from backing up into the system during high tide.
+- It **lets stormwater exit** when pressure inside the pipe is higher than the tide level.
+- This helps keep the pipe network from backing up and allows it to empty as the tide goes out.
+
+#### How LID Features Help
+**Rain gardens and barrels** reduce stormwater earlier in the system:
+- They **slow down** and **store** runoff close to where it falls.
+- This reduces how much water reaches the pipes — especially during small and moderate storms.
+- During **large storms**, their benefit at the outfall is smaller, but still helpful.
+
+#### Why Combine Them?
+The **Max LID** scenarios apply the greatest number of rain gardens and barrels across the watershed, showing the upper limit of what local infrastructure can do.
+
+Together, these six scenarios show how **both local solutions (like LIDs)** and **system-wide controls (like tide gates)** are needed to manage flooding—especially in coastal areas where rainfall and tides can overlap.
+
+""")
+
 
     time_labels = st.session_state["baseline_timestamps"]
     
     # Convert to datetime for proper tick formatting
     time_objects = [datetime.strptime(t, "%H:%M") for t in time_labels]
 
+    # Define a color palette (or use any you prefer)
+    colors = {
+        "Baseline": "#b3b0ab",             
+        "Baseline + Tide Gate": "#ff7f0e", 
+        "With LIDs": "#2ca02c",            
+        "LIDs + Tide Gate": "#d62728",     
+        "Max LIDs": "#ae7bdf",             
+        "Max LIDs + Tide Gate": "#b2ebbb"  
+    }
+
+    # Define a distinct style per line
+    styles = {
+        "Baseline": "-",
+        "Baseline + Tide Gate": "-",
+        "With LIDs": "-.",
+        "LIDs + Tide Gate": "-.",
+        "Max LIDs": (0, (3, 1, 1, 1)),     # Dash-dot-dot
+        "Max LIDs + Tide Gate": (0, (1, 1)) # Dotted
+    }
+
+    # Create the figure
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(time_objects, st.session_state["baseline_fill"], label="Baseline", linewidth=2)
-    ax.plot(time_objects, st.session_state["baseline_gate_fill"], label="Baseline + Tide Gate", linestyle="--", linewidth=2)
-    ax.plot(time_objects, st.session_state["lid_fill"], label="With LIDs", linestyle="-.", linewidth=2)
-    ax.plot(time_objects, st.session_state["lid_gate_fill"], label="LIDs + Tide Gate", linestyle=":", linewidth=2)
+
+    # Plot each line with custom style
+    ax.plot(time_objects, st.session_state["baseline_fill"],
+            label="Baseline", color=colors["Baseline"], linestyle=styles["Baseline"], linewidth=2)
+
+    ax.plot(time_objects, st.session_state["baseline_gate_fill"],
+            label="Baseline + Tide Gate", color=colors["Baseline + Tide Gate"], linestyle=styles["Baseline + Tide Gate"], linewidth=2)
+
+    ax.plot(time_objects, st.session_state["lid_fill"],
+            label="With LIDs", color=colors["With LIDs"], linestyle=styles["With LIDs"], linewidth=2)
+
+    ax.plot(time_objects, st.session_state["lid_gate_fill"],
+            label="LIDs + Tide Gate", color=colors["LIDs + Tide Gate"], linestyle=styles["LIDs + Tide Gate"], linewidth=2)
+
+    ax.plot(time_objects, st.session_state["lid_max_fill"],
+            label="Max LIDs", color=colors["Max LIDs"], linestyle=styles["Max LIDs"], linewidth=2)
+
+    ax.plot(time_objects, st.session_state["lid_max_gate_fill"],
+            label="Max LIDs + Tide Gate", color=colors["Max LIDs + Tide Gate"], linestyle=styles["Max LIDs + Tide Gate"], linewidth=2)
+
 
     ax.set_ylabel("Culvert Fill (%)")
     ax.set_xlabel("Time")
@@ -680,17 +779,35 @@ rpt_scenarios = {
     "Baseline (No Tide Gate)": "baseline_nogate.rpt",
     "Baseline + Tide Gate": "baseline_gate.rpt",
     "LID (No Gate)": "lid_nogate.rpt",
-    "LID + Tide Gate": "lid_gate.rpt"
+    "LID + Tide Gate": "lid_gate.rpt",
+    "Max LID (No Gate)": "lid_max_nogate.rpt",
+    "Max LID + Tide Gate": "lid_max_gate.rpt"
 }
 
+results = []
 for name, path in rpt_scenarios.items():
     try:
         metrics = extract_volumes_from_rpt(path)
         if any(v is not None for k, v in metrics.items() if k != "Scenario"):
             metrics["Scenario"] = name
             results.append(metrics)
-    except:
+
+            # Generate a clean key: "baseline_nogate", "lid_max_gate", etc.
+            key = (
+                name.lower()
+                .replace("(", "")
+                .replace(")", "")
+                .replace(" + ", "_plus_")
+                .replace(" ", "_")
+            )
+
+            st.session_state[f"outflow_{key}"] = metrics["Outflow (gallons)"]
+            st.session_state[f"flood_{key}"] = metrics["Flooding (ac-ft)"]
+
+    except Exception as e:
+        print(f"Could not process {name}: {e}")
         continue
+
 
 st.subheader("How Much Water Each Unit Holds")
 
@@ -715,9 +832,8 @@ with col2:
 if results:
     df_balance = pd.DataFrame(results).set_index("Scenario")
 
-    # Convert volumes to ft³ or m³
+    # --- Unit Conversion ---
     convert_to_m3 = unit == "Metric (SI)"
-
     GAL_TO_FT3 = 0.133681
     ACF_TO_FT3 = 43560
     FT3_TO_M3 = 0.0283168
@@ -731,19 +847,32 @@ if results:
             val_ft3 = val
         return val_ft3 * FT3_TO_M3 if convert_to_m3 else val_ft3
 
-    # Reorder and convert metrics
+    # --- Apply Conversions ---
     df_converted = pd.DataFrame(index=df_balance.index)
     df_converted["Flooded Volume"] = df_balance["Flooding (ac-ft)"].apply(lambda x: convert(x, "ac-ft"))
     df_converted["Outflow Volume"] = df_balance["Outflow (gallons)"].apply(lambda x: convert(x, "gallons"))
     df_converted["Infiltration"] = df_balance["Infiltration (ac-ft)"].apply(lambda x: convert(x, "ac-ft"))
     df_converted["Surface Runoff"] = df_balance["Runoff (ac-ft)"].apply(lambda x: convert(x, "ac-ft"))
 
-    unit_label = "m³" if convert_to_m3 else "ft³"
-    df_converted = df_converted.round(0)  # clean display
+    # --- Add Cost BEFORE formatting ---
+    cost_lookup = {
+        "Baseline (No Tide Gate)": 0,
+        "Baseline + Tide Gate": 250000,
+        "LID (No Gate)": st.session_state.get("user_total_cost", 0) - 250000,
+        "LID + Tide Gate": st.session_state.get("user_total_cost", 0),
+        "Max LID (No Gate)": st.session_state.get("max_total_cost", 0) - 250000,
+        "Max LID + Tide Gate": st.session_state.get("max_total_cost", 0),
+    }
+    df_converted["Total Cost ($)"] = df_converted.index.map(cost_lookup)
 
+    # --- Format for Display (not for Excel) ---
+    unit_label = "m³" if convert_to_m3 else "ft³"
+    
     st.subheader(f"Summary ({unit_label})")
     st.dataframe(df_converted)
-    st.session_state["df_balance"] = df_converted  # for Excel export
+
+    # --- Store clean numeric version for export ---
+    st.session_state["df_balance"] = df_converted
 
 # === Export Excel Report (Single Click Download Button) ===
 
@@ -760,28 +889,6 @@ try:
         "Tide Alignment": tide_align,
         "Display Units": unit
     }])
-
-    # === 2. Outflow + Flooding Summary ===
-    df_outflow = pd.DataFrame({
-        "Scenario": [
-            "Baseline (No Tide Gate)",
-            "Baseline + Tide Gate",
-            "LID (No Tide Gate)",
-            "LID + Tide Gate"
-        ],
-        "Outflow (gallons)": [
-            st.session_state.get("outflow_nogate", 0),
-            st.session_state.get("outflow_gate", 0),
-            st.session_state.get("outflow_lid_nogate", 0),
-            st.session_state.get("outflow_lid_gate", 0)
-        ],
-        "Flooding (ac-ft)": [
-            st.session_state.get("flood_nogate", 0),
-            st.session_state.get("flood_gate", 0),
-            st.session_state.get("flood_lid_nogate", 0),
-            st.session_state.get("flood_lid_gate", 0)
-        ]
-    })
 
     # === 3. Water Balance Table ===
     df_balance = st.session_state.get("df_balance", pd.DataFrame())
@@ -822,22 +929,30 @@ try:
 
         # === 5. Culvert Fill % ===
         culvert_keys = [
-            "baseline_timestamps", "baseline_fill",
-            "baseline_gate_fill", "lid_fill", "lid_gate_fill"
+            "baseline_timestamps",
+            "baseline_fill",
+            "baseline_gate_fill",
+            "lid_fill",
+            "lid_gate_fill",
+            "lid_max_fill",
+            "lid_max_gate_fill"
         ]
+
         if all(k in st.session_state for k in culvert_keys):
-            lengths = [len(st.session_state[k]) for k in culvert_keys]
-            if len(set(lengths)) == 1:
+            lengths = [len(st.session_state[k]) for k in culvert_keys if "timestamps" not in k]
+            if len(set(lengths)) == 1 and len(st.session_state["baseline_timestamps"]) == lengths[0]:
                 df_culvert = pd.DataFrame({
                     "Timestamp": st.session_state["baseline_timestamps"],
                     "Baseline": st.session_state["baseline_fill"],
                     "Baseline + Tide Gate": st.session_state["baseline_gate_fill"],
                     "With LIDs": st.session_state["lid_fill"],
-                    "LIDs + Tide Gate": st.session_state["lid_gate_fill"]
+                    "LIDs + Tide Gate": st.session_state["lid_gate_fill"],
+                    "Max LIDs": st.session_state["lid_max_fill"],
+                    "Max LIDs + Tide Gate": st.session_state["lid_max_gate_fill"]
                 })
                 df_culvert.to_excel(writer, sheet_name="Culvert Capacity", index=False)
             else:
-                st.warning("Skipped culvert chart export due to mismatched array lengths.")
+                st.warning("Skipped culvert chart export due to mismatched time series lengths.")
 
     # Reset stream and allow download
     output.seek(0)
