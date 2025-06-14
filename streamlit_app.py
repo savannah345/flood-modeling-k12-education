@@ -266,25 +266,6 @@ if st.button("Run Baseline Scenario SWMM Simulation"):
     except Exception as e:
         st.error(f"Baseline simulation failed: {e}")
 
-if "df_base_nogate" in st.session_state:
-    st.subheader("Baseline Runoff (No Tide Gate)")
-
-    df_no = st.session_state["df_base_nogate"].copy()
-
-    # Optional unit conversion
-    if unit != "U.S. Customary":
-        factor = 2.54 if unit == "Metric (SI)" else 25.4
-        df_no["Impervious Runoff (in)"] *= factor
-        df_no["Pervious Runoff   (in)"] *= factor
-        df_no.columns = ["Subcatchment",
-                         f"Impervious Runoff ({unit})",
-                         f"Pervious Runoff ({unit})"]
-    else:
-        df_no.columns = ["Subcatchment",
-                         "Impervious Runoff (in)",
-                         "Pervious Runoff (in)"]
-
-    st.dataframe(df_no, use_container_width=True)
 
 st.subheader("Elevation showing old creek bed & Purple areas indicate where infiltration-based green infrastructure (rain gardens) are not recommended... Low lying areas where water accumulates.")
 st.image(
@@ -310,6 +291,25 @@ st.image(
     use_container_width=True
 )
 
+if "df_base_nogate" in st.session_state:
+    st.subheader("Baseline Runoff (No Tide Gate)")
+
+    df_no = st.session_state["df_base_nogate"].copy()
+
+    # Optional unit conversion
+    if unit != "U.S. Customary":
+        factor = 2.54 if unit == "Metric (SI)" else 25.4
+        df_no["Impervious Runoff (in)"] *= factor
+        df_no["Pervious Runoff   (in)"] *= factor
+        df_no.columns = ["Subcatchment",
+                         f"Impervious Runoff ({unit})",
+                         f"Pervious Runoff ({unit})"]
+    else:
+        df_no.columns = ["Subcatchment",
+                         "Impervious Runoff (in)",
+                         "Pervious Runoff (in)"]
+
+    st.dataframe(df_no, use_container_width=True)
 
 # --- Cost and Sizing Assumptions ---
 data = {
@@ -352,8 +352,7 @@ st.markdown("Use the checklist below to guide your investigation:")
 # Interactive checklist
 lid_checklist = {
     "Add LID features (rain gardens, rain barrels) to different subcatchments.": False,
-    "Find subcatchments **unsuitable** for rain gardens.": False,
-    "Why can’t rain gardens be used there? (e.g., poor infiltration, former creek bed)": False,
+    "Find subcatchments **unsuitable** for rain gardens. Why can’t rain gardens be used there? (e.g., poor infiltration, former creek bed)": False,
     "Identify subcatchments with **high runoff** but no nearby stormwater pipes or culverts.": False,
     "Observe how your choices impact outflow, flooding, and infiltration.": False,
 }
@@ -363,16 +362,13 @@ for item in lid_checklist:
     lid_checklist[item] = st.checkbox(item, value=st.session_state.get(item, False))
     st.session_state[item] = lid_checklist[item]
 
-# Optional: summary or reflection
-if all(lid_checklist.values()):
-    st.success("Great job! You’ve completed the flood mitigation exploration.")
-else:
-    st.info("Work through the checklist to complete your watershed design challenge.")
-
 if "user_lid_config" not in st.session_state:
     st.session_state["user_lid_config"] = {}
 
 available_subs = df["NAME"].tolist()
+
+st.subheader("Add LID features")
+             
 selected_subs = st.multiselect(
     "Select subcatchments to add rain gardens or rain barrels",
     options=available_subs,
@@ -649,28 +645,21 @@ def extract_volumes_from_rpt(rpt_path):
                     in_continuity_section = False
 
             # === Node Flooding Summary ===
-            if "Node Flooding Summary" in line:
-                in_flooding_section = True
+            if "Flow Routing Continuity" in line:
+                in_continuity_section = True
                 continue
-            if in_flooding_section:
-                if line.strip() == "" or "Node" in line:
-                    continue
-                elif "--------" in line:
-                    continue
-                else:
-                    parts = line.split()
-                    if len(parts) >= 6:
-                        try:
-                            flooding += float(parts[5]) * 1e6  # Convert MG to gallons
-                        except ValueError:
-                            pass
+            if in_continuity_section:
+                if "Flooding Loss" in line:
+                    flooding = float(line.split()[-2])
+                elif "Continuity Error" in line:
+                    in_continuity_section = False
 
         return {
             "Outflow (gallons)": outflow,
             "Rainfall (ac-ft)": rainfall,
             "Infiltration (ac-ft)": infiltration,
             "Runoff (ac-ft)": runoff,
-            "Flooding (gallons)": flooding
+            "Flooding (ac-ft)": flooding
         }
 
     except Exception as e:
@@ -680,7 +669,7 @@ def extract_volumes_from_rpt(rpt_path):
             "Rainfall (ac-ft)": None,
             "Infiltration (ac-ft)": None,
             "Runoff (ac-ft)": None,
-            "Flooding (gallons)": None
+            "Flooding (ac-ft)": None
         }
 
 # === Water Balance Summary (Only show if RPT data exists) ===
@@ -744,7 +733,7 @@ if results:
 
     # Reorder and convert metrics
     df_converted = pd.DataFrame(index=df_balance.index)
-    df_converted["Flooded Volume"] = df_balance["Flooding (gallons)"].apply(lambda x: convert(x, "gallons"))
+    df_converted["Flooded Volume"] = df_balance["Flooding (ac-ft)"].apply(lambda x: convert(x, "ac-ft"))
     df_converted["Outflow Volume"] = df_balance["Outflow (gallons)"].apply(lambda x: convert(x, "gallons"))
     df_converted["Infiltration"] = df_balance["Infiltration (ac-ft)"].apply(lambda x: convert(x, "ac-ft"))
     df_converted["Surface Runoff"] = df_balance["Runoff (ac-ft)"].apply(lambda x: convert(x, "ac-ft"))
@@ -758,7 +747,7 @@ if results:
 
 # === Export Excel Report (Single Click Download Button) ===
 
-st.subheader("Sometimes, the areas that would benefit the most from LID solutions (like reduced flooding) are downstream, while the LID has to be installed upstream, where the runoff begins. This means:The benefit (less flooding) happens somewhere else. But the burden (cost, space, maintenance) is on someone upstream.")
+st.subheader("Sometimes, the areas that would benefit the most from LID solutions (like reduced flooding) are downstream, while the LID has to be installed upstream, where the runoff begins. This means the benefit (less flooding) happens somewhere else. But the burden (cost, space, maintenance) is on someone upstream.")
 
 output = io.BytesIO()
 
@@ -786,7 +775,7 @@ try:
             st.session_state.get("outflow_lid_nogate", 0),
             st.session_state.get("outflow_lid_gate", 0)
         ],
-        "Flooding (gallons)": [
+        "Flooding (ac-ft)": [
             st.session_state.get("flood_nogate", 0),
             st.session_state.get("flood_gate", 0),
             st.session_state.get("flood_lid_nogate", 0),
