@@ -460,7 +460,7 @@ if st.button("Run Max LID Scenario"):
                       250000)  # include tide gate
     st.session_state["max_total_cost"] = max_total_cost
 
-    st.success(f"Max LID scenarios complete! Estimated total cost: ${max_total_cost:,.0f}")
+    st.success(f"Max LID scenarios complete!")
 
 if "user_lid_config" not in st.session_state:
     st.session_state["user_lid_config"] = {}
