@@ -7,6 +7,7 @@ import re
 import io
 import os
 import shutil 
+import matplotlib
 import matplotlib.pyplot as plt
 from datetime import timedelta
 import matplotlib.dates as mdates
@@ -37,16 +38,31 @@ duration_minutes = st.selectbox(
     options=pf_df["Duration_Minutes"],
     format_func=lambda x: f"{x // 60} hr"
 )
-return_period = st.selectbox("Return Period (years)", pf_df.columns[1:])
+
+st.subheader("Return Year: think of it like rolling dice - a 10-year storm is like rolling a 10 on a 10-sided die, you might roll it once in 10 tries… or twice… or not at all. But the chance (1/10 = 10%) is always the same each year.") 
+
+return_period = st.selectbox("Return Year", pf_df.columns[1:])
 # pf_df values are in inches
 rain_inches = float(pf_df.loc[
     pf_df["Duration_Minutes"] == duration_minutes,
     return_period
 ].values[0])
 
-unit        = st.selectbox("Rainfall Units", ["inches", "centimeters"])
+unit        = st.selectbox("Preferred Units", ["U.S. Customary", "Metric (SI)"])
 method      = st.radio("Rainfall Shape", ["Normal", "Randomized"])
+
+st.subheader("How to remember the Tides: Spring tides surge higher than Neap tides that nap (lower)") 
+
+# Load and display video
+video_file = open('NASA_Tides.mp4', 'rb')
+video_bytes = video_file.read()
+st.video(video_bytes)
+
+
 moon_phase  = st.selectbox("Moon Phase", list(moon_tide_ranges.keys()))
+
+st.subheader("When high tide and peak rainfall happen together, tidal backflow can block stormwater from draining, increasing flood risk. If rain falls during low tide, water drains more easily and flooding is less likely.")
+
 tide_align  = st.radio(
     "Tide Alignment",
     ["Peak aligned with High Tide", "Peak aligned with Low Tide"]
@@ -54,7 +70,7 @@ tide_align  = st.radio(
 align_mode  = "peak" if "High" in tide_align else "low"
 
 # --- Generate SWMM-curves (always inches & feet) ---
-tide_sim_minutes, tide_sim_curve = generate_tide_curve(moon_phase, "inches")
+tide_sim_minutes, tide_sim_curve = generate_tide_curve(moon_phase, "U.S. Customary")
 rain_sim_minutes, rain_sim_curve = align_rainfall_to_tide(
     rain_inches,
     duration_minutes,
@@ -64,14 +80,16 @@ rain_sim_minutes, rain_sim_curve = align_rainfall_to_tide(
 )
 
 # --- Generate display-curves based on selected unit ---
-if unit == "inches":
+if unit == "U.S. Customary":
     display_rain_curve = rain_sim_curve
     display_tide_curve = tide_sim_curve
     tide_disp_unit    = "ft"
-elif unit == "centimeters":
+    rain_disp_unit = "inches"
+elif unit == "Metric (SI)":
     display_rain_curve = rain_sim_curve * 2.54
     display_tide_curve = tide_sim_curve * 0.3048 * 100
     tide_disp_unit    = "meters"
+    rain_disp_unit = "centimeters"
 
 # --- Store display values and timestamps for Excel export ---
 st.session_state["rain_minutes"] = rain_sim_minutes
@@ -84,7 +102,7 @@ time_hours = np.array(rain_sim_minutes) / 60
 # === Display Rainfall Chart ===
 df_rain = pd.DataFrame({
     "Time (hours)": time_hours,
-    f"Rainfall ({unit})": display_rain_curve
+    f"Rainfall ({rain_disp_unit})": display_rain_curve
 })
 st.subheader("Rainfall Distribution")
 rain_chart = (
@@ -92,9 +110,8 @@ rain_chart = (
        .mark_line()
        .encode(
            x="Time (hours)",
-           y=f"Rainfall ({unit})"
+           y=f"Rainfall ({rain_disp_unit})"
        )
-       .properties(title="Rainfall Distribution")
 )
 st.altair_chart(rain_chart, use_container_width=True)
 
@@ -111,7 +128,6 @@ tide_chart = (
            x="Time (hours)",
            y=f"Tide ({tide_disp_unit})"
        )
-       .properties(title="Tide Profile")
 )
 st.altair_chart(tide_chart, use_container_width=True)
 
@@ -231,13 +247,13 @@ if st.button("Run Baseline Scenario SWMM Simulation"):
         st.session_state["df_base_gate"] = df2
 
         # Unit conversion for final display table
-        if unit == "inches":
+        if unit == "U.S. Customary":
             df_disp = df1.rename(columns={
                 "Impervious Runoff (in)": "Impervious Runoff (inches)",
                 "Pervious Runoff   (in)": "Pervious Runoff (inches)"
             })
         else:
-            factor = 2.54 if unit == "centimeters" else 25.4
+            factor = 2.54 if unit == "Metric (SI)" else 25.4
             df_disp = pd.DataFrame({
                 "Subcatchment": df1["Subcatchment"],
                 f"Impervious Runoff ({unit})": df1["Impervious Runoff (in)"] * factor,
@@ -256,8 +272,8 @@ if "df_base_nogate" in st.session_state:
     df_no = st.session_state["df_base_nogate"].copy()
 
     # Optional unit conversion
-    if unit != "inches":
-        factor = 2.54 if unit == "cm" else 25.4
+    if unit != "U.S. Customary":
+        factor = 2.54 if unit == "Metric (SI)" else 25.4
         df_no["Impervious Runoff (in)"] *= factor
         df_no["Pervious Runoff   (in)"] *= factor
         df_no.columns = ["Subcatchment",
@@ -270,38 +286,56 @@ if "df_base_nogate" in st.session_state:
 
     st.dataframe(df_no, use_container_width=True)
 
-st.subheader("Pipes")
+st.subheader("Elevation showing old creek bed & Purple areas indicate where infiltration-based green infrastructure (rain gardens) are not recommended... Low lying areas where water accumulates.")
 st.image(
-    "model_with_pipes.png",
+    "comare_dem_infil_stor.png",
     use_container_width=True
 )
 
-st.subheader("Watershed with Subcatchments")
+st.subheader("Stormwater Pipes, Inlets, and Outlet & Watershed with labeled Subcatchments. Interesting that some subcatchments do not have any nearby infrastructure.")
 st.image(
-    "watersheds.png",
+    "pipe_watersheds.png",
     use_container_width=True
 )
 
 # === Low Impact Developments (LIDs) UI & Cost ===
-st.subheader("Low Impact Developments (LIDs)")
+st.subheader("Low Impact Developments (LIDs) options")
 st.image(
     "green_infrastructure_options.png",
     use_container_width=True
 )
-
+st.subheader("Land Use Land Cover used to determine the maximum number of LIDs for each subcatchment")
 st.image(
-    "amounts.png",
+    "lulc_ledgend.png",
     use_container_width=True
 )
 
-# Cost data placeholders
+
+# --- Cost and Sizing Assumptions ---
 data = {
-    "Infrastructure": ["100 sq.ft. Rain Garden", "50 gallon Rain Barrel", "Tide Gate (10'x5')"],
-    "Estimated Installation Cost": ["$250", "$100", "60000"]
+    "Infrastructure": [
+        "100 sq.ft. Rain Garden",
+        "50 gallon Rain Barrel",
+        "Tide Gate (10'x5')"
+    ],
+    "Contributing Area Assumption": [
+        "1 per 500 sq.ft. of herbaceous turfgrass",
+        "1 per 300 sq.ft. of rooftop",
+        "Protects system from tidal backflow"
+    ],
+    "Estimated Installation Cost": [
+        "$250",
+        "$100",
+        "$250,000"
+    ]
 }
+
 cost_df = pd.DataFrame(data)
-st.subheader("Estimated Costs for Flood Mitigation Options")
+
+# --- Display in Streamlit ---
+st.subheader("Assumed Costs for Flood Mitigation Options")
 st.table(cost_df)
+
 
 # Load & sort subcatchments
 def extract_number(name):
@@ -313,7 +347,28 @@ def extract_number(name):
 df = pd.read_excel("raster_cells_per_sub.xlsx")
 df = df.sort_values(by="NAME", key=lambda x: x.map(extract_number)).reset_index(drop=True)
 
-st.title("Add LIDs")
+st.markdown("Use the checklist below to guide your investigation:")
+
+# Interactive checklist
+lid_checklist = {
+    "Add LID features (rain gardens, rain barrels) to different subcatchments.": False,
+    "Find subcatchments **unsuitable** for rain gardens.": False,
+    "Why can’t rain gardens be used there? (e.g., poor infiltration, former creek bed)": False,
+    "Identify subcatchments with **high runoff** but no nearby stormwater pipes or culverts.": False,
+    "Observe how your choices impact outflow, flooding, and infiltration.": False,
+}
+
+# Display checklist and update session state
+for item in lid_checklist:
+    lid_checklist[item] = st.checkbox(item, value=st.session_state.get(item, False))
+    st.session_state[item] = lid_checklist[item]
+
+# Optional: summary or reflection
+if all(lid_checklist.values()):
+    st.success("Great job! You’ve completed the flood mitigation exploration.")
+else:
+    st.info("Work through the checklist to complete your watershed design challenge.")
+
 if "user_lid_config" not in st.session_state:
     st.session_state["user_lid_config"] = {}
 
@@ -386,7 +441,7 @@ if selected_subs:
     # 2) Tide gate cost
     # If user placed any LIDs, we assume tide gate is used because both LID runs include it
     if any(v["rain_gardens"] > 0 or v["rain_barrels"] > 0 for v in st.session_state["user_lid_config"].values()):
-        tide_cost = 60000
+        tide_cost = 250000
         cost_breakdown.append({
             "Subcatchment": "Watershed Outfall",
             "LID Type": "Tide Gate",
@@ -417,7 +472,7 @@ if selected_subs:
         st.info("No infrastructure improvements have been added.")
 
 else:
-    st.info("You haven't selected any subcatchments to update.")
+    st.info("You haven't selected any subcatchments to add LIDs.")
 
 def generate_lid_usage_lines(lid_config,
                              excel_path="raster_cells_per_sub.xlsx"):
@@ -648,11 +703,31 @@ for name, path in rpt_scenarios.items():
     except:
         continue
 
+st.subheader("How Much Water Each Unit Holds")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.markdown("""
+    ### 1 cubic meter (m³)
+    - 1,000 liters   
+    - 35.3 ft³  
+    - About the size of a washing machine  
+    """)
+
+with col2:
+    st.markdown("""
+    ### 1 cubic foot (ft³)
+    - 7.5 gallons  
+    - About the size of a microwave  
+    - 4 ft³ = half of a bathtub
+    """)
+
 if results:
     df_balance = pd.DataFrame(results).set_index("Scenario")
 
     # Convert volumes to ft³ or m³
-    convert_to_m3 = unit == "centimeters"
+    convert_to_m3 = unit == "Metric (SI)"
 
     GAL_TO_FT3 = 0.133681
     ACF_TO_FT3 = 43560
@@ -677,13 +752,14 @@ if results:
     unit_label = "m³" if convert_to_m3 else "ft³"
     df_converted = df_converted.round(0)  # clean display
 
-    st.subheader(f"Water Balance Summary ({unit_label})")
+    st.subheader(f"Summary ({unit_label})")
     st.dataframe(df_converted)
     st.session_state["df_balance"] = df_converted  # for Excel export
 
-
-
 # === Export Excel Report (Single Click Download Button) ===
+
+st.subheader("Sometimes, the areas that would benefit the most from LID solutions (like reduced flooding) are downstream, while the LID has to be installed upstream, where the runoff begins. This means:The benefit (less flooding) happens somewhere else. But the burden (cost, space, maintenance) is on someone upstream.")
+
 output = io.BytesIO()
 
 try:
@@ -729,7 +805,7 @@ try:
 
     df_tide = pd.DataFrame({
         "Timestamp (min)": st.session_state.get("tide_minutes", []),
-        f"Tide ({'ft' if unit == 'inches' else 'meters'})": st.session_state.get("display_tide_curve", [])
+        f"Tide ({'ft' if unit == 'U.S. Customary' else 'meters'})": st.session_state.get("display_tide_curve", [])
     })
 
     # === Write All to Excel ===
@@ -740,7 +816,11 @@ try:
         start_row += len(df_summary) + 3
         
         if not df_balance.empty:
-            df_balance.reset_index().to_excel(
+            unit_label = "m³" if convert_to_m3 else "ft³"
+            df_balance_display = df_balance.copy()
+            df_balance_display.columns = [f"{col} ({unit_label})" for col in df_balance.columns]
+            
+            df_balance_display.reset_index().to_excel(
                 writer, sheet_name="Scenario Summary", index=False, startrow=start_row
             )
 
@@ -782,3 +862,6 @@ try:
 
 except Exception as e:
     st.error(f"Failed to create Excel report: {e}")
+
+
+

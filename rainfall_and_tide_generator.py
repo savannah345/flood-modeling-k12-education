@@ -16,9 +16,9 @@ pf_df = pd.DataFrame({
 
 # === Unit Conversion ===
 def convert_units(value_in_inches, unit):
-    if unit == "inches":
+    if unit == "U.S. Customary":
         return value_in_inches
-    elif unit == "cm":
+    elif unit == "Metric (SI)":
         return value_in_inches * 2.54
     else:
         raise ValueError("Unsupported unit.")
@@ -40,10 +40,10 @@ def generate_rainfall(total_inches, duration_minutes, method="Normal"):
 
 # === Moon Phase Tide Ranges (in ft) ===
 moon_tide_ranges = {
-    "🌕 Full Moon": (-1.5, 1.7),
-    "🌑 New Moon": (-1.5, 2.2),
-    "🌓 First Quarter": (-1.5, 1.3),
-    "🌗 Last Quarter": (-1.5, 1.2)
+    "🌕 Full Moon: Spring": (-1.5, 1.7),
+    "🌑 New Moon: Spring": (-1.5, 2.2),
+    "🌓 First Quarter: Neap": (-1.5, 1.3),
+    "🌗 Last Quarter: Neap": (-1.5, 1.2)
 }
 
 # === Generate Tide Curve (15-min intervals) ===
@@ -51,7 +51,7 @@ def generate_tide_curve(moon_phase, unit):
     tide_min, tide_max = moon_tide_ranges[moon_phase]
     minutes_full = np.arange(0, 1440, 1)
     tide_full = ((np.sin(2 * np.pi * minutes_full / 720 - np.pi / 2) + 1) / 2) * (tide_max - tide_min) + tide_min
-    if unit in ["cm"]:
+    if unit in ["Metric (SI)"]:
         tide_full = tide_full * 0.3048
     minutes_15 = np.arange(0, 1440, 15)
     tide_15 = tide_full[minutes_15]

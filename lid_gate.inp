@@ -198,18 +198,8 @@ rain_garden      STORAGE    0          0.75       0.5        0          NO
 [LID_USAGE]
 ;;Subcatchment   LID Process      Number  Area       Width      InitSat    FromImp    ToPerv     RptFile                  DrainTo          FromPerv  
 ;;-------------- ---------------- ------- ---------- ---------- ---------- ---------- ---------- ------------------------ ---------------- ----------
-Sub_5          rain_barrel          40    2.95      0       0   14.23       1                       *               *        0
-Sub_11         rain_garden           6     100      0       0       0       1                       *               *    23.94
-Sub_15         rain_barrel         100    2.95      0       0   31.50       1                       *               *        0
-Sub_15         rain_garden          50     100      0       0       0       1                       *               *    38.38
-Sub_14         rain_barrel         200    2.95      0       0   17.79       1                       *               *        0
-Sub_14         rain_garden         200     100      0       0       0       1                       *               *    32.02
-Sub_20         rain_barrel         300    2.95      0       0   31.41       1                       *               *        0
-Sub_20         rain_garden         100     100      0       0       0       1                       *               *    23.12
-Sub_39         rain_barrel         200    2.95      0       0   20.50       1                       *               *        0
-Sub_39         rain_garden         100     100      0       0       0       1                       *               *    21.99
-Sub_38         rain_barrel         100    2.95      0       0   21.51       1                       *               *        0
-Sub_38         rain_garden          30     100      0       0       0       1                       *               *    29.59
+Sub_3          rain_barrel          25    2.95      0       0    8.63       1                       *               *        0
+Sub_3          rain_garden          10     100      0       0       0       1                       *               *    14.43
 
 [JUNCTIONS]
 ;;Name           Elevation  MaxDepth   InitDepth  SurDepth   Aponded   
@@ -603,7 +593,7 @@ tide 06/01/2025 23:45 -1.48631
 [REPORT]
 ;;Reporting Options
 INPUT      YES
-CONTROLS   NO
+CONTROLS   YES
 SUBCATCHMENTS ALL
 NODES ALL
 LINKS ALL
