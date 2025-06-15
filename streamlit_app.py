@@ -115,6 +115,10 @@ rain_chart = (
 )
 st.altair_chart(rain_chart, use_container_width=True)
 
+# === Display Total Rainfall ===
+total_rainfall = np.round(display_rain_curve.sum(), 2)
+st.markdown(f"**Total Rainfall for Event:** {total_rainfall} {rain_disp_unit}")
+
 # === Display Tide Chart ===
 df_tide = pd.DataFrame({
     "Time (hours)": time_hours,
