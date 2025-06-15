@@ -321,7 +321,7 @@ if "df_base_nogate" in st.session_state:
 data = {
     "Infrastructure": [
         "100 sq.ft. Rain Garden",
-        "50 gallon Rain Barrel",
+        "55 gallon Rain Barrel",
         "Tide Gate (10'x5')"
     ],
     "Contributing Area Assumption": [
@@ -397,7 +397,7 @@ def generate_lid_usage_lines(lid_config,
                 sub=sub,
                 proc="rain_barrel",
                 num=rb,
-                area=f"{2.95:.2f}",
+                area=f"{2.58:.2f}",
                 width=0,
                 initsat=0,
                 fromimp=f"{pct_imp:.2f}",
