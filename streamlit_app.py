@@ -676,11 +676,11 @@ if all(key in st.session_state for key in [
     # Define a color palette (or use any you prefer)
     colors = {
         "Baseline": "#141413",             
-        "Baseline + Tide Gate": "#5c5dc6", 
-        "With LIDs": "#459145",            
-        "LIDs + Tide Gate": "#e7ef46",     
-        "Max LIDs": "#10f527",             
-        "Max LIDs + Tide Gate": "#ea1717"  
+        "Baseline + Tide Gate": "#6c6ec9", 
+        "With LIDs": "#F97DE6",            
+        "LIDs + Tide Gate": "#f6b00b",     
+        "Max LIDs": "#62f271",             
+        "Max LIDs + Tide Gate": "#f04a4a"  
     }
 
     # Define a distinct style per line
