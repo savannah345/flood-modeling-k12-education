@@ -40,10 +40,11 @@ def generate_rainfall(total_inches, duration_minutes, method="Normal"):
 
 # === Moon Phase Tide Ranges (in ft) ===
 moon_tide_ranges = {
-    "🌕 Full Moon: Spring": (0.2, 2.8),
-    "🌑 New Moon: Spring": (0, 3.1),
-    "🌓 First Quarter: Neap": (0.5, 2.1),
-    "🌗 Last Quarter: Neap": (-1.4, 2.3)
+    "🌓 First Quarter: Neap": (-0.8, 1.2),
+    "🌕 Full Moon: Spring": (-1.2, 1.8),
+    "🌗 Last Quarter: Neap": (-0.9, 1.3),
+    "🌑 New Moon: Spring": (-1.1, 1.7),
+    
 }
 
 # === Generate Tide Curve (15-min intervals) ===
