@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import altair as alt
 import time
@@ -7,11 +8,11 @@ import re
 import io
 import os
 import shutil 
+import mpld3
 import matplotlib
 import matplotlib.pyplot as plt
-from datetime import timedelta
+from datetime import datetime, timedelta
 import matplotlib.dates as mdates
-from datetime import datetime
 from pyswmm import Simulation, Links, Nodes
 from rainfall_and_tide_generator import (
     generate_rainfall,
@@ -23,7 +24,7 @@ from rainfall_and_tide_generator import (
 )
 
 # --- Configuration ---
-simulation_date = "06/01/2025"
+simulation_date = "05/31/2025 12:00"
 template_inp     = "swmm_project.inp"
 
 st.set_page_config(
@@ -191,7 +192,7 @@ def run_swmm_scenario(
             if last_report_time is None or (current_time - last_report_time) >= report_interval:
                 pct = (link.depth / full_depth) * 100
                 depth_pct.append(pct)
-                timestamps.append(current_time.strftime("%H:%M"))
+                timestamps.append(current_time.strftime("%m-%d %H:%M"))
                 last_report_time = current_time
 
     # --- 3. Move .rpt/.out to unique names ---
@@ -203,13 +204,23 @@ def run_swmm_scenario(
     return depth_pct, timestamps, rpt_file
 
 # === Time-series Formatter ===
-def format_timeseries(name, minutes, values, date):
+def format_timeseries(name, minutes, values, start_datetime):
+    """
+    Formats SWMM-compatible time series with proper date rollover.
+    - `start_datetime`: string like "05/31/2025 12:00"
+    """
+    if isinstance(start_datetime, str):
+        start_dt = datetime.strptime(start_datetime, "%m/%d/%Y %H:%M")
+    else:
+        start_dt = start_datetime
+
     lines = []
     for m, v in zip(minutes, values):
-        hh = int(m) // 60
-        mm = int(m) % 60
-        lines.append(f"{name} {date} {hh:02d}:{mm:02d} {v:.5f}")
+        current_dt = start_dt + timedelta(minutes=int(m))
+        timestamp = current_dt.strftime("%m/%d/%Y %H:%M")
+        lines.append(f"{name} {timestamp} {v:.5f}")
     return lines
+
 
 # === Report Parser ===
 def extract_runoff_and_lid_data(rpt_file):
@@ -544,9 +555,9 @@ if selected_subs:
         c1, c2, c3, c4, c5 = st.columns([1,1.2,1.2,1.2,1.2])
         with c1: st.markdown(f"**{sub}**", unsafe_allow_html=True)
         with c2: st.markdown(f"<div style='text-align:center'>{rg_max}</div>", unsafe_allow_html=True)
-        with c3: rg_val = st.number_input("", 0, rg_max, 0, step=5, key=f"rg_{sub}", label_visibility="collapsed")
+        with c3: rg_val = st.number_input("Rain Garden", 0, rg_max, 0, step=5, key=f"rg_{sub}", label_visibility="collapsed")
         with c4: st.markdown(f"<div style='text-align:center'>{rb_max}</div>", unsafe_allow_html=True)
-        with c5: rb_val = st.number_input("", 0, rb_max, 0, step=5, key=f"rb_{sub}", label_visibility="collapsed")
+        with c5: rb_val = st.number_input("Rain Barrel", 0, rb_max, 0, step=5, key=f"rb_{sub}", label_visibility="collapsed")
         st.markdown("</div>", unsafe_allow_html=True)
         st.session_state["user_lid_config"][sub] = {
             "rain_gardens": rg_val,
@@ -660,7 +671,7 @@ if all(key in st.session_state for key in [
     time_labels = st.session_state["baseline_timestamps"]
     
     # Convert to datetime for proper tick formatting
-    time_objects = [datetime.strptime(t, "%H:%M") for t in time_labels]
+    time_objects = [datetime.strptime(t, "%m-%d %H:%M") for t in time_labels]
 
     # Define a color palette (or use any you prefer)
     colors = {
@@ -683,7 +694,7 @@ if all(key in st.session_state for key in [
     }
 
     # Create the figure
-    fig, ax = plt.subplots(figsize=(10, 5))
+    fig, ax = plt.subplots(figsize=(10, 5), dpi=100)
 
     # Plot each line with custom style
     ax.plot(time_objects, st.session_state["baseline_fill"],
@@ -712,15 +723,16 @@ if all(key in st.session_state for key in [
     # Show only hourly ticks
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%#I %p'))
     ax.xaxis.set_major_locator(mdates.HourLocator())
+    ax.xaxis.set_major_locator(mdates.HourLocator(interval=12))
+    fig.autofmt_xdate(rotation=45)
 
-    start_time = datetime.strptime("01:00", "%H:%M")
-    end_time = start_time + timedelta(hours=23)
-    ax.set_xlim([start_time, end_time])
 
     ax.legend()
     ax.grid(False)
     fig.autofmt_xdate()  # Auto-format x-axis for better label spacing
-    st.pyplot(fig)
+    html = mpld3.fig_to_html(fig)
+    components.html(html, height=500)
+
 
 def extract_volumes_from_rpt(rpt_path):
     try:
@@ -807,34 +819,39 @@ rpt_scenarios = {
     "Max LID + Tide Gate": "lid_max_gate.rpt"
 }
 
-results = []
-for name, path in rpt_scenarios.items():
-    try:
-        metrics = extract_volumes_from_rpt(path)
-        if any(v is not None for k, v in metrics.items() if k != "Scenario"):
-            metrics["Scenario"] = name
-            results.append(metrics)
+# Only attempt to extract results if ALL expected .rpt files exist
+if all(os.path.exists(path) for path in rpt_scenarios.values()):
+    results = []
+    for name, path in rpt_scenarios.items():
+        try:
+            metrics = extract_volumes_from_rpt(path)
+            if any(v is not None for k, v in metrics.items() if k != "Scenario"):
+                metrics["Scenario"] = name
+                results.append(metrics)
 
-            # Generate a clean key: "baseline_nogate", "lid_max_gate", etc.
-            key = (
-                name.lower()
-                .replace("(", "")
-                .replace(")", "")
-                .replace(" + ", "_plus_")
-                .replace(" ", "_")
-            )
+                # Generate a clean key
+                key = (
+                    name.lower()
+                    .replace("(", "")
+                    .replace(")", "")
+                    .replace(" + ", "_plus_")
+                    .replace(" ", "_")
+                )
 
-            st.session_state[f"outflow_{key}"] = metrics["Outflow (gallons)"]
-            st.session_state[f"flood_{key}"] = metrics["Flooding (ac-ft)"]
+                st.session_state[f"outflow_{key}"] = metrics["Outflow (gallons)"]
+                st.session_state[f"flood_{key}"] = metrics["Flooding (ac-ft)"]
 
-    except Exception as e:
-        print(f"Could not process {name}: {e}")
-        continue
+        except Exception as e:
+            print(f"Could not process {name}: {e}")
+            continue
+else:
+    results = []
+
 
 if results:
     df_balance = pd.DataFrame(results).set_index("Scenario")
 
-    # --- Unit Conversion ---
+    # Convert + format logic remains the same
     convert_to_m3 = unit == "Metric (SI)"
     GAL_TO_FT3 = 0.133681
     ACF_TO_FT3 = 43560
@@ -849,17 +866,13 @@ if results:
             val_ft3 = val
         return val_ft3 * FT3_TO_M3 if convert_to_m3 else val_ft3
 
-    # --- Apply Conversions ---
     df_converted = pd.DataFrame(index=df_balance.index)
     df_converted["Flooded Volume"] = df_balance["Flooding (ac-ft)"].apply(lambda x: convert(x, "ac-ft"))
     df_converted["Outflow Volume"] = df_balance["Outflow (gallons)"].apply(lambda x: convert(x, "gallons"))
     df_converted["Infiltration"] = df_balance["Infiltration (ac-ft)"].apply(lambda x: convert(x, "ac-ft"))
     df_converted["Surface Runoff"] = df_balance["Runoff (ac-ft)"].apply(lambda x: convert(x, "ac-ft"))
-    
-    # --- Round numeric values to nearest whole number ---
     df_converted = df_converted.round(0).astype(int)
 
-    # --- Add Cost BEFORE formatting ---
     cost_lookup = {
         "Baseline (No Tide Gate)": 0,
         "Baseline + Tide Gate": 250000,
@@ -870,14 +883,17 @@ if results:
     }
     df_converted["Total Cost ($)"] = df_converted.index.map(cost_lookup).astype(int)
 
-    # --- Format for Display (not for Excel) ---
-    unit_label = "m³" if convert_to_m3 else "ft³"
-    
-    st.subheader(f"Summary ({unit_label})")
-    st.dataframe(df_converted)
-
-    # --- Store clean numeric version for export ---
     st.session_state["df_balance"] = df_converted
+
+    # === Show summary only if user clicks ===
+    if st.button("📊 Show Water Balance Summary Table"):
+        if df_converted is not None:
+            unit_label = "m³" if convert_to_m3 else "ft³"
+            st.subheader(f"Summary ({unit_label})")
+            st.dataframe(df_converted)
+        else:
+            st.info("Please run at least one simulation to view the summary table.")
+
 
 # === Export Excel Report (Single Click Download Button) ===
 

@@ -50,13 +50,14 @@ moon_tide_ranges = {
 # === Generate Tide Curve (15-min intervals) ===
 def generate_tide_curve(moon_phase, unit):
     tide_min, tide_max = moon_tide_ranges[moon_phase]
-    minutes_full = np.arange(0, 1440, 1)
+    minutes_full = np.arange(0, 2880, 1)  # 48 hours at 1-min resolution
     tide_full = ((np.sin(2 * np.pi * minutes_full / 720 - np.pi / 2) + 1) / 2) * (tide_max - tide_min) + tide_min
-    if unit in ["Metric (SI)"]:
+    if unit == "Metric (SI)":
         tide_full = tide_full * 0.3048
-    minutes_15 = np.arange(0, 1440, 15)
+    minutes_15 = np.arange(0, 2880, 15)
     tide_15 = tide_full[minutes_15]
     return minutes_15, tide_15
+
 
 # === Align Rainfall to Tide (15-min resolution) ===
 def align_rainfall_to_tide(total_inches, duration_minutes, tide_curve, align="peak", method="Normal"):
@@ -78,14 +79,14 @@ def align_rainfall_to_tide(total_inches, duration_minutes, tide_curve, align="pe
     peaks, _ = find_peaks(search_curve)
     if not peaks.any():
         raise ValueError("Could not detect tide peak or dip.")
-    center_index = peaks[0]
+    center_index = peaks[1]  # pick first peak (can be changed)
 
-    full_rain = np.zeros(96)  # 1440 / 15 = 96 intervals
+    full_rain = np.zeros(192)  # 2880 / 15 = 192 intervals
     start = center_index - intervals // 2
     for i in range(intervals):
         idx = start + i
-        if 0 <= idx < 96:
+        if 0 <= idx < 192:
             full_rain[idx] = rain_profile[i]
 
-    rain_minutes = np.arange(0, 1440, 15)
+    rain_minutes = np.arange(0, 2880, 15)
     return rain_minutes, full_rain
