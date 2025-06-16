@@ -49,6 +49,28 @@ rain_inches = float(pf_df.loc[
 ].values[0])
 
 unit        = st.selectbox("Preferred Units", ["U.S. Customary", "Metric (SI)"])
+
+
+st.subheader("How Much Water Each Unit Holds")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.markdown("""
+    ### 1 cubic meter (m³)
+    - 1,000 liters   
+    - 35.3 ft³  
+    - About the size of a washing machine  
+    """)
+
+with col2:
+    st.markdown("""
+    ### 1 cubic foot (ft³)
+    - 7.5 gallons  
+    - About the size of a microwave  
+    - 4 ft³ = half of a bathtub
+    """)
+
 method      = st.radio("Rainfall Shape", ["Normal", "Randomized"])
 
 st.subheader("How to remember the Tides: Spring tides surge higher than Neap tides that nap (lower)") 
@@ -269,6 +291,25 @@ if st.button("Run Baseline Scenario SWMM Simulation"):
 
     except Exception as e:
         st.error(f"Baseline simulation failed: {e}")
+
+st.subheader("Six Scenario Overview: Tide Gates + Green Infrastructure")
+st.markdown("""
+In this project, we will test six scenarios combining two types of flood interventions: **tide gates** and **LID (Low Impact Development) features** like rain gardens and rain barrels.
+
+#### How Tide Gates Work
+The **tide gate** acts like a one-way door:
+- It **blocks tidal water** from backing up into the system during high tide.
+- It **lets stormwater exit** when pressure inside the pipe is higher than the tide level.
+
+#### How LID Features Help
+**Rain gardens and barrels** reduce stormwater earlier in the system:
+- They **slow down** and **store** runoff close to where it falls.
+- This reduces how much water reaches the pipes — especially during small and moderate storms.
+- During **large storms**, their benefit at the outfall is smaller, but still helpful.
+
+Together, these six scenarios show how **both local solutions (like LIDs)** and **system-wide controls (like tide gates)** are needed to manage flooding—especially in coastal areas where rainfall and tides can overlap.
+
+""")
 
 # === Low Impact Developments (LIDs) UI & Cost ===
 st.subheader("Low Impact Developments (LIDs) options")
@@ -615,26 +656,6 @@ if all(key in st.session_state for key in [
 ]):
 
     st.subheader("The Capacity of the Pipe Closest to the Outlet over Time (All Scenarios)")
-    st.markdown("""
-### Six Scenario Overview: Tide Gates + Green Infrastructure
-
-In this project, we tested six scenarios combining two types of flood interventions: **tide gates** and **LID (Low Impact Development) features** like rain gardens and rain barrels.
-
-#### How Tide Gates Work
-The **tide gate** acts like a one-way door:
-- It **blocks tidal water** from backing up into the system during high tide.
-- It **lets stormwater exit** when pressure inside the pipe is higher than the tide level.
-
-#### How LID Features Help
-**Rain gardens and barrels** reduce stormwater earlier in the system:
-- They **slow down** and **store** runoff close to where it falls.
-- This reduces how much water reaches the pipes — especially during small and moderate storms.
-- During **large storms**, their benefit at the outfall is smaller, but still helpful.
-
-Together, these six scenarios show how **both local solutions (like LIDs)** and **system-wide controls (like tide gates)** are needed to manage flooding—especially in coastal areas where rainfall and tides can overlap.
-
-""")
-
 
     time_labels = st.session_state["baseline_timestamps"]
     
@@ -687,7 +708,6 @@ Together, these six scenarios show how **both local solutions (like LIDs)** and 
     ax.set_ylabel("Culvert Fill (%)")
     ax.set_xlabel("Time")
     ax.set_ylim(0, 110)
-    ax.set_title("Culvert Capacity Comparison")
 
     # Show only hourly ticks
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%#I %p'))
@@ -811,27 +831,6 @@ for name, path in rpt_scenarios.items():
         print(f"Could not process {name}: {e}")
         continue
 
-
-st.subheader("How Much Water Each Unit Holds")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    st.markdown("""
-    ### 1 cubic meter (m³)
-    - 1,000 liters   
-    - 35.3 ft³  
-    - About the size of a washing machine  
-    """)
-
-with col2:
-    st.markdown("""
-    ### 1 cubic foot (ft³)
-    - 7.5 gallons  
-    - About the size of a microwave  
-    - 4 ft³ = half of a bathtub
-    """)
-
 if results:
     df_balance = pd.DataFrame(results).set_index("Scenario")
 
@@ -881,8 +880,6 @@ if results:
     st.session_state["df_balance"] = df_converted
 
 # === Export Excel Report (Single Click Download Button) ===
-
-st.subheader("Sometimes, the areas that would benefit the most from LID solutions (like reduced flooding) are downstream, while the LID has to be installed upstream, where the runoff begins. This means the benefit (less flooding) happens somewhere else. But the burden (cost, space, maintenance) is on someone upstream.")
 
 output = io.BytesIO()
 
