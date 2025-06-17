@@ -1015,12 +1015,16 @@ else:
         # Step 5: Write everything to Excel
         excel_output = io.BytesIO()
         with pd.ExcelWriter(excel_output, engine="openpyxl") as writer:
-            # Write water balance and culvert sheets
-            df_balance.to_excel(writer, sheet_name="Water Balance Summary", index=False)
-            df_culvert.to_excel(writer, sheet_name="Culvert Capacity", index=False)
-
-            # Convert simulation_date string to datetime
-            sim_start = datetime.strptime(simulation_date, "%m/%d/%Y %H:%M")
+            # === Scenario Metadata Summary ===
+            scenario_summary = pd.DataFrame([{
+                "Storm Duration (hr)": duration_minutes // 60,
+                "Return Period (yr)": return_period,
+                "Moon Phase": moon_phase,
+                "Tide Alignment": "High Tide Peak" if align_mode == "peak" else "Low Tide Dip",
+                "Units": unit,
+                "Simulation Start": simulation_date
+            }])
+            scenario_summary.to_excel(writer, sheet_name="Scenario Settings", index=False)
 
             # === Rainfall Time Series ===
             rain_minutes = st.session_state.get(f"{prefix}rain_minutes", [])
@@ -1047,6 +1051,13 @@ else:
                     "Tide": tide_time_series
                 })
                 df_tide.to_excel(writer, sheet_name="Tide Event", index=False)
+            
+            # Write water balance and culvert sheets
+            df_balance.to_excel(writer, sheet_name="Water Balance Summary", index=False)
+            df_culvert.to_excel(writer, sheet_name="Culvert Capacity", index=False)
+
+            # Convert simulation_date string to datetime
+            sim_start = datetime.strptime(simulation_date, "%m/%d/%Y %H:%M")
 
         # Download button
         st.download_button(
