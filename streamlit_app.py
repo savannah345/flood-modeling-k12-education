@@ -783,12 +783,12 @@ else:
         }
 
         fig, ax = plt.subplots(figsize=(10, 4))
-        ax.plot(time_objects, baseline[:min_len], styles["Baseline"], label="Baseline", color=colors["Baseline"])
-        ax.plot(time_objects, baseline_gate[:min_len], styles["Baseline + Tide Gate"], label="Baseline + Tide Gate", color=colors["Baseline + Tide Gate"])
-        ax.plot(time_objects, lid[:min_len], styles["With LIDs"], label="With LIDs", color=colors["With LIDs"])
-        ax.plot(time_objects, lid_gate[:min_len], styles["LIDs + Tide Gate"], label="LIDs + Tide Gate", color=colors["LIDs + Tide Gate"])
-        ax.plot(time_objects, lid_max[:min_len], styles["Max LIDs"], label="Max LIDs", color=colors["Max LIDs"])
-        ax.plot(time_objects, lid_max_gate[:min_len], styles["Max LIDs + Tide Gate"], label="Max LIDs + Tide Gate", color=colors["Max LIDs + Tide Gate"])
+        ax.plot(time_objects, baseline[:min_len], styles["Baseline"], label="Baseline", color=colors["Baseline"], linewidth=4)
+        ax.plot(time_objects, baseline_gate[:min_len], styles["Baseline + Tide Gate"], label="Baseline + Tide Gate", color=colors["Baseline + Tide Gate"], linewidth=4)
+        ax.plot(time_objects, lid[:min_len], styles["With LIDs"], label="With LIDs", color=colors["With LIDs"], linewidth=4)
+        ax.plot(time_objects, lid_gate[:min_len], styles["LIDs + Tide Gate"], label="LIDs + Tide Gate", color=colors["LIDs + Tide Gate"], linewidth=4)
+        ax.plot(time_objects, lid_max[:min_len], styles["Max LIDs"], label="Max LIDs", color=colors["Max LIDs"], linewidth=4)
+        ax.plot(time_objects, lid_max_gate[:min_len], styles["Max LIDs + Tide Gate"], label="Max LIDs + Tide Gate", color=colors["Max LIDs + Tide Gate"], linewidth=4)
 
         ax.set_ylabel("Culvert Fill (%)")
         ax.set_xlabel("Time")
@@ -959,7 +959,7 @@ else:
         st.session_state[f"{prefix}df_balance"] = df_converted
 
         # === Show summary only if user clicks ===
-        if st.button("📊 Show Water Balance Summary Table"):
+        if st.button("Show Water Balance Summary Table"):
             if df_converted is not None:
                 unit_label = "m³" if convert_to_m3 else "ft³"
                 st.subheader(f"Summary ({unit_label})")
@@ -1018,14 +1018,14 @@ else:
             df_balance.to_excel(writer, sheet_name="Water Balance Summary", index=False)
             df_culvert.to_excel(writer, sheet_name="Culvert Capacity", index=False)
 
-            if rain_time_series:
+            if isinstance(rain_time_series, (list, np.ndarray)) and len(rain_time_series) > 0:
                 pd.DataFrame(rain_time_series, columns=["Timestamp", "Rainfall"]).to_excel(writer, sheet_name="Rainfall Event", index=False)
 
-            if tide_time_series:
+            if isinstance(tide_time_series, (list, np.ndarray)) and len(tide_time_series) > 0:
                 pd.DataFrame(tide_time_series, columns=["Timestamp", "Tide"]).to_excel(writer, sheet_name="Tide Event", index=False)
 
         st.download_button(
-            label="📥 Download Scenario Results (Excel)",
+            label="Download Scenario Results (Excel)",
             data=excel_output.getvalue(),
             file_name="CoastWise_Results.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
