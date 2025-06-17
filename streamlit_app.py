@@ -14,7 +14,6 @@ import glob
 from auth_supabase import create_user, authenticate_user, reset_password
 import matplotlib
 import matplotlib.pyplot as plt
-import matplotlib.units as munits
 from datetime import datetime, timedelta
 import matplotlib.dates as mdates
 from pyswmm import Simulation, Links, Nodes
@@ -799,9 +798,8 @@ else:
         ax.set_ylim(0, 110)
         ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%-I %p'))
-        ax.xaxis.set_units(mdates.date2num)  # Apply the correct unit converter explicitly
 
-
+        
         fig.autofmt_xdate(rotation=45)
         ax.legend(loc="upper right", fontsize=8)
         ax.grid(False)
@@ -1048,7 +1046,7 @@ else:
                 ]
                 df_rain = pd.DataFrame({
                     "Timestamp": rain_timestamps,
-                    "Rainfall ({rain_disp_unit})": rain_time_series
+                    f"Rainfall ({rain_disp_unit})": rain_time_series
                 })
                 df_rain.to_excel(writer, sheet_name="Rainfall Event", index=False)
 
@@ -1061,7 +1059,7 @@ else:
                 ]
                 df_tide = pd.DataFrame({
                     "Timestamp": tide_timestamps,
-                    "Tide ({tide_disp_unit}": tide_time_series
+                    f"Tide ({tide_disp_unit}": tide_time_series
                 })
                 df_tide.to_excel(writer, sheet_name="Tide Event", index=False)
             
