@@ -740,7 +740,7 @@ else:
                 st.error(f"LID simulation failed: {e}")
 
     # === Section Title ===
-    st.subheader("The Capacity of the Pipe Closest to the Outlet over Time (All Scenarios)")
+    st.subheader("The Capacity of the Pipe Closest to the Outlet over Time")
 
     required_fill_keys = [
         f"{prefix}baseline_fill",
@@ -785,7 +785,7 @@ else:
             "Max LIDs + Tide Gate": "-"
         }
 
-        fig, ax = plt.subplots(figsize=(10, 4))
+        fig, ax = plt.subplots(figsize=(8, 4))
         ax.plot(time_objects, baseline[:min_len], styles["Baseline"], label="Baseline", color=colors["Baseline"], linewidth=4)
         ax.plot(time_objects, baseline_gate[:min_len], styles["Baseline + Tide Gate"], label="Baseline + Tide Gate", color=colors["Baseline + Tide Gate"], linewidth=4)
         ax.plot(time_objects, lid[:min_len], styles["With LIDs"], label="With LIDs", color=colors["With LIDs"], linewidth=4)
@@ -793,15 +793,26 @@ else:
         ax.plot(time_objects, lid_max[:min_len], styles["Max LIDs"], label="Max LIDs", color=colors["Max LIDs"], linewidth=4)
         ax.plot(time_objects, lid_max_gate[:min_len], styles["Max LIDs + Tide Gate"], label="Max LIDs + Tide Gate", color=colors["Max LIDs + Tide Gate"], linewidth=4)
 
-        ax.set_ylabel("Culvert Fill (%)")
-        ax.set_xlabel("Time")
+
+        # Legend centered below the plot
+        ax.legend(
+            loc="lower left",
+            fontsize=14,
+            frameon=False,
+            ncol=1  # Spread across multiple columns
+        )
+
+
+
+        ax.set_ylabel("Culvert Fill (%)", fontsize=14)
+        ax.set_xlabel("Time", fontsize=14)
         ax.set_ylim(0, 110)
         ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%-I %p'))
+        ax.tick_params(axis='both', labelsize=12)
 
         
         fig.autofmt_xdate(rotation=45)
-        ax.legend(loc="upper right", fontsize=8)
         ax.grid(False)
 
         html = mpld3.fig_to_html(fig)
