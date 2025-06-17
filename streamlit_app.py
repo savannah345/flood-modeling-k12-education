@@ -666,12 +666,58 @@ if all(key in st.session_state for key in [
     "baseline_timestamps"
 ]):
 
+    # === Ensure consistent and complete culvert fill time series (575 steps at 5-min intervals) ===
+    start_time = datetime.strptime("05/31/2025 12:00", "%m/%d/%Y %H:%M")
+    timestamp_index = [start_time + timedelta(minutes=5*i) for i in range(575)]  # << fixed length
+
+    # Raw fill series
+    culvert_series = {
+        "Baseline": st.session_state["baseline_fill"],
+        "Baseline + Tide Gate": st.session_state["baseline_gate_fill"],
+        "With LIDs": st.session_state["lid_fill"],
+        "LIDs + Tide Gate": st.session_state["lid_gate_fill"],
+        "Max LIDs": st.session_state["lid_max_fill"],
+        "Max LIDs + Tide Gate": st.session_state["lid_max_gate_fill"]
+    }
+
+    # Build DataFrames and interpolate any NaNs
+    scenario_dfs = {}
+    for name, values in culvert_series.items():
+        if len(values) >= 575:
+            values = values[:575]
+            index = timestamp_index
+        else:
+            index = timestamp_index[:len(values)]
+
+        df = pd.DataFrame({name: values}, index=index)
+        df[name] = df[name].interpolate(method="time", limit_direction="both")
+        scenario_dfs[name] = df
+
+    # Align all to the shortest available index to avoid errors in concat
+    min_len = min(len(df) for df in scenario_dfs.values())
+    final_index = timestamp_index[:min_len]
+
+    # Reindex all to this shortest length
+    for name in scenario_dfs:
+        scenario_dfs[name] = scenario_dfs[name].reindex(final_index)
+
+    # Merge
+    combined_df = pd.concat(scenario_dfs.values(), axis=1)
+
+    # Save back to session
+    for name in combined_df.columns:
+        st.session_state[name.replace(" ", "_").lower() + "_fill"] = combined_df[name].tolist()
+
+    # Update timestamps for downstream plotting and Excel
+    st.session_state["baseline_timestamps"] = [t.strftime("%m-%d %H:%M") for t in combined_df.index]
+
+
+    # === Plotting: Culvert Capacity over Time ===
     st.subheader("The Capacity of the Pipe Closest to the Outlet over Time (All Scenarios)")
 
     time_labels = st.session_state["baseline_timestamps"]
-    
-    # Convert to datetime for proper tick formatting
     time_objects = [datetime.strptime(t, "%m-%d %H:%M") for t in time_labels]
+
 
     # Define a color palette (or use any you prefer)
     colors = {
