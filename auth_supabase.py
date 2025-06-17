@@ -1,10 +1,10 @@
 import bcrypt
-import psycopg2
+import psycopg3
 import streamlit as st
 
 SUPABASE_DB_URL = st.secrets["SUPABASE_DB_URL"]
 
-conn = psycopg2.connect(SUPABASE_DB_URL)
+conn = psycopg3.connect(SUPABASE_DB_URL)
 cur = conn.cursor()
 
 def hash_password(password):
