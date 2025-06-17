@@ -784,12 +784,15 @@ else:
         combined_df = pd.concat(scenario_dfs.values(), axis=1)
 
         # Step 8: Save back to session state with consistent keys
-        for name in combined_df.columns:
-            key_name = name.replace(" ", "_").lower() + "_fill"
-            st.session_state[f"{prefix}{key_name}"] = combined_df[name].tolist()
 
-        # Step 9: Store shared timestamp list
-        st.session_state[f"{prefix}baseline_timestamps"] = [t.strftime("%m-%d %H:%M") for t in combined_df.index]
+        for name, values in culvert_series.items():
+            key = name.replace(" ", "_").lower() + "_fill"
+            st.session_state[f"{prefix}{key}"] = values[:min_len]
+
+        # Step 9: Overwrite the baseline timestamps used for plotting and Excel
+        st.session_state[f"{prefix}baseline_timestamps"] = [
+            t.strftime("%m-%d %H:%M") for t in timestamp_index
+        ]
 
 
 
@@ -1025,98 +1028,111 @@ else:
 
     # === Export Excel Report (Single Click Download Button) ===
 
-    output = io.BytesIO()
+    required_excel_keys = [
+        "df_balance",
+        f"{prefix}baseline_timestamps",
+        f"{prefix}baseline_fill",
+        f"{prefix}baseline_gate_fill",
+        f"{prefix}lid_fill",
+        f"{prefix}lid_gate_fill",
+        f"{prefix}lid_max_fill",
+        f"{prefix}lid_max_gate_fill"
+    ]
 
-    try:
-        # === 1. Scenario Summary Table ===
-        df_summary = pd.DataFrame([{
-            "Storm Duration (hr)": duration_minutes // 60,
-            "Return Period (yr)": return_period,
-            "Moon Phase": moon_phase,
-            "Tide Alignment": tide_align,
-            "Display Units": unit
-        }])
+    if all(k in st.session_state for k in required_excel_keys):
 
-        # === 3. Water Balance Table ===
-        df_balance = st.session_state.get("df_balance", pd.DataFrame())
+        output = io.BytesIO()
 
-        # === 4. Rainfall & Tide Curves ===
-        df_rain = pd.DataFrame({
-            "Timestamp (min)": st.session_state.get(f"{prefix}rain_minutes", []),
-            f"Rainfall ({'in' if unit == 'U.S. Customary' else 'cm'})": st.session_state.get("display_rain_curve", [])
-        })
+        try:
+            # === 1. Scenario Summary Table ===
+            df_summary = pd.DataFrame([{
+                "Storm Duration (hr)": duration_minutes // 60,
+                "Return Period (yr)": return_period,
+                "Moon Phase": moon_phase,
+                "Tide Alignment": tide_align,
+                "Display Units": unit
+            }])
 
-        df_tide = pd.DataFrame({
-            "Timestamp (min)": st.session_state.get(f"{prefix}tide_minutes", []),
-            f"Tide ({'ft' if unit == 'U.S. Customary' else 'meters'})": st.session_state.get("display_tide_curve", [])
-        })
+            # === 3. Water Balance Table ===
+            df_balance = st.session_state.get("df_balance", pd.DataFrame())
 
-        # === Write All to Excel ===
-        with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            # Write summary info
-            start_row = 0
-            df_summary.to_excel(writer, sheet_name="Scenario Summary", index=False, startrow=start_row)
-            start_row += len(df_summary) + 3
-            
-            if not df_balance.empty:
-                unit_label = "m³" if convert_to_m3 else "ft³"
-                df_balance_display = df_balance.copy()
-                df_balance_display.columns = [f"{col} ({unit_label})" for col in df_balance.columns]
+            # === 4. Rainfall & Tide Curves ===
+            df_rain = pd.DataFrame({
+                "Timestamp (min)": st.session_state.get(f"{prefix}rain_minutes", []),
+                f"Rainfall ({'in' if unit == 'U.S. Customary' else 'cm'})": st.session_state.get("display_rain_curve", [])
+            })
+
+            df_tide = pd.DataFrame({
+                "Timestamp (min)": st.session_state.get(f"{prefix}tide_minutes", []),
+                f"Tide ({'ft' if unit == 'U.S. Customary' else 'meters'})": st.session_state.get("display_tide_curve", [])
+            })
+
+            # === Write All to Excel ===
+            with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                # Write summary info
+                start_row = 0
+                df_summary.to_excel(writer, sheet_name="Scenario Summary", index=False, startrow=start_row)
+                start_row += len(df_summary) + 3
                 
-                df_balance_display.reset_index().to_excel(
-                    writer, sheet_name="Scenario Summary", index=False, startrow=start_row
-                )
+                if not df_balance.empty:
+                    unit_label = "m³" if convert_to_m3 else "ft³"
+                    df_balance_display = df_balance.copy()
+                    df_balance_display.columns = [f"{col} ({unit_label})" for col in df_balance.columns]
+                    
+                    df_balance_display.reset_index().to_excel(
+                        writer, sheet_name="Scenario Summary", index=False, startrow=start_row
+                    )
 
-            # Write rainfall and tide curves
-            if not df_rain.empty:
-                df_rain.to_excel(writer, sheet_name="Rainfall Curve", index=False)
+                # Write rainfall and tide curves
+                if not df_rain.empty:
+                    df_rain.to_excel(writer, sheet_name="Rainfall Curve", index=False)
 
-            if not df_tide.empty:
-                df_tide.to_excel(writer, sheet_name="Tide Curve", index=False)
+                if not df_tide.empty:
+                    df_tide.to_excel(writer, sheet_name="Tide Curve", index=False)
 
-            # === 5. Culvert Fill % ===
-            culvert_keys = [
-                f"{prefix}baseline_timestamps",
-                f"{prefix}baseline_fill",
-                f"{prefix}baseline_gate_fill",
-                f"{prefix}lid_fill",
-                f"{prefix}lid_gate_fill",
-                f"{prefix}lid_max_fill",
-                f"{prefix}lid_max_gate_fill"
-            ]
+                # === 5. Culvert Fill % ===
+                culvert_keys = [
+                    f"{prefix}baseline_timestamps",
+                    f"{prefix}baseline_fill",
+                    f"{prefix}baseline_gate_fill",
+                    f"{prefix}lid_fill",
+                    f"{prefix}lid_gate_fill",
+                    f"{prefix}lid_max_fill",
+                    f"{prefix}lid_max_gate_fill"
+                ]
 
-            if all(k in st.session_state for k in culvert_keys):
-                # Step 1: Get lengths of all fill series (exclude timestamps)
-                fill_keys = [k for k in culvert_keys if "timestamps" not in k]
-                lengths = [len(st.session_state[k]) for k in fill_keys]
-                min_len = min(lengths)
+                if all(k in st.session_state for k in culvert_keys):
+                    # Step 1: Get lengths of all fill series (exclude timestamps)
+                    fill_keys = [k for k in culvert_keys if "timestamps" not in k]
+                    lengths = [len(st.session_state[k]) for k in fill_keys]
+                    min_len = min(lengths)
 
-                # Step 2: Truncate all fill series and timestamps to min_len
-                df_culvert = pd.DataFrame({
-                    "Timestamp": st.session_state[f"{prefix}baseline_timestamps"][:min_len],
-                    "Baseline": st.session_state[f"{prefix}baseline_fill"][:min_len],
-                    "Baseline + Tide Gate": st.session_state[f"{prefix}baseline_gate_fill"][:min_len],
-                    "With LIDs": st.session_state[f"{prefix}lid_fill"][:min_len],
-                    "LIDs + Tide Gate": st.session_state[f"{prefix}lid_gate_fill"][:min_len],
-                    "Max LIDs": st.session_state[f"{prefix}lid_max_fill"][:min_len],
-                    "Max LIDs + Tide Gate": st.session_state[f"{prefix}lid_max_gate_fill"][:min_len]
-                })
+                    # Step 2: Truncate all fill series and timestamps to min_len
+                    df_culvert = pd.DataFrame({
+                        "Timestamp": st.session_state[f"{prefix}baseline_timestamps"][:min_len],
+                        "Baseline": st.session_state[f"{prefix}baseline_fill"][:min_len],
+                        "Baseline + Tide Gate": st.session_state[f"{prefix}baseline_gate_fill"][:min_len],
+                        "With LIDs": st.session_state[f"{prefix}lid_fill"][:min_len],
+                        "LIDs + Tide Gate": st.session_state[f"{prefix}lid_gate_fill"][:min_len],
+                        "Max LIDs": st.session_state[f"{prefix}lid_max_fill"][:min_len],
+                        "Max LIDs + Tide Gate": st.session_state[f"{prefix}lid_max_gate_fill"][:min_len]
+                    })
 
-                # Step 3: Write to Excel
-                df_culvert.to_excel(writer, sheet_name="Culvert Capacity", index=False)
+                    # Step 3: Write to Excel
+                    df_culvert.to_excel(writer, sheet_name="Culvert Capacity", index=False)
 
-        # Reset stream and allow download
-        output.seek(0)
+            # Reset stream and allow download
+            output.seek(0)
 
-        st.download_button(
-            label="📥 Download Full Excel Report",
-            data=output,
-            file_name="FloodSimulationReport.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+            st.download_button(
+                label="📥 Download Full Excel Report",
+                data=output,
+                file_name="FloodSimulationReport.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
-    except Exception as e:
-        st.error(f"Failed to create Excel report: {e}")
+        except Exception as e:
+            st.error(f"Failed to create Excel report: {e}")
 
 
 
