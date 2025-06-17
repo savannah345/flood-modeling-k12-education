@@ -192,10 +192,10 @@ else:
         rain_disp_unit = "centimeters"
 
     # --- Store display values and timestamps for Excel export ---
-    st.session_state["rain_minutes"] = rain_sim_minutes
-    st.session_state["tide_minutes"] = tide_sim_minutes
-    st.session_state["display_rain_curve"] = display_rain_curve
-    st.session_state["display_tide_curve"] = display_tide_curve
+    st.session_state[f"{prefix}rain_minutes"] = rain_sim_minutes
+    st.session_state[f"{prefix}tide_minutes"] = tide_sim_minutes
+    st.session_state[f"{prefix}display_rain_curve"] = display_rain_curve
+    st.session_state[f"{prefix}display_tide_curve"] = display_tide_curve
 
     time_hours = np.array(rain_sim_minutes) / 60
 
@@ -1042,12 +1042,12 @@ else:
 
         # === 4. Rainfall & Tide Curves ===
         df_rain = pd.DataFrame({
-            "Timestamp (min)": st.session_state.get("rain_minutes", []),
+            "Timestamp (min)": st.session_state.get(f"{prefix}rain_minutes", []),
             f"Rainfall ({'in' if unit == 'U.S. Customary' else 'cm'})": st.session_state.get("display_rain_curve", [])
         })
 
         df_tide = pd.DataFrame({
-            "Timestamp (min)": st.session_state.get("tide_minutes", []),
+            "Timestamp (min)": st.session_state.get(f"{prefix}tide_minutes", []),
             f"Tide ({'ft' if unit == 'U.S. Customary' else 'meters'})": st.session_state.get("display_tide_curve", [])
         })
 
