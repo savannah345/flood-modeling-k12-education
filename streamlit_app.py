@@ -92,7 +92,8 @@ if "user_id" not in st.session_state:
 
 else:
     st.success(f"Logged in as: {st.session_state['email']}")
-    st.write(f"🆔 User ID: {st.session_state['user_id']}")
+    user_id = st.session_state.get("user_id", "guest")
+    prefix = f"user_{user_id}_"
 
     if st.button("🚪 Logout"):
         delete_user_files(st.session_state["user_id"])
@@ -345,8 +346,8 @@ else:
             lid_lines  = [";"]  # No LIDs in baseline
 
             # Run both baseline scenarios
-            fill_nogate, time_nogate, rpt1 = run_swmm_scenario("baseline_nogate", rain_lines, tide_lines, lid_lines, "NO")
-            fill_gate,   time_gate,   rpt2 = run_swmm_scenario("baseline_gate",   rain_lines, tide_lines, lid_lines, "YES")
+            fill_nogate, time_nogate, rpt1 = run_swmm_scenario(f"{prefix}baseline_nogate", rain_lines, tide_lines, lid_lines, "NO")
+            fill_gate,   time_gate,   rpt2 = run_swmm_scenario(f"{prefix}baseline_gate",   rain_lines, tide_lines, lid_lines, "YES")
 
             # Save culvert depth fills + time
             st.session_state["baseline_fill"] = fill_nogate
@@ -574,8 +575,8 @@ else:
         lid_lines = generate_lid_usage_lines(max_lid_config)
 
         # Run SWMM with and without tide gate
-        fill_max_lid, time_max_lid, rpt5 = run_swmm_scenario("lid_max_nogate", rain_lines, tide_lines, lid_lines, "NO")
-        fill_max_gate, _, rpt6 = run_swmm_scenario("lid_max_gate", rain_lines, tide_lines, lid_lines, "YES")
+        fill_max_lid, time_max_lid, rpt5 = run_swmm_scenario(f"{prefix}lid_max_nogate", rain_lines, tide_lines, lid_lines, "NO")
+        fill_max_gate, _, rpt6 = run_swmm_scenario(f"{prefix}lid_max_gate", rain_lines, tide_lines, lid_lines, "YES")
 
         # Store time series
         st.session_state["lid_max_fill"] = fill_max_lid
@@ -717,8 +718,8 @@ else:
                     st.stop()
 
                 # Run LID-only and LID+Gate scenarios
-                fill_lid, time_lid, rpt3 = run_swmm_scenario("lid_nogate", rain_lines, tide_lines, lid_lines, "NO")
-                fill_lid_gate, _, rpt4   = run_swmm_scenario("lid_gate", rain_lines, tide_lines, lid_lines, "YES")
+                fill_lid, time_lid, rpt3 = run_swmm_scenario(f"{prefix}lid_nogate", rain_lines, tide_lines, lid_lines, "NO")
+                fill_lid_gate, _, rpt4   = run_swmm_scenario(f"{prefix}lid_gate", rain_lines, tide_lines, lid_lines, "YES")
 
                 # Store simulation results
                 st.session_state["lid_fill"] = fill_lid
@@ -735,57 +736,62 @@ else:
             except Exception as e:
                 st.error(f"LID simulation failed: {e}")
 
-    if all(key in st.session_state for key in [
+    user_id = st.session_state.get("user_id", "guest")
+    prefix = f"user_{user_id}_"
+
+    required_keys = [
         "baseline_fill", "baseline_gate_fill",
         "lid_fill", "lid_gate_fill",
         "lid_max_fill", "lid_max_gate_fill",
         "baseline_timestamps"
-    ]):
+    ]
 
-        # === Ensure consistent and complete culvert fill time series (575 steps at 5-min intervals) ===
-        start_time = datetime.strptime("05/31/2025 12:00", "%m/%d/%Y %H:%M")
-        timestamp_index = [start_time + timedelta(minutes=5*i) for i in range(575)]  # << fixed length
+    # Check all required keys with prefix
 
-        # Raw fill series
-        culvert_series = {
-            "Baseline": st.session_state["baseline_fill"],
-            "Baseline + Tide Gate": st.session_state["baseline_gate_fill"],
-            "With LIDs": st.session_state["lid_fill"],
-            "LIDs + Tide Gate": st.session_state["lid_gate_fill"],
-            "Max LIDs": st.session_state["lid_max_fill"],
-            "Max LIDs + Tide Gate": st.session_state["lid_max_gate_fill"]
+    if all(f"{prefix}{key}" in st.session_state for key in required_keys):
+
+        # Step 1: Load all culvert series
+        culvert_series_raw = {
+            "Baseline": st.session_state[f"{prefix}baseline_fill"],
+            "Baseline + Tide Gate": st.session_state[f"{prefix}baseline_gate_fill"],
+            "With LIDs": st.session_state[f"{prefix}lid_fill"],
+            "LIDs + Tide Gate": st.session_state[f"{prefix}lid_gate_fill"],
+            "Max LIDs": st.session_state[f"{prefix}lid_max_fill"],
+            "Max LIDs + Tide Gate": st.session_state[f"{prefix}lid_max_gate_fill"]
         }
 
-        # Build DataFrames and interpolate any NaNs
-        scenario_dfs = {}
-        for name, values in culvert_series.items():
-            if len(values) >= 575:
-                values = values[:575]
-                index = timestamp_index
-            else:
-                index = timestamp_index[:len(values)]
+        # Step 2: Find the minimum length across all series
+        min_len = min(len(vals) for vals in culvert_series_raw.values())
 
-            df = pd.DataFrame({name: values}, index=index)
-            df[name] = df[name].interpolate(method="time", limit_direction="both")
-            scenario_dfs[name] = df
+        # Step 3: Truncate all series to that minimum length
+        culvert_series = {
+            name: vals[:min_len]
+            for name, vals in culvert_series_raw.items()
+        }
 
-        # Align all to the shortest available index to avoid errors in concat
-        min_len = min(len(df) for df in scenario_dfs.values())
-        final_index = timestamp_index[:min_len]
+        # Step 4: Generate truncated timestamp list
+        start_time = datetime.strptime("05/31/2025 12:00", "%m/%d/%Y %H:%M")
+        timestamp_index = [start_time + timedelta(minutes=5*i) for i in range(min_len)]
 
-        # Reindex all to this shortest length
+        # Step 5: Build individual DataFrames
+        scenario_dfs = {
+            name: pd.DataFrame({name: values}, index=timestamp_index)
+            for name, values in culvert_series.items()
+        }
+
+        # Step 6: (Optional) Interpolate missing values if any
         for name in scenario_dfs:
-            scenario_dfs[name] = scenario_dfs[name].reindex(final_index)
+            scenario_dfs[name][name] = scenario_dfs[name][name].interpolate(method="time", limit_direction="both")
 
-        # Merge
+        # Step 7: Combine all into a single DataFrame
         combined_df = pd.concat(scenario_dfs.values(), axis=1)
 
-        # Save back to session
+        # Step 8: Save back to session state
         for name in combined_df.columns:
-            st.session_state[name.replace(" ", "_").lower() + "_fill"] = combined_df[name].tolist()
+            key_name = name.replace(" ", "_").lower() + "_fill"
+            st.session_state[f"{prefix}{key_name}"] = combined_df[name].tolist()
 
-        # Update timestamps for downstream plotting and Excel
-        st.session_state["baseline_timestamps"] = [t.strftime("%m-%d %H:%M") for t in combined_df.index]
+        st.session_state[f"{prefix}baseline_timestamps"] = [t.strftime("%m-%d %H:%M") for t in combined_df.index]
 
 
         # === Plotting: Culvert Capacity over Time ===
