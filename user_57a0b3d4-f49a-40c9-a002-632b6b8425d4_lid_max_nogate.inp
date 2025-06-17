@@ -198,7 +198,78 @@ rain_garden      STORAGE    0          0.75       0.5        0          NO
 [LID_USAGE]
 ;;Subcatchment   LID Process      Number  Area       Width      InitSat    FromImp    ToPerv     RptFile                  DrainTo          FromPerv  
 ;;-------------- ---------------- ------- ---------- ---------- ---------- ---------- ---------- ------------------------ ---------------- ----------
-;
+Sub_1          rain_barrel          60    2.58      0       0   28.72       1                       *               *        0
+Sub_1          rain_garden          15     100      0       0       0       1                       *               *    14.61
+Sub_2          rain_barrel         140    2.58      0       0   31.44       1                       *               *        0
+Sub_2          rain_garden          15     100      0       0       0       1                       *               *     9.89
+Sub_3          rain_barrel          41    2.58      0       0   14.15       1                       *               *        0
+Sub_3          rain_garden          10     100      0       0       0       1                       *               *    14.43
+Sub_4          rain_barrel          75    2.58      0       0   28.96       1                       *               *        0
+Sub_4          rain_garden           3     100      0       0       0       1                       *               *     8.76
+Sub_5          rain_barrel          46    2.58      0       0   16.36       1                       *               *        0
+Sub_5          rain_garden           3     100      0       0       0       1                       *               *    38.08
+Sub_6          rain_barrel          51    2.58      0       0   24.61       1                       *               *        0
+Sub_6          rain_garden          15     100      0       0       0       1                       *               *    69.40
+Sub_7          rain_barrel           1    2.58      0       0    1.06       1                       *               *        0
+Sub_9          rain_barrel          94    2.58      0       0   33.85       1                       *               *        0
+Sub_9          rain_garden          33     100      0       0       0       1                       *               *    14.55
+Sub_10         rain_barrel         123    2.58      0       0   50.14       1                       *               *        0
+Sub_11         rain_barrel           8    2.58      0       0   14.47       1                       *               *        0
+Sub_11         rain_garden           6     100      0       0       0       1                       *               *    23.94
+Sub_12         rain_barrel         163    2.58      0       0   42.81       1                       *               *        0
+Sub_12         rain_garden          52     100      0       0       0       1                       *               *    22.20
+Sub_13         rain_barrel         167    2.58      0       0   52.08       1                       *               *        0
+Sub_13         rain_garden          28     100      0       0       0       1                       *               *    14.82
+Sub_14         rain_barrel         480    2.58      0       0   42.69       1                       *               *        0
+Sub_14         rain_garden         259     100      0       0       0       1                       *               *    41.46
+Sub_15         rain_barrel         125    2.58      0       0   39.38       1                       *               *        0
+Sub_15         rain_garden          62     100      0       0       0       1                       *               *    47.60
+Sub_16         rain_barrel          54    2.58      0       0   27.44       1                       *               *        0
+Sub_16         rain_garden           8     100      0       0       0       1                       *               *     6.32
+Sub_17         rain_barrel          91    2.58      0       0   30.87       1                       *               *        0
+Sub_17         rain_garden          52     100      0       0       0       1                       *               *    20.48
+Sub_18         rain_barrel          92    2.58      0       0   53.02       1                       *               *        0
+Sub_18         rain_garden           3     100      0       0       0       1                       *               *    10.74
+Sub_19         rain_barrel         106    2.58      0       0   43.37       1                       *               *        0
+Sub_19         rain_garden          14     100      0       0       0       1                       *               *    34.17
+Sub_20         rain_barrel         361    2.58      0       0   37.80       1                       *               *        0
+Sub_20         rain_garden         122     100      0       0       0       1                       *               *    28.21
+Sub_21         rain_barrel         103    2.58      0       0   40.16       1                       *               *        0
+Sub_21         rain_garden           3     100      0       0       0       1                       *               *     4.85
+Sub_22         rain_barrel          11    2.58      0       0   11.69       1                       *               *        0
+Sub_23         rain_barrel          59    2.58      0       0   21.74       1                       *               *        0
+Sub_23         rain_garden           5     100      0       0       0       1                       *               *     5.33
+Sub_24         rain_barrel         164    2.58      0       0   32.03       1                       *               *        0
+Sub_24         rain_garden          67     100      0       0       0       1                       *               *    31.99
+Sub_25         rain_barrel          82    2.58      0       0   40.29       1                       *               *        0
+Sub_26         rain_barrel         224    2.58      0       0   40.07       1                       *               *        0
+Sub_26         rain_garden          26     100      0       0       0       1                       *               *    11.50
+Sub_27         rain_barrel          79    2.58      0       0   35.55       1                       *               *        0
+Sub_27         rain_garden          14     100      0       0       0       1                       *               *    21.03
+Sub_28         rain_barrel         359    2.58      0       0   33.06       1                       *               *        0
+Sub_28         rain_garden          65     100      0       0       0       1                       *               *    23.87
+Sub_29         rain_barrel         163    2.58      0       0   33.11       1                       *               *        0
+Sub_29         rain_garden          16     100      0       0       0       1                       *               *    17.18
+Sub_30         rain_barrel         101    2.58      0       0   35.75       1                       *               *        0
+Sub_30         rain_garden           9     100      0       0       0       1                       *               *    15.03
+Sub_31         rain_barrel          89    2.58      0       0   29.48       1                       *               *        0
+Sub_31         rain_garden          36     100      0       0       0       1                       *               *    50.13
+Sub_32         rain_barrel         328    2.58      0       0   38.35       1                       *               *        0
+Sub_32         rain_garden          35     100      0       0       0       1                       *               *    23.00
+Sub_33         rain_barrel         125    2.58      0       0   32.35       1                       *               *        0
+Sub_33         rain_garden          10     100      0       0       0       1                       *               *    21.52
+Sub_34         rain_barrel          69    2.58      0       0   31.90       1                       *               *        0
+Sub_34         rain_garden          36     100      0       0       0       1                       *               *    51.87
+Sub_35         rain_barrel          77    2.58      0       0   27.45       1                       *               *        0
+Sub_35         rain_garden          35     100      0       0       0       1                       *               *    48.42
+Sub_36         rain_barrel          43    2.58      0       0   41.70       1                       *               *        0
+Sub_36         rain_garden          36     100      0       0       0       1                       *               *    57.21
+Sub_37         rain_barrel          62    2.58      0       0   29.26       1                       *               *        0
+Sub_37         rain_garden          17     100      0       0       0       1                       *               *    46.98
+Sub_38         rain_barrel         106    2.58      0       0   22.80       1                       *               *        0
+Sub_38         rain_garden          30     100      0       0       0       1                       *               *    29.59
+Sub_39         rain_barrel         252    2.58      0       0   25.82       1                       *               *        0
+Sub_39         rain_garden         207     100      0       0       0       1                       *               *    45.51
 
 [JUNCTIONS]
 ;;Name           Elevation  MaxDepth   InitDepth  SurDepth   Aponded   
@@ -248,7 +319,7 @@ J96              -1.968     5.153      0          0          0
 [OUTFALLS]
 ;;Name           Elevation  Type       Stage Data       Gated    Route To        
 ;;-------------- ---------- ---------- ---------------- -------- ----------------
-outfall          -6.3       TIMESERIES tide             YES                      
+outfall          -6.3       TIMESERIES tide             NO                      
 
 [STORAGE]
 ;;Name           Elev.    MaxDepth   InitDepth  Shape       Curve Name/Params            SurDepth Fevap    Psi      Ksat     IMD     
@@ -444,54 +515,54 @@ rain_gage_timeseries 05/31/2025 23:00 0.00000
 rain_gage_timeseries 05/31/2025 23:15 0.00000
 rain_gage_timeseries 05/31/2025 23:30 0.00000
 rain_gage_timeseries 05/31/2025 23:45 0.00000
-rain_gage_timeseries 06/01/2025 00:00 0.00000
-rain_gage_timeseries 06/01/2025 00:15 0.00000
-rain_gage_timeseries 06/01/2025 00:30 0.00000
-rain_gage_timeseries 06/01/2025 00:45 0.00000
-rain_gage_timeseries 06/01/2025 01:00 0.00000
-rain_gage_timeseries 06/01/2025 01:15 0.00000
-rain_gage_timeseries 06/01/2025 01:30 0.00000
-rain_gage_timeseries 06/01/2025 01:45 0.00000
-rain_gage_timeseries 06/01/2025 02:00 0.00000
-rain_gage_timeseries 06/01/2025 02:15 0.00000
-rain_gage_timeseries 06/01/2025 02:30 0.00000
-rain_gage_timeseries 06/01/2025 02:45 0.00000
-rain_gage_timeseries 06/01/2025 03:00 0.00453
-rain_gage_timeseries 06/01/2025 03:15 0.00957
-rain_gage_timeseries 06/01/2025 03:30 0.01890
-rain_gage_timeseries 06/01/2025 03:45 0.03488
-rain_gage_timeseries 06/01/2025 04:00 0.06012
-rain_gage_timeseries 06/01/2025 04:15 0.09680
-rain_gage_timeseries 06/01/2025 04:30 0.14562
-rain_gage_timeseries 06/01/2025 04:45 0.20465
-rain_gage_timeseries 06/01/2025 05:00 0.26867
-rain_gage_timeseries 06/01/2025 05:15 0.32952
-rain_gage_timeseries 06/01/2025 05:30 0.37757
-rain_gage_timeseries 06/01/2025 05:45 0.40416
-rain_gage_timeseries 06/01/2025 06:00 0.40416
-rain_gage_timeseries 06/01/2025 06:15 0.37757
-rain_gage_timeseries 06/01/2025 06:30 0.32952
-rain_gage_timeseries 06/01/2025 06:45 0.26867
-rain_gage_timeseries 06/01/2025 07:00 0.20465
-rain_gage_timeseries 06/01/2025 07:15 0.14562
-rain_gage_timeseries 06/01/2025 07:30 0.09680
-rain_gage_timeseries 06/01/2025 07:45 0.06012
-rain_gage_timeseries 06/01/2025 08:00 0.03488
-rain_gage_timeseries 06/01/2025 08:15 0.01890
-rain_gage_timeseries 06/01/2025 08:30 0.00957
-rain_gage_timeseries 06/01/2025 08:45 0.00453
-rain_gage_timeseries 06/01/2025 09:00 0.00000
-rain_gage_timeseries 06/01/2025 09:15 0.00000
-rain_gage_timeseries 06/01/2025 09:30 0.00000
-rain_gage_timeseries 06/01/2025 09:45 0.00000
-rain_gage_timeseries 06/01/2025 10:00 0.00000
-rain_gage_timeseries 06/01/2025 10:15 0.00000
-rain_gage_timeseries 06/01/2025 10:30 0.00000
-rain_gage_timeseries 06/01/2025 10:45 0.00000
-rain_gage_timeseries 06/01/2025 11:00 0.00000
-rain_gage_timeseries 06/01/2025 11:15 0.00000
-rain_gage_timeseries 06/01/2025 11:30 0.00000
-rain_gage_timeseries 06/01/2025 11:45 0.00000
+rain_gage_timeseries 06/01/2025 00:00 0.00325
+rain_gage_timeseries 06/01/2025 00:15 0.00473
+rain_gage_timeseries 06/01/2025 00:30 0.00676
+rain_gage_timeseries 06/01/2025 00:45 0.00952
+rain_gage_timeseries 06/01/2025 01:00 0.01320
+rain_gage_timeseries 06/01/2025 01:15 0.01798
+rain_gage_timeseries 06/01/2025 01:30 0.02412
+rain_gage_timeseries 06/01/2025 01:45 0.03181
+rain_gage_timeseries 06/01/2025 02:00 0.04129
+rain_gage_timeseries 06/01/2025 02:15 0.05273
+rain_gage_timeseries 06/01/2025 02:30 0.06624
+rain_gage_timeseries 06/01/2025 02:45 0.08187
+rain_gage_timeseries 06/01/2025 03:00 0.09955
+rain_gage_timeseries 06/01/2025 03:15 0.11910
+rain_gage_timeseries 06/01/2025 03:30 0.14018
+rain_gage_timeseries 06/01/2025 03:45 0.16232
+rain_gage_timeseries 06/01/2025 04:00 0.18493
+rain_gage_timeseries 06/01/2025 04:15 0.20727
+rain_gage_timeseries 06/01/2025 04:30 0.22857
+rain_gage_timeseries 06/01/2025 04:45 0.24797
+rain_gage_timeseries 06/01/2025 05:00 0.26467
+rain_gage_timeseries 06/01/2025 05:15 0.27794
+rain_gage_timeseries 06/01/2025 05:30 0.28714
+rain_gage_timeseries 06/01/2025 05:45 0.29186
+rain_gage_timeseries 06/01/2025 06:00 0.29186
+rain_gage_timeseries 06/01/2025 06:15 0.28714
+rain_gage_timeseries 06/01/2025 06:30 0.27794
+rain_gage_timeseries 06/01/2025 06:45 0.26467
+rain_gage_timeseries 06/01/2025 07:00 0.24797
+rain_gage_timeseries 06/01/2025 07:15 0.22857
+rain_gage_timeseries 06/01/2025 07:30 0.20727
+rain_gage_timeseries 06/01/2025 07:45 0.18493
+rain_gage_timeseries 06/01/2025 08:00 0.16232
+rain_gage_timeseries 06/01/2025 08:15 0.14018
+rain_gage_timeseries 06/01/2025 08:30 0.11910
+rain_gage_timeseries 06/01/2025 08:45 0.09955
+rain_gage_timeseries 06/01/2025 09:00 0.08187
+rain_gage_timeseries 06/01/2025 09:15 0.06624
+rain_gage_timeseries 06/01/2025 09:30 0.05273
+rain_gage_timeseries 06/01/2025 09:45 0.04129
+rain_gage_timeseries 06/01/2025 10:00 0.03181
+rain_gage_timeseries 06/01/2025 10:15 0.02412
+rain_gage_timeseries 06/01/2025 10:30 0.01798
+rain_gage_timeseries 06/01/2025 10:45 0.01320
+rain_gage_timeseries 06/01/2025 11:00 0.00952
+rain_gage_timeseries 06/01/2025 11:15 0.00676
+rain_gage_timeseries 06/01/2025 11:30 0.00473
+rain_gage_timeseries 06/01/2025 11:45 0.00325
 rain_gage_timeseries 06/01/2025 12:00 0.00000
 rain_gage_timeseries 06/01/2025 12:15 0.00000
 rain_gage_timeseries 06/01/2025 12:30 0.00000
