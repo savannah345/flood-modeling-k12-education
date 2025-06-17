@@ -28,7 +28,6 @@ packaging==24.2
 pandas==2.2.3
 pillow==11.2.1
 protobuf==6.31.1
-psycopg==3.2.9
 psycopg-binary==3.2.9
 psycopg-pool==3.2.6
 pyarrow==20.0.0
