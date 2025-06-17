@@ -191,6 +191,9 @@ else:
         tide_disp_unit    = "meters"
         rain_disp_unit = "centimeters"
 
+    st.session_state[f"{prefix}rain_disp_unit"] = rain_disp_unit
+    st.session_state[f"{prefix}tide_disp_unit"] = tide_disp_unit
+
     # --- Store display values and timestamps for Excel export ---
     st.session_state[f"{prefix}rain_minutes"] = rain_sim_minutes
     st.session_state[f"{prefix}tide_minutes"] = tide_sim_minutes
@@ -1011,6 +1014,9 @@ else:
         # Step 4: Build rainfall and tide time series if available
         rain_time_series = st.session_state.get(f"{prefix}display_rain_curve", [])
         tide_time_series = st.session_state.get(f"{prefix}display_tide_curve", [])
+
+        rain_disp_unit = st.session_state.get(f"{prefix}rain_disp_unit", "inches")
+        tide_disp_unit = st.session_state.get(f"{prefix}tide_disp_unit", "ft")
 
         # Step 5: Write everything to Excel
         excel_output = io.BytesIO()
