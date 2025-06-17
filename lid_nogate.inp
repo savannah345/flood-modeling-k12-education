@@ -198,12 +198,7 @@ rain_garden      STORAGE    0          0.75       0.5        0          NO
 [LID_USAGE]
 ;;Subcatchment   LID Process      Number  Area       Width      InitSat    FromImp    ToPerv     RptFile                  DrainTo          FromPerv  
 ;;-------------- ---------------- ------- ---------- ---------- ---------- ---------- ---------- ------------------------ ---------------- ----------
-Sub_14         rain_barrel         450    2.58      0       0   40.02       1                       *               *        0
-Sub_14         rain_garden         250     100      0       0       0       1                       *               *    40.02
-Sub_20         rain_barrel         350    2.58      0       0   36.64       1                       *               *        0
-Sub_20         rain_garden         100     100      0       0       0       1                       *               *    23.12
-Sub_39         rain_barrel         200    2.58      0       0   20.50       1                       *               *        0
-Sub_39         rain_garden         200     100      0       0       0       1                       *               *    43.97
+Sub_7          rain_barrel           1    2.58      0       0    1.06       1                       *               *        0
 
 [JUNCTIONS]
 ;;Name           Elevation  MaxDepth   InitDepth  SurDepth   Aponded   
@@ -329,9 +324,9 @@ C68_2            J27              J9               19.173     0.01       -2.1614
 ;24''
 C69              J9               J10              52         0.01       -2.196     -2.3       0          0         
 ;60''X120*
-C70_1            J10              J14              279.891    0.01       -6.287     -6.299752529212 0     0         
+C70_1            J10              J14              279.891    0.01       -6.287     -6.299752529212 1000     0         
 ;60''X120*
-C70_2            J14              outfall          5.47       0.01       -6.299752529212 -6.3  0          0         
+C70_2            J14              outfall          5.47       0.01       -6.299752529212 -6.3  1000          0         
 ;60''X96''
 C78              J30              J18              281        0.01       -6.2589    -6.287     0          0         
 ;60''X96''

@@ -1,6 +1,7 @@
 aenum==3.1.11
 altair==5.5.0
 attrs==25.3.0
+bcrypt==4.3.0
 blinker==1.9.0
 cachetools==5.5.2
 certifi==2025.4.26
@@ -20,6 +21,7 @@ julian==0.14
 kiwisolver==1.4.8
 MarkupSafe==3.0.2
 matplotlib==3.10.3
+mpld3==0.5.10
 narwhals==1.41.0
 numpy==2.2.6
 openpyxl==3.1.5
@@ -27,6 +29,7 @@ packaging==24.2
 pandas==2.2.3
 pillow==11.2.1
 protobuf==6.31.1
+psycopg2==2.9.10
 pyarrow==20.0.0
 pydeck==0.9.1
 pyparsing==3.2.3
@@ -50,4 +53,3 @@ tzdata==2025.2
 urllib3==2.4.0
 watchdog==6.0.0
 XlsxWriter==3.2.3
-mpld3==0.5.10
