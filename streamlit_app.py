@@ -1026,6 +1026,9 @@ else:
             }])
             scenario_summary.to_excel(writer, sheet_name="Scenario Settings", index=False)
 
+            # Convert simulation_date string to datetime
+            sim_start = datetime.strptime(simulation_date, "%m/%d/%Y %H:%M")
+
             # === Rainfall Time Series ===
             rain_minutes = st.session_state.get(f"{prefix}rain_minutes", [])
             if isinstance(rain_time_series, (list, np.ndarray)) and len(rain_time_series) > 0:
@@ -1056,8 +1059,7 @@ else:
             df_balance.to_excel(writer, sheet_name="Water Balance Summary", index=False)
             df_culvert.to_excel(writer, sheet_name="Culvert Capacity", index=False)
 
-            # Convert simulation_date string to datetime
-            sim_start = datetime.strptime(simulation_date, "%m/%d/%Y %H:%M")
+
 
         # Download button
         st.download_button(
