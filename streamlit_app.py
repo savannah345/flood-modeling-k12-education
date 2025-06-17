@@ -736,132 +736,74 @@ else:
             except Exception as e:
                 st.error(f"LID simulation failed: {e}")
 
-    required_keys = [
-        "baseline_fill", "baseline_gate_fill",
-        "lid_fill", "lid_gate_fill",
-        "lid_max_fill", "lid_max_gate_fill",
-        "baseline_timestamps"
+    # === Section Title ===
+    st.subheader("The Capacity of the Pipe Closest to the Outlet over Time (All Scenarios)")
+
+    required_fill_keys = [
+        f"{prefix}baseline_fill",
+        f"{prefix}baseline_gate_fill",
+        f"{prefix}lid_fill",
+        f"{prefix}lid_gate_fill",
+        f"{prefix}lid_max_fill",
+        f"{prefix}lid_max_gate_fill",
+        f"{prefix}baseline_timestamps"
     ]
 
-    # Check all required keys with prefix
+    if all(k in st.session_state for k in required_fill_keys):
+        # === Retrieve and truncate ===
+        ts = st.session_state[f"{prefix}baseline_timestamps"]
+        baseline = st.session_state[f"{prefix}baseline_fill"]
+        baseline_gate = st.session_state[f"{prefix}baseline_gate_fill"]
+        lid = st.session_state[f"{prefix}lid_fill"]
+        lid_gate = st.session_state[f"{prefix}lid_gate_fill"]
+        lid_max = st.session_state[f"{prefix}lid_max_fill"]
+        lid_max_gate = st.session_state[f"{prefix}lid_max_gate_fill"]
 
-    if all(f"{prefix}{key}" in st.session_state for key in required_keys):
+        min_len = min(len(ts), len(baseline), len(baseline_gate), len(lid),
+                    len(lid_gate), len(lid_max), len(lid_max_gate))
 
-        # Step 1: Collect all culvert fill series from session state
-        culvert_series_raw = {
-            "Baseline": st.session_state[f"{prefix}baseline_fill"],
-            "Baseline + Tide Gate": st.session_state[f"{prefix}baseline_gate_fill"],
-            "With LIDs": st.session_state[f"{prefix}lid_fill"],
-            "LIDs + Tide Gate": st.session_state[f"{prefix}lid_gate_fill"],
-            "Max LIDs": st.session_state[f"{prefix}lid_max_fill"],
-            "Max LIDs + Tide Gate": st.session_state[f"{prefix}lid_max_gate_fill"]
-        }
+        time_objects = [datetime.strptime(t, "%m-%d %H:%M") for t in ts[:min_len]]
 
-        # Step 2: Determine the shortest series length
-        min_len = min(len(series) for series in culvert_series_raw.values())
-
-        # Step 3: Truncate each series to this minimum length
-        culvert_series = {
-            name: series[:min_len]
-            for name, series in culvert_series_raw.items()
-        }
-
-        # Step 4: Truncate timestamps to match min_len
-        start_time = datetime.strptime("05/31/2025 12:00", "%m/%d/%Y %H:%M")
-        timestamp_index = [start_time + timedelta(minutes=5 * i) for i in range(min_len)]
-
-        # Step 5: Build DataFrames per scenario
-        scenario_dfs = {
-            name: pd.DataFrame({name: values}, index=timestamp_index)
-            for name, values in culvert_series.items()
-        }
-
-        # Step 6: Interpolate if needed (you can remove this if data is always complete)
-        for name, df in scenario_dfs.items():
-            df[name] = df[name].interpolate(method="time", limit_direction="both")
-
-        # Step 7: Combine all into a single DataFrame
-        combined_df = pd.concat(scenario_dfs.values(), axis=1)
-
-        # Step 8: Save back to session state with consistent keys
-
-        for name, values in culvert_series.items():
-            key = name.replace(" ", "_").lower() + "_fill"
-            st.session_state[f"{prefix}{key}"] = values[:min_len]
-
-        # Step 9: Overwrite the baseline timestamps used for plotting and Excel
-        st.session_state[f"{prefix}baseline_timestamps"] = [
-            t.strftime("%m-%d %H:%M") for t in timestamp_index
-        ]
-
-
-
-        # === Plotting: Culvert Capacity over Time ===
-        st.subheader("The Capacity of the Pipe Closest to the Outlet over Time (All Scenarios)")
-
-        time_labels = st.session_state[f"{prefix}baseline_timestamps"]
-        time_objects = [datetime.strptime(t, "%m-%d %H:%M") for t in time_labels]
-
-
-        # Define a color palette (or use any you prefer)
         colors = {
-            "Baseline": "#141413",             
-            "Baseline + Tide Gate": "#6c6ec9", 
-            "With LIDs": "#F97DE6",            
-            "LIDs + Tide Gate": "#f6b00b",     
-            "Max LIDs": "#62f271",             
-            "Max LIDs + Tide Gate": "#f04a4a"  
+            "Baseline": "#141413",
+            "Baseline + Tide Gate": "#6c6ec9",
+            "With LIDs": "#F97DE6",
+            "LIDs + Tide Gate": "#f6b00b",
+            "Max LIDs": "#62f271",
+            "Max LIDs + Tide Gate": "#f04a4a"
         }
 
-        # Define a distinct style per line
         styles = {
             "Baseline": "-",
             "Baseline + Tide Gate": "-",
             "With LIDs": "-.",
             "LIDs + Tide Gate": "-.",
-            "Max LIDs": "--",     
-            "Max LIDs + Tide Gate": "-" 
+            "Max LIDs": "--",
+            "Max LIDs + Tide Gate": "-"
         }
 
-        # Create the figure
-        fig, ax = plt.subplots(figsize=(10, 5), dpi=100)
-
-        # Plot each line with custom style
-        ax.plot(time_objects, st.session_state[f"{prefix}baseline_fill"],
-                label="Baseline", color=colors["Baseline"], linestyle=styles["Baseline"], linewidth=4)
-
-        ax.plot(time_objects, st.session_state[f"{prefix}baseline_gate_fill"],
-                label="Baseline + Tide Gate", color=colors["Baseline + Tide Gate"], linestyle=styles["Baseline + Tide Gate"], linewidth=4)
-
-        ax.plot(time_objects, st.session_state[f"{prefix}lid_fill"],
-                label="With LIDs", color=colors["With LIDs"], linestyle=styles["With LIDs"], linewidth=4)
-
-        ax.plot(time_objects, st.session_state[f"{prefix}lid_gate_fill"],
-                label="LIDs + Tide Gate", color=colors["LIDs + Tide Gate"], linestyle=styles["LIDs + Tide Gate"], linewidth=4)
-
-        ax.plot(time_objects, st.session_state[f"{prefix}lid_max_fill"],
-                label="Max LIDs", color=colors["Max LIDs"], linestyle=styles["Max LIDs"], linewidth=4)
-
-        ax.plot(time_objects, st.session_state[f"{prefix}lid_max_gate_fill"],
-                label="Max LIDs + Tide Gate", color=colors["Max LIDs + Tide Gate"], linestyle=styles["Max LIDs + Tide Gate"], linewidth=4)
-
+        fig, ax = plt.subplots(figsize=(10, 4))
+        ax.plot(time_objects, baseline[:min_len], styles["Baseline"], label="Baseline", color=colors["Baseline"])
+        ax.plot(time_objects, baseline_gate[:min_len], styles["Baseline + Tide Gate"], label="Baseline + Tide Gate", color=colors["Baseline + Tide Gate"])
+        ax.plot(time_objects, lid[:min_len], styles["With LIDs"], label="With LIDs", color=colors["With LIDs"])
+        ax.plot(time_objects, lid_gate[:min_len], styles["LIDs + Tide Gate"], label="LIDs + Tide Gate", color=colors["LIDs + Tide Gate"])
+        ax.plot(time_objects, lid_max[:min_len], styles["Max LIDs"], label="Max LIDs", color=colors["Max LIDs"])
+        ax.plot(time_objects, lid_max_gate[:min_len], styles["Max LIDs + Tide Gate"], label="Max LIDs + Tide Gate", color=colors["Max LIDs + Tide Gate"])
 
         ax.set_ylabel("Culvert Fill (%)")
         ax.set_xlabel("Time")
         ax.set_ylim(0, 110)
-
-        # Show only hourly ticks
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%#I %p'))
-        ax.xaxis.set_major_locator(mdates.HourLocator())
-        ax.xaxis.set_major_locator(mdates.HourLocator(interval=12))
+        ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%-I %p'))
         fig.autofmt_xdate(rotation=45)
-
-
-        ax.legend()
+        ax.legend(loc="upper right", fontsize=8)
         ax.grid(False)
-        fig.autofmt_xdate()  # Auto-format x-axis for better label spacing
+
         html = mpld3.fig_to_html(fig)
         components.html(html, height=500)
+
+    else:
+        st.info("🔄 Please run all six SWMM scenarios before viewing the culvert capacity plot.")
 
 
     def extract_volumes_from_rpt(rpt_path):
@@ -1039,100 +981,53 @@ else:
         f"{prefix}lid_max_gate_fill"
     ]
 
-    if all(k in st.session_state for k in required_excel_keys):
+    if all(f"{prefix}{k}" in st.session_state for k in required_excel_keys):
 
-        output = io.BytesIO()
+        # Step 1: Get min length across all culvert fills
+        min_len = min(
+            len(st.session_state[f"{prefix}baseline_fill"]),
+            len(st.session_state[f"{prefix}baseline_gate_fill"]),
+            len(st.session_state[f"{prefix}lid_fill"]),
+            len(st.session_state[f"{prefix}lid_gate_fill"]),
+            len(st.session_state[f"{prefix}lid_max_fill"]),
+            len(st.session_state[f"{prefix}lid_max_gate_fill"]),
+            len(st.session_state[f"{prefix}baseline_timestamps"])
+        )
 
-        try:
-            # === 1. Scenario Summary Table ===
-            df_summary = pd.DataFrame([{
-                "Storm Duration (hr)": duration_minutes // 60,
-                "Return Period (yr)": return_period,
-                "Moon Phase": moon_phase,
-                "Tide Alignment": tide_align,
-                "Display Units": unit
-            }])
+        # Step 2: Build culvert dataframe from session state
+        df_culvert = pd.DataFrame({
+            "Timestamp": st.session_state[f"{prefix}baseline_timestamps"][:min_len],
+            "Baseline": st.session_state[f"{prefix}baseline_fill"][:min_len],
+            "Baseline + Tide Gate": st.session_state[f"{prefix}baseline_gate_fill"][:min_len],
+            "With LIDs": st.session_state[f"{prefix}lid_fill"][:min_len],
+            "LIDs + Tide Gate": st.session_state[f"{prefix}lid_gate_fill"][:min_len],
+            "Max LIDs": st.session_state[f"{prefix}lid_max_fill"][:min_len],
+            "Max LIDs + Tide Gate": st.session_state[f"{prefix}lid_max_gate_fill"][:min_len]
+        })
 
-            # === 3. Water Balance Table ===
-            df_balance = st.session_state.get(f"{prefix}df_balance", pd.DataFrame())
+        # Step 3: Retrieve water balance summary
+        df_balance = st.session_state[f"{prefix}df_balance"]
 
-            # === 4. Rainfall & Tide Curves ===
-            df_rain = pd.DataFrame({
-                "Timestamp (min)": st.session_state.get(f"{prefix}rain_minutes", []),
-                f"Rainfall ({'in' if unit == 'U.S. Customary' else 'cm'})": st.session_state.get(f"{prefix}display_rain_curve", [])
-            })
+        # Step 4: Build rainfall and tide time series if available
+        rain_time_series = st.session_state.get(f"{prefix}display_rain_curve", [])
+        tide_time_series = st.session_state.get(f"{prefix}display_tide_curve", [])
 
-            df_tide = pd.DataFrame({
-                "Timestamp (min)": st.session_state.get(f"{prefix}tide_minutes", []),
-                f"Tide ({'ft' if unit == 'U.S. Customary' else 'meters'})": st.session_state.get(f"{prefix}display_tide_curve", [])
-            })
+        # Step 5: Write everything to Excel
+        excel_output = io.BytesIO()
+        with pd.ExcelWriter(excel_output, engine="openpyxl") as writer:
+            df_balance.to_excel(writer, sheet_name="Water Balance Summary", index=False)
+            df_culvert.to_excel(writer, sheet_name="Culvert Capacity", index=False)
 
-            # === Write All to Excel ===
-            with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                # Write summary info
-                start_row = 0
-                df_summary.to_excel(writer, sheet_name="Scenario Summary", index=False, startrow=start_row)
-                start_row += len(df_summary) + 3
-                
-                if not df_balance.empty:
-                    unit_label = "m³" if convert_to_m3 else "ft³"
-                    df_balance_display = df_balance.copy()
-                    df_balance_display.columns = [f"{col} ({unit_label})" for col in df_balance.columns]
-                    
-                    df_balance_display.reset_index().to_excel(
-                        writer, sheet_name="Scenario Summary", index=False, startrow=start_row
-                    )
+            if rain_time_series:
+                pd.DataFrame(rain_time_series, columns=["Timestamp", "Rainfall"]).to_excel(writer, sheet_name="Rainfall Event", index=False)
 
-                # Write rainfall and tide curves
-                if not df_rain.empty:
-                    df_rain.to_excel(writer, sheet_name="Rainfall Curve", index=False)
+            if tide_time_series:
+                pd.DataFrame(tide_time_series, columns=["Timestamp", "Tide"]).to_excel(writer, sheet_name="Tide Event", index=False)
 
-                if not df_tide.empty:
-                    df_tide.to_excel(writer, sheet_name="Tide Curve", index=False)
-
-                # === 5. Culvert Fill % ===
-                culvert_keys = [
-                    f"{prefix}baseline_timestamps",
-                    f"{prefix}baseline_fill",
-                    f"{prefix}baseline_gate_fill",
-                    f"{prefix}lid_fill",
-                    f"{prefix}lid_gate_fill",
-                    f"{prefix}lid_max_fill",
-                    f"{prefix}lid_max_gate_fill"
-                ]
-
-                if all(k in st.session_state for k in culvert_keys):
-                    # Step 1: Get lengths of all fill series (exclude timestamps)
-                    fill_keys = [k for k in culvert_keys if "timestamps" not in k]
-                    lengths = [len(st.session_state[k]) for k in fill_keys]
-                    min_len = min(lengths)
-
-                    # Step 2: Truncate all fill series and timestamps to min_len
-                    df_culvert = pd.DataFrame({
-                        "Timestamp": st.session_state[f"{prefix}baseline_timestamps"][:min_len],
-                        "Baseline": st.session_state[f"{prefix}baseline_fill"][:min_len],
-                        "Baseline + Tide Gate": st.session_state[f"{prefix}baseline_gate_fill"][:min_len],
-                        "With LIDs": st.session_state[f"{prefix}lid_fill"][:min_len],
-                        "LIDs + Tide Gate": st.session_state[f"{prefix}lid_gate_fill"][:min_len],
-                        "Max LIDs": st.session_state[f"{prefix}lid_max_fill"][:min_len],
-                        "Max LIDs + Tide Gate": st.session_state[f"{prefix}lid_max_gate_fill"][:min_len]
-                    })
-
-                    # Step 3: Write to Excel
-                    df_culvert.to_excel(writer, sheet_name="Culvert Capacity", index=False)
-
-            # Reset stream and allow download
-            output.seek(0)
-
-            st.download_button(
-                label="📥 Download Full Excel Report",
-                data=output,
-                file_name="FloodSimulationReport.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-
-        except Exception as e:
-            st.error(f"Failed to create Excel report: {e}")
-
-
+        st.download_button(
+            label="📥 Download Scenario Results (Excel)",
+            data=excel_output.getvalue(),
+            file_name="CoastWise_Results.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
