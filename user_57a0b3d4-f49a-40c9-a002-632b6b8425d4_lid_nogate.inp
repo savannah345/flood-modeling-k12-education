@@ -198,7 +198,8 @@ rain_garden      STORAGE    0          0.75       0.5        0          NO
 [LID_USAGE]
 ;;Subcatchment   LID Process      Number  Area       Width      InitSat    FromImp    ToPerv     RptFile                  DrainTo          FromPerv  
 ;;-------------- ---------------- ------- ---------- ---------- ---------- ---------- ---------- ------------------------ ---------------- ----------
-Sub_5          rain_barrel          10    2.58      0       0    3.56       1                       *               *        0
+Sub_14         rain_barrel         200    2.58      0       0   17.79       1                       *               *        0
+Sub_14         rain_garden         250     100      0       0       0       1                       *               *    40.02
 
 [JUNCTIONS]
 ;;Name           Elevation  MaxDepth   InitDepth  SurDepth   Aponded   

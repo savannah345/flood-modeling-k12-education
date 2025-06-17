@@ -350,15 +350,15 @@ else:
             fill_gate,   time_gate,   rpt2 = run_swmm_scenario(f"{prefix}baseline_gate",   rain_lines, tide_lines, lid_lines, "YES")
 
             # Save culvert depth fills + time
-            st.session_state["baseline_fill"] = fill_nogate
-            st.session_state["baseline_timestamps"] = time_nogate
-            st.session_state["baseline_gate_fill"] = fill_gate
+            st.session_state[f"{prefix}baseline_fill"] = fill_nogate
+            st.session_state[f"{prefix}baseline_timestamps"] = time_nogate
+            st.session_state[f"{prefix}baseline_gate_fill"] = fill_gate
 
             # Parse runoff data from RPTs
             df1 = extract_runoff_and_lid_data(rpt1)
             df2 = extract_runoff_and_lid_data(rpt2)
-            st.session_state["df_base_nogate"] = df1
-            st.session_state["df_base_gate"] = df2
+            st.session_state[f"{prefix}df_base_nogate"] = df1
+            st.session_state[f"{prefix}df_base_gate"] = df2
 
             # Unit conversion for final display table
             if unit == "U.S. Customary":
@@ -374,7 +374,7 @@ else:
                     f"Pervious Runoff ({unit})": df1["Pervious Runoff   (in)"] * factor
                 })
 
-            st.session_state["baseline_df"] = df_disp
+            st.session_state[f"{prefix}baseline_df"] = df_disp
             st.success("Baseline scenarios complete!")
 
         except Exception as e:
@@ -430,10 +430,10 @@ else:
         use_container_width=True
     )
 
-    if "df_base_nogate" in st.session_state:
+    if f"{prefix}df_base_nogate" in st.session_state:
         st.subheader("Baseline Runoff (No Tide Gate)")
 
-        df_no = st.session_state["df_base_nogate"].copy()
+        df_no = st.session_state[f"{prefix}df_base_nogate"].copy()
 
         # Optional unit conversion
         if unit != "U.S. Customary":
@@ -579,24 +579,24 @@ else:
         fill_max_gate, _, rpt6 = run_swmm_scenario(f"{prefix}lid_max_gate", rain_lines, tide_lines, lid_lines, "YES")
 
         # Store time series
-        st.session_state["lid_max_fill"] = fill_max_lid
-        st.session_state["lid_max_timestamps"] = time_max_lid
-        st.session_state["lid_max_gate_fill"] = fill_max_gate
+        st.session_state[f"{prefix}lid_max_fill"] = fill_max_lid
+        st.session_state[f"{prefix}lid_max_timestamps"] = time_max_lid
+        st.session_state[f"{prefix}lid_max_gate_fill"] = fill_max_gate
 
         # Extract runoff summary
-        st.session_state["df_lid_max_nogate"] = extract_runoff_and_lid_data(rpt5)
-        st.session_state["df_lid_max_gate"] = extract_runoff_and_lid_data(rpt6)
+        st.session_state[f"{prefix}df_lid_max_nogate"] = extract_runoff_and_lid_data(rpt5)
+        st.session_state[f"{prefix}df_lid_max_gate"] = extract_runoff_and_lid_data(rpt6)
 
         # Compute total cost
         max_total_cost = (df["Max_RG_DEM_Considered"].sum() * 250 +
                         df["MaxNumber_RB"].sum() * 100 +
                         250000)  # include tide gate
-        st.session_state["max_total_cost"] = max_total_cost
+        st.session_state[f"{prefix}max_total_cost"] = max_total_cost
 
         st.success(f"Max LID scenarios complete!")
 
-    if "user_lid_config" not in st.session_state:
-        st.session_state["user_lid_config"] = {}
+    if f"{prefix}user_lid_config" not in st.session_state:
+        st.session_state[f"{prefix}user_lid_config"] = {}
 
     available_subs = df["NAME"].tolist()
 
@@ -636,7 +636,7 @@ else:
             with c4: st.markdown(f"<div style='text-align:center'>{rb_max}</div>", unsafe_allow_html=True)
             with c5: rb_val = st.number_input("Rain Barrel", 0, rb_max, 0, step=5, key=f"rb_{sub}", label_visibility="collapsed")
             st.markdown("</div>", unsafe_allow_html=True)
-            st.session_state["user_lid_config"][sub] = {
+            st.session_state[f"{prefix}user_lid_config"][sub] = {
                 "rain_gardens": rg_val,
                 "rain_barrels": rb_val
             }
@@ -647,7 +647,7 @@ else:
         cost_breakdown = []
 
         # 1) Per‐subcatchment costs
-        for sub, cfg in st.session_state["user_lid_config"].items():
+        for sub, cfg in st.session_state[f"{prefix}user_lid_config"].items():
             rg = cfg.get("rain_gardens", 0)
             rb = cfg.get("rain_barrels", 0)
             if rg > 0:
@@ -669,7 +669,7 @@ else:
 
         # 2) Tide gate cost
         # If user placed any LIDs, we assume tide gate is used because both LID runs include it
-        if any(v["rain_gardens"] > 0 or v["rain_barrels"] > 0 for v in st.session_state["user_lid_config"].values()):
+        if any(v["rain_gardens"] > 0 or v["rain_barrels"] > 0 for v in st.session_state[f"{prefix}user_lid_config"].values()):
             tide_cost = 250000
             cost_breakdown.append({
                 "Subcatchment": "Watershed Outfall",
@@ -677,7 +677,7 @@ else:
                 "Cost": tide_cost
             })
             total_cost += tide_cost
-        st.session_state["user_total_cost"] = total_cost
+        st.session_state[f"{prefix}user_total_cost"] = total_cost
 
         if cost_breakdown:
             cost_df = pd.DataFrame(cost_breakdown)
@@ -706,13 +706,13 @@ else:
 
     # === Run Scenario With Selected LID Improvements ===
     if st.button("Run Scenario With Selected LID Improvements"):
-        if "baseline_df" not in st.session_state:
+        if f"{prefix}baseline_df" not in st.session_state:
             st.error("Please run the baseline scenario first.")
         else:
             try:
                 rain_lines = format_timeseries("rain_gage_timeseries", rain_sim_minutes, rain_sim_curve, simulation_date)
                 tide_lines = format_timeseries("tide", tide_sim_minutes, tide_sim_curve, simulation_date)
-                lid_lines = generate_lid_usage_lines(st.session_state["user_lid_config"])
+                lid_lines = generate_lid_usage_lines(st.session_state[f"{prefix}user_lid_config"])
                 if not lid_lines:
                     st.warning("No LIDs selected.")
                     st.stop()
@@ -722,14 +722,14 @@ else:
                 fill_lid_gate, _, rpt4   = run_swmm_scenario(f"{prefix}lid_gate", rain_lines, tide_lines, lid_lines, "YES")
 
                 # Store simulation results
-                st.session_state["lid_fill"] = fill_lid
-                st.session_state["lid_timestamps"] = time_lid
-                st.session_state["lid_gate_fill"] = fill_lid_gate
+                st.session_state[f"{prefix}lid_fill"] = fill_lid
+                st.session_state[f"{prefix}lid_timestamps"] = time_lid
+                st.session_state[f"{prefix}lid_gate_fill"] = fill_lid_gate
 
                 df_lid = extract_runoff_and_lid_data(rpt3)
                 df_lid_gate = extract_runoff_and_lid_data(rpt4)
-                st.session_state["df_lid_nogate"] = df_lid
-                st.session_state["df_lid_gate"] = df_lid_gate
+                st.session_state[f"{prefix}df_lid_nogate"] = df_lid
+                st.session_state[f"{prefix}df_lid_gate"] = df_lid_gate
 
                 st.success("LID scenarios complete!")
 
@@ -799,7 +799,7 @@ else:
         # === Plotting: Culvert Capacity over Time ===
         st.subheader("The Capacity of the Pipe Closest to the Outlet over Time (All Scenarios)")
 
-        time_labels = st.session_state["baseline_timestamps"]
+        time_labels = st.session_state[f"{prefix}baseline_timestamps"]
         time_objects = [datetime.strptime(t, "%m-%d %H:%M") for t in time_labels]
 
 
@@ -969,8 +969,8 @@ else:
                         .replace(" ", "_")
                     )
 
-                    st.session_state[f"outflow_{key}"] = metrics["Outflow (gallons)"]
-                    st.session_state[f"flood_{key}"] = metrics["Flooding (ac-ft)"]
+                    st.session_state[f"{prefix}outflow_{key}"] = metrics["Outflow (gallons)"]
+                    st.session_state[f"{prefix}flood_{key}"] = metrics["Flooding (ac-ft)"]
 
             except Exception as e:
                 print(f"Could not process {name}: {e}")
@@ -1007,14 +1007,14 @@ else:
         cost_lookup = {
             "Baseline (No Tide Gate)": 0,
             "Baseline + Tide Gate": 250000,
-            "LID (No Tide Gate)": st.session_state.get("user_total_cost", 0) - 250000,
-            "LID + Tide Gate": st.session_state.get("user_total_cost", 0),
-            "Max LID (No Tide Gate)": st.session_state.get("max_total_cost", 0) - 250000,
-            "Max LID + Tide Gate": st.session_state.get("max_total_cost", 0),
+            "LID (No Tide Gate)": st.session_state.get(f"{prefix}user_total_cost", 0) - 250000,
+            "LID + Tide Gate": st.session_state.get(f"{prefix}user_total_cost", 0),
+            "Max LID (No Tide Gate)": st.session_state.get(f"{prefix}max_total_cost", 0) - 250000,
+            "Max LID + Tide Gate": st.session_state.get(f"{prefix}max_total_cost", 0),
         }
         df_converted["Total Cost ($)"] = df_converted.index.map(cost_lookup).astype(int)
 
-        st.session_state["df_balance"] = df_converted
+        st.session_state[f"{prefix}df_balance"] = df_converted
 
         # === Show summary only if user clicks ===
         if st.button("📊 Show Water Balance Summary Table"):
@@ -1054,17 +1054,17 @@ else:
             }])
 
             # === 3. Water Balance Table ===
-            df_balance = st.session_state.get("df_balance", pd.DataFrame())
+            df_balance = st.session_state.get(f"{prefix}df_balance", pd.DataFrame())
 
             # === 4. Rainfall & Tide Curves ===
             df_rain = pd.DataFrame({
                 "Timestamp (min)": st.session_state.get(f"{prefix}rain_minutes", []),
-                f"Rainfall ({'in' if unit == 'U.S. Customary' else 'cm'})": st.session_state.get("display_rain_curve", [])
+                f"Rainfall ({'in' if unit == 'U.S. Customary' else 'cm'})": st.session_state.get(f"{prefix}display_rain_curve", [])
             })
 
             df_tide = pd.DataFrame({
                 "Timestamp (min)": st.session_state.get(f"{prefix}tide_minutes", []),
-                f"Tide ({'ft' if unit == 'U.S. Customary' else 'meters'})": st.session_state.get("display_tide_curve", [])
+                f"Tide ({'ft' if unit == 'U.S. Customary' else 'meters'})": st.session_state.get(f"{prefix}display_tide_curve", [])
             })
 
             # === Write All to Excel ===
