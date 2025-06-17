@@ -187,7 +187,7 @@ else:
         rain_disp_unit = "inches"
     elif unit == "Metric (SI)":
         display_rain_curve = rain_sim_curve * 2.54
-        display_tide_curve = tide_sim_curve * 0.3048 * 100
+        display_tide_curve = tide_sim_curve * 0.3048
         tide_disp_unit    = "meters"
         rain_disp_unit = "centimeters"
 
