@@ -1015,19 +1015,45 @@ else:
         # Step 5: Write everything to Excel
         excel_output = io.BytesIO()
         with pd.ExcelWriter(excel_output, engine="openpyxl") as writer:
+            # Write water balance and culvert sheets
             df_balance.to_excel(writer, sheet_name="Water Balance Summary", index=False)
             df_culvert.to_excel(writer, sheet_name="Culvert Capacity", index=False)
 
+            # Convert simulation_date string to datetime
+            sim_start = datetime.strptime(simulation_date, "%m/%d/%Y %H:%M")
+
+            # === Rainfall Time Series ===
+            rain_minutes = st.session_state.get(f"{prefix}rain_minutes", [])
             if isinstance(rain_time_series, (list, np.ndarray)) and len(rain_time_series) > 0:
-                pd.DataFrame(rain_time_series, columns=["Timestamp", "Rainfall"]).to_excel(writer, sheet_name="Rainfall Event", index=False)
+                rain_timestamps = [
+                    (sim_start + timedelta(minutes=int(m))).strftime("%m/%d/%Y %H:%M")
+                    for m in rain_minutes[:len(rain_time_series)]
+                ]
+                df_rain = pd.DataFrame({
+                    "Timestamp": rain_timestamps,
+                    "Rainfall": rain_time_series
+                })
+                df_rain.to_excel(writer, sheet_name="Rainfall Event", index=False)
 
+            # === Tide Time Series ===
+            tide_minutes = st.session_state.get(f"{prefix}tide_minutes", [])
             if isinstance(tide_time_series, (list, np.ndarray)) and len(tide_time_series) > 0:
-                pd.DataFrame(tide_time_series, columns=["Timestamp", "Tide"]).to_excel(writer, sheet_name="Tide Event", index=False)
+                tide_timestamps = [
+                    (sim_start + timedelta(minutes=int(m))).strftime("%m/%d/%Y %H:%M")
+                    for m in tide_minutes[:len(tide_time_series)]
+                ]
+                df_tide = pd.DataFrame({
+                    "Timestamp": tide_timestamps,
+                    "Tide": tide_time_series
+                })
+                df_tide.to_excel(writer, sheet_name="Tide Event", index=False)
 
+        # Download button
         st.download_button(
             label="Download Scenario Results (Excel)",
             data=excel_output.getvalue(),
             file_name="CoastWise_Results.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
