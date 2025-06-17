@@ -972,13 +972,13 @@ else:
 
     required_excel_keys = [
         "df_balance",
-        f"{prefix}baseline_timestamps",
-        f"{prefix}baseline_fill",
-        f"{prefix}baseline_gate_fill",
-        f"{prefix}lid_fill",
-        f"{prefix}lid_gate_fill",
-        f"{prefix}lid_max_fill",
-        f"{prefix}lid_max_gate_fill"
+        "baseline_timestamps",
+        "baseline_fill",
+        "baseline_gate_fill",
+        "lid_fill",
+        "lid_gate_fill",
+        "lid_max_fill",
+        "lid_max_gate_fill"
     ]
 
     if all(f"{prefix}{k}" in st.session_state for k in required_excel_keys):
