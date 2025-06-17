@@ -1038,7 +1038,7 @@ else:
                 ]
                 df_rain = pd.DataFrame({
                     "Timestamp": rain_timestamps,
-                    "Rainfall": rain_time_series
+                    "Rainfall ({rain_disp_unit})": rain_time_series
                 })
                 df_rain.to_excel(writer, sheet_name="Rainfall Event", index=False)
 
@@ -1051,11 +1051,13 @@ else:
                 ]
                 df_tide = pd.DataFrame({
                     "Timestamp": tide_timestamps,
-                    "Tide": tide_time_series
+                    "Tide ({tide_disp_unit}": tide_time_series
                 })
                 df_tide.to_excel(writer, sheet_name="Tide Event", index=False)
             
             # Write water balance and culvert sheets
+            df_balance = df_balance.reset_index().rename(columns={"index": "Scenario"})
+
             df_balance.to_excel(writer, sheet_name="Water Balance Summary", index=False)
             df_culvert.to_excel(writer, sheet_name="Culvert Capacity", index=False)
 
