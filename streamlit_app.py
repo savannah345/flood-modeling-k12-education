@@ -8,6 +8,7 @@ import re
 import io
 import os
 import shutil 
+import tempfile
 import mpld3
 import os
 import glob
@@ -94,13 +95,6 @@ else:
     st.success(f"Logged in as: {st.session_state['email']}")
     user_id = st.session_state.get("user_id", "guest")
     prefix = f"user_{user_id}_"
-
-    if st.button("🚪 Logout"):
-        delete_user_files(st.session_state["user_id"])
-        st.session_state.clear()
-        st.success("Logged out and cleaned up files.")
-        st.rerun()
-
 
     # === YOUR MAIN APP GOES BELOW HERE ===
     
@@ -238,6 +232,10 @@ else:
     )
     st.altair_chart(tide_chart, use_container_width=True)
 
+    # Create a persistent temp folder ONCE when user logs in
+    if "temp_dir" not in st.session_state:
+        st.session_state.temp_dir = tempfile.mkdtemp()
+
     def run_swmm_scenario(
         scenario_name,
         rain_lines,
@@ -248,9 +246,10 @@ else:
         report_interval=timedelta(minutes=5),
         template_path="swmm_project.inp"
     ):
-        inp_file = f"{scenario_name}.inp"
-        rpt_file = f"{scenario_name}.rpt"
-        out_file = f"{scenario_name}.out"
+        temp_dir = st.session_state.temp_dir
+        inp_path = os.path.join(temp_dir, f"{scenario_name}.inp")
+        rpt_path = os.path.join(temp_dir, f"{scenario_name}.rpt")
+        out_path = os.path.join(temp_dir, f"{scenario_name}.out")
 
         # --- 1. Create .inp file ---
         with open(template_path, "r") as f:
@@ -259,12 +258,13 @@ else:
         text = text.replace("$TIDE_TIMESERIES$", "\n".join(tide_lines))
         text = text.replace("$LID_USAGE$", "\n".join(lid_lines))
         text = text.replace("$TIDE_GATE_CONTROL$", gate_flag)
-        with open(inp_file, "w") as f:
+
+        with open(inp_path, "w") as f:
             f.write(text)
 
         # --- 2. Run simulation ---
         depth_pct, timestamps = [], []
-        with Simulation(inp_file) as sim:
+        with Simulation(inp_path) as sim:
             link = Links(sim)["C70_1"]
             last_report_time = None
             for step in sim:
@@ -275,13 +275,13 @@ else:
                     timestamps.append(current_time.strftime("%m-%d %H:%M"))
                     last_report_time = current_time
 
-        # --- 3. Move .rpt/.out to unique names ---
-        if os.path.exists("updated_model.rpt"):
-            shutil.move("updated_model.rpt", rpt_file)
-        if os.path.exists("updated_model.out"):
-            shutil.move("updated_model.out", out_file)
+        # Optional rename if needed
+        if os.path.exists(os.path.join(temp_dir, "updated_model.rpt")):
+            shutil.move(os.path.join(temp_dir, "updated_model.rpt"), rpt_path)
+        if os.path.exists(os.path.join(temp_dir, "updated_model.out")):
+            shutil.move(os.path.join(temp_dir, "updated_model.out"), out_path)
 
-        return depth_pct, timestamps, rpt_file
+        return depth_pct, timestamps, rpt_path  # so you can use it later
 
     # === Time-series Formatter ===
     def format_timeseries(name, minutes, values, start_datetime):
@@ -793,16 +793,14 @@ else:
         ax.plot(time_objects, lid_max[:min_len], styles["Max LIDs"], label="Max LIDs", color=colors["Max LIDs"], linewidth=4)
         ax.plot(time_objects, lid_max_gate[:min_len], styles["Max LIDs + Tide Gate"], label="Max LIDs + Tide Gate", color=colors["Max LIDs + Tide Gate"], linewidth=4)
 
-
-        # Legend centered below the plot
-        ax.legend(
-            loc="lower left",
+        legend = ax.legend(
+            loc="upper left",
             fontsize=14,
-            frameon=False,
-            ncol=1  # Spread across multiple columns
+            frameon=True,
+            ncol=2  
         )
-
-
+        legend.get_frame().set_facecolor("white") 
+        legend.get_frame().set_edgecolor("black") 
 
         ax.set_ylabel("Culvert Fill (%)", fontsize=14)
         ax.set_xlabel("Time", fontsize=14)
@@ -810,7 +808,6 @@ else:
         ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%-I %p'))
         ax.tick_params(axis='both', labelsize=12)
-
         
         fig.autofmt_xdate(rotation=45)
         ax.grid(False)
@@ -897,14 +894,15 @@ else:
     # === Water Balance Summary (Only show if RPT data exists) ===
     df_balance = None
     results = []
+    temp_dir = st.session_state.temp_dir
 
     rpt_scenarios = {
-        "Baseline (No Tide Gate)": f"{prefix}baseline_nogate.rpt",
-        "Baseline + Tide Gate": f"{prefix}baseline_gate.rpt",
-        "LID (No Tide Gate)": f"{prefix}lid_nogate.rpt",
-        "LID + Tide Gate": f"{prefix}lid_gate.rpt",
-        "Max LID (No Tide Gate)": f"{prefix}lid_max_nogate.rpt",
-        "Max LID + Tide Gate": f"{prefix}lid_max_gate.rpt"
+        "Baseline (No Tide Gate)": os.path.join(temp_dir, f"{prefix}baseline_nogate.rpt"),
+        "Baseline + Tide Gate": os.path.join(temp_dir, f"{prefix}baseline_gate.rpt"),
+        "LID (No Tide Gate)": os.path.join(temp_dir, f"{prefix}lid_nogate.rpt"),
+        "LID + Tide Gate": os.path.join(temp_dir, f"{prefix}lid_gate.rpt"),
+        "Max LID (No Tide Gate)": os.path.join(temp_dir, f"{prefix}lid_max_nogate.rpt"),
+        "Max LID + Tide Gate": os.path.join(temp_dir, f"{prefix}lid_max_gate.rpt")
     }
 
 
@@ -1090,4 +1088,14 @@ else:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
+        if st.button("🚪 Logout"):
+            # Delete temp_dir and all files inside it
+            try:
+                shutil.rmtree(st.session_state.temp_dir)
+            except Exception as e:
+                print(f"Failed to delete temp folder: {e}")
+
+            st.session_state.clear()
+            st.success("Logged out and cleaned up all files.")
+            st.rerun()
 
