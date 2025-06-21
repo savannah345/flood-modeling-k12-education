@@ -1038,8 +1038,7 @@ else:
                 "Return Period (yr)": return_period,
                 "Moon Phase": moon_phase,
                 "Tide Alignment": "High Tide Peak" if align_mode == "peak" else "Low Tide Dip",
-                "Units": unit,
-                "Simulation Start": simulation_date
+                "Units": unit
             }])
             scenario_summary.to_excel(writer, sheet_name="Scenario Settings", index=False)
 
@@ -1075,8 +1074,8 @@ else:
             # Write water balance and culvert sheets
             df_balance = df_balance.reset_index().rename(columns={"index": "Scenario"})
 
-            df_balance.to_excel(writer, sheet_name="Water Balance Summary", index=False)
-            df_culvert.to_excel(writer, sheet_name="Culvert Capacity", index=False)
+            df_balance.to_excel(writer, sheet_name="Scenario Summary", index=False)
+            df_culvert.to_excel(writer, sheet_name="Discharge Pipe Capacity", index=False)
 
 
 
