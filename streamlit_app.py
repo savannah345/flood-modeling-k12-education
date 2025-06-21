@@ -594,7 +594,7 @@ else:
                 del st.session_state[f"rg_{sub}"]
             if f"rb_{sub}" in st.session_state:
                 del st.session_state[f"rb_{sub}"]
-        st.experimental_rerun()
+        st.rerun()
 
 
     if f"{prefix}user_lid_config" not in st.session_state:
