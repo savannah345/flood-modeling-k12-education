@@ -17,6 +17,10 @@ def check_password(password, hashed):
     return bcrypt.checkpw(password.encode(), hashed.encode())
 
 def create_user(email, password):
+    cur.execute("SELECT 1 FROM users WHERE email = %s", (email,))
+    if cur.fetchone():
+        return False  # Email already exists
+    
     hashed = hash_password(password)
     try:
         cur.execute("INSERT INTO users (email, password) VALUES (%s, %s)", (email, hashed))

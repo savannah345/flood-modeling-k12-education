@@ -80,7 +80,7 @@ if "user_id" not in st.session_state:
             if create_user(email, password):
                 st.success("Account created! You can now log in.")
             else:
-                st.error("Email already in use or failed to create account.")
+                st.error("Email already in use.")
 
     with tab3:
         reset_email = st.text_input("Your Email", key="reset_email")
