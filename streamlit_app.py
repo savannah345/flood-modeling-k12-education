@@ -32,8 +32,6 @@ st.set_page_config(
     layout="centered"
 )
 
-SESSION_TIMEOUT_MINUTES = 60
-
 # Clean up files
 def delete_user_files(user_id):
     patterns = [f"user_{user_id}_*.inp", f"user_{user_id}_*.rpt", f"user_{user_id}_*.out"]
@@ -43,15 +41,6 @@ def delete_user_files(user_id):
                 os.remove(file)
             except Exception as e:
                 print(f"Could not delete {file}: {e}")
-
-# Session timeout
-if "user_id" in st.session_state:
-    elapsed = (time.time() - st.session_state.get("login_time", 0)) / 60
-    if elapsed > SESSION_TIMEOUT_MINUTES:
-        delete_user_files(st.session_state["user_id"])
-        st.session_state.clear()
-        st.warning("Auto-logged out after 60 minutes of inactivity.")
-        st.stop()
 
 # Login block
 if "user_id" not in st.session_state:
@@ -598,6 +587,16 @@ else:
 
         st.success(f"Max LID scenarios complete!")
 
+    if st.button("Clear LID Selections"):
+        st.session_state[f"{prefix}user_lid_config"] = {}
+        for sub in df["NAME"]:
+            if f"rg_{sub}" in st.session_state:
+                del st.session_state[f"rg_{sub}"]
+            if f"rb_{sub}" in st.session_state:
+                del st.session_state[f"rb_{sub}"]
+        st.experimental_rerun()
+
+
     if f"{prefix}user_lid_config" not in st.session_state:
         st.session_state[f"{prefix}user_lid_config"] = {}
 
@@ -1029,6 +1028,22 @@ else:
         rain_disp_unit = st.session_state.get(f"{prefix}rain_disp_unit", "inches")
         tide_disp_unit = st.session_state.get(f"{prefix}tide_disp_unit", "ft")
 
+        # Prepare user's LID selections (if any)
+        lid_config = st.session_state.get(f"{prefix}user_lid_config", {})
+        if lid_config:
+            lid_rows = []
+            for sub, cfg in lid_config.items():
+                rg = cfg.get("rain_gardens", 0)
+                rb = cfg.get("rain_barrels", 0)
+                lid_rows.append({
+                    "Subcatchment": sub,
+                    "Selected Rain Gardens": rg,
+                    "Selected Rain Barrels": rb
+                })
+            df_user_lid = pd.DataFrame(lid_rows)
+        else:
+            df_user_lid = pd.DataFrame(columns=["Subcatchment", "Selected Rain Gardens", "Selected Rain Barrels"])
+
         # Step 5: Write everything to Excel
         excel_output = io.BytesIO()
         with pd.ExcelWriter(excel_output, engine="openpyxl") as writer:
@@ -1073,6 +1088,9 @@ else:
             
             # Write water balance and culvert sheets
             df_balance = df_balance.reset_index().rename(columns={"index": "Scenario"})
+
+            # Write custom LID selection (if any)
+            df_user_lid.to_excel(writer, sheet_name="User LID Selections", index=False)
 
             df_balance.to_excel(writer, sheet_name="Scenario Summary", index=False)
             df_culvert.to_excel(writer, sheet_name="Discharge Pipe Capacity", index=False)
