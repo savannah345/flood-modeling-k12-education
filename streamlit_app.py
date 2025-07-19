@@ -89,11 +89,15 @@ else:
     
 
     st.title("CoastWise: A Gamified Watershed Design Toolkit for Coastal Resilience Using the Stormwater Management Model")
+    st.markdown("[📘 View the CoastWise Tutorial](https://docs.google.com/document/d/1xMxoe41xhWPsPlzUIjQP4K9K_vjhjelN0hgvqfoflGY/edit?usp=sharing)")
 
     simulation_date = "05/31/2025 12:00"
     template_inp     = "swmm_project.inp"
 
     # === User Inputs ===
+    unit = st.selectbox("Preferred Units", ["U.S. Customary", "Metric (SI)"])
+    unit_label = "inches" if unit == "U.S. Customary" else "centimeters"
+
     duration_minutes = st.selectbox(
         "Storm Duration",
         options=pf_df["Duration_Minutes"],
@@ -102,16 +106,29 @@ else:
 
     st.subheader("Return Year: think of it like rolling dice - a 10-year storm is like rolling a 10 on a 10-sided die, you might roll it once in 10 tries… or twice… or not at all. But the chance (1/10 = 10%) is always the same each year.") 
 
-    return_period = st.selectbox("Return Year", pf_df.columns[1:])
+    def generate_return_period_labels(duration, unit_type):
+        row = pf_df[pf_df["Duration_Minutes"] == duration]
+        if row.empty:
+            return {}
+        row_data = row.iloc[0]
+        label = "inches" if unit_type == "U.S. Customary" else "centimeters"
+        factor = 1 if unit_type == "U.S. Customary" else 2.54
+        return {
+            col: f"{col}-year storm ({100//int(col)}% chance of occurring each year): {row_data[col]*factor:.2f} {label}"
+            for col in pf_df.columns[1:]
+        }
+
+    return_options = generate_return_period_labels(duration_minutes, unit)
+    return_label = st.selectbox("Return Year", list(return_options.values()))
+    return_period = [k for k, v in return_options.items() if v == return_label][0]
+
     # pf_df values are in inches
     rain_inches = float(pf_df.loc[
         pf_df["Duration_Minutes"] == duration_minutes,
         return_period
     ].values[0])
 
-    unit        = st.selectbox("Preferred Units", ["U.S. Customary", "Metric (SI)"])
-
-
+    
     st.subheader("How Much Water Each Unit Holds")
 
     col1, col2 = st.columns(2)
@@ -132,9 +149,9 @@ else:
         - 4 ft³ = half of a bathtub
         """)
 
-    method      = st.radio("Rainfall Shape", ["Normal", "Randomized"])
+    method = "Normal"
 
-    st.subheader("How to remember the Tides: Spring tides surge higher than Neap tides that nap (lower)") 
+    st.subheader("Neap vs. Spring Tides") 
 
     # Load and display video
     video_file = open('NASA_Tides.mp4', 'rb')
@@ -372,55 +389,6 @@ else:
         except Exception as e:
             st.error(f"Baseline simulation failed: {e}")
 
-    st.subheader("Six Scenario Overview: Tide Gates + Green Infrastructure")
-    st.markdown("""
-    In this project, we will test six scenarios combining two types of flood interventions: **tide gates** and **LID (Low Impact Development) features** like rain gardens and rain barrels.
-
-    #### How Tide Gates Work
-    The **tide gate** acts like a one-way door:
-    - It **blocks tidal water** from backing up into the system during high tide.
-    - It **lets stormwater exit** when pressure inside the pipe is higher than the tide level.
-
-    #### How LID Features Help
-    **Rain gardens and barrels** reduce stormwater earlier in the system:
-    - They **slow down** and **store** runoff close to where it falls.
-    - This reduces how much water reaches the pipes — especially during small and moderate storms.
-    - During **large storms**, their benefit at the outfall is smaller, but still helpful.
-
-    Together, these six scenarios show how **both local solutions (like LIDs)** and **system-wide controls (like tide gates)** are needed to manage flooding—especially in coastal areas where rainfall and tides can overlap.
-
-    """)
-
-    # === Low Impact Developments (LIDs) UI & Cost ===
-    st.subheader("Low Impact Developments (LIDs) options")
-    st.image(
-        "green_infrastructure_options.png",
-        use_container_width=True
-    )
-
-    st.subheader("Low Impact Developments (LIDs) Storage")
-    st.image(
-        "vols.png",
-        use_container_width=True
-    )
-
-    st.subheader("Land Use Land Cover used to determine the maximum number of LIDs for each subcatchment")
-    st.image(
-        "lulc_ledgend.png",
-        use_container_width=True
-    )
-
-    st.subheader("Elevation showing old creek bed & Purple areas indicate where infiltration-based green infrastructure (rain gardens) are not recommended... Low lying areas where water accumulates.")
-    st.image(
-        "comare_dem_infil_stor.png",
-        use_container_width=True
-    )
-
-    st.subheader("Stormwater Pipes, Inlets, and Outlet & Watershed with labeled Subcatchments. Interesting that some subcatchments do not have any nearby infrastructure.")
-    st.image(
-        "pipe_watersheds.png",
-        use_container_width=True
-    )
 
     if f"{prefix}df_base_nogate" in st.session_state:
         st.subheader("Baseline Runoff (No Tide Gate)")
@@ -450,7 +418,7 @@ else:
             "Tide Gate (10'x5')"
         ],
         "Contributing Area Assumption": [
-            "1 per 500 sq.ft. of herbaceous turfgrass",
+            "1 per 500 sq.ft. of grass",
             "1 per 300 sq.ft. of rooftop",
             "Protects system from tidal backflow"
         ],
@@ -477,14 +445,6 @@ else:
 
     df = pd.read_excel("raster_cells_per_sub.xlsx")
     df = df.sort_values(by="NAME", key=lambda x: x.map(extract_number)).reset_index(drop=True)
-
-    st.subheader("Steps to Explore LID Design Options:")
-    st.markdown("""
-    1. Run the scenario where the LID features (rain gardens, rain barrels) are **MAXED** out for ALL subcatchments.
-    2. Find subcatchments **unsuitable** for rain gardens. Why can’t rain gardens be used there? (e.g., poor infiltration, former creek bed).
-    3. Identify subcatchments with **high runoff** but no nearby stormwater pipes or culverts.
-    4. Observe how your choices impact outflow, flooding, and infiltration.
-    """)
 
     def generate_lid_usage_lines(lid_config,
                                 excel_path="raster_cells_per_sub.xlsx"):
