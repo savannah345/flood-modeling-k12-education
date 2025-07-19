@@ -327,7 +327,7 @@ else:
     """)
 
     # === Run Baseline Scenario ===
-    if st.button("Run Baseline Scenario SWMM Simulation"):
+    if st.button("Run Baseline Scenario"):
         try:
             rain_lines = format_timeseries("rain_gage_timeseries", rain_sim_minutes, rain_sim_curve, simulation_date)
             tide_lines = format_timeseries("tide", tide_sim_minutes, tide_sim_curve, simulation_date)
@@ -641,7 +641,7 @@ else:
         st.info("You haven't selected any subcatchments to add LIDs.")
 
     # === Run Scenario With Selected LID Improvements ===
-    if st.button("Run Scenario With Selected LID Improvements"):
+    if st.button("Run Custom LID Scenario"):
         if f"{prefix}baseline_df" not in st.session_state:
             st.error("Please run the baseline scenario first.")
         else:
