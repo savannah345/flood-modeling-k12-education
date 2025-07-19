@@ -104,8 +104,6 @@ else:
         format_func=lambda x: f"{x // 60} hr"
     )
 
-    st.subheader("Return Year: think of it like rolling dice - a 10-year storm is like rolling a 10 on a 10-sided die, you might roll it once in 10 tries… or twice… or not at all. But the chance (1/10 = 10%) is always the same each year.") 
-
     def generate_return_period_labels(duration, unit_type):
         row = pf_df[pf_df["Duration_Minutes"] == duration]
         if row.empty:
@@ -129,25 +127,6 @@ else:
     ].values[0])
 
     
-    st.subheader("How Much Water Each Unit Holds")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.markdown("""
-        ### 1 cubic meter (m³)
-        - 1,000 liters   
-        - 35.3 ft³  
-        - About the size of a washing machine  
-        """)
-
-    with col2:
-        st.markdown("""
-        ### 1 cubic foot (ft³)
-        - 7.5 gallons  
-        - About the size of a microwave  
-        - 4 ft³ = half of a bathtub
-        """)
 
     method = "Normal"
 
@@ -161,7 +140,7 @@ else:
 
     moon_phase  = st.selectbox("Moon Phase", list(moon_tide_ranges.keys()))
 
-    st.subheader("When high tide and peak rainfall happen together, tidal backflow can block stormwater from draining, increasing flood risk. If rain falls during low tide, water drains more easily and flooding is less likely.")
+    st.subheader("When high tide and peak rainfall happen together, tidal backflow can block stormwater from draining, increasing flood risk.")
 
     tide_align  = st.radio(
         "Tide Alignment",
@@ -416,11 +395,6 @@ else:
             "100 sq.ft. Rain Garden",
             "55 gallon Rain Barrel",
             "Tide Gate (10'x5')"
-        ],
-        "Contributing Area Assumption": [
-            "1 per 500 sq.ft. of grass",
-            "1 per 300 sq.ft. of rooftop",
-            "Protects system from tidal backflow"
         ],
         "Estimated Installation Cost": [
             "$250",
