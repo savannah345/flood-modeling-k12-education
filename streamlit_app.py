@@ -633,7 +633,9 @@ else:
             st.altair_chart(chart, use_container_width=True)
 
             # Total cost below the chart
-            st.markdown(f"**Total Estimated Cost: ${total_cost:,.2f}**")
+            st.markdown(f"**Total Estimated Cost with Tide Gate: ${total_cost:,.2f}**")
+            st.markdown(f"**Total Estimated Cost LID only: ${(total_cost - 250000):,.2f}**")
+
         else:
             st.info("No infrastructure improvements have been added.")
 
