@@ -747,9 +747,9 @@ else:
         fig, ax = plt.subplots(figsize=(8, 4))
         ax.plot(time_objects, baseline[:min_len], styles["Baseline"], label="Baseline", color=colors["Baseline"], linewidth=4)
         ax.plot(time_objects, baseline_gate[:min_len], styles["Baseline + Tide Gate"], label="Baseline + Tide Gate", color=colors["Baseline + Tide Gate"], linewidth=4)
-        ax.plot(time_objects, lid[:min_len], styles["With LIDs"], label="With LIDs", color=colors["With LIDs"], linewidth=4)
-        ax.plot(time_objects, lid_gate[:min_len], styles["LIDs + Tide Gate"], label="LIDs + Tide Gate", color=colors["LIDs + Tide Gate"], linewidth=4)
-        ax.plot(time_objects, lid_max[:min_len], styles["Max LIDs"], label="Max LIDs", color=colors["Max LIDs"], linewidth=4)
+        #ax.plot(time_objects, lid[:min_len], styles["With LIDs"], label="With LIDs", color=colors["With LIDs"], linewidth=4)
+        ax.plot(time_objects, lid_gate[:min_len], styles["LIDs + Tide Gate"], label="Custom LIDs + Tide Gate", color=colors["LIDs + Tide Gate"], linewidth=4)
+        #ax.plot(time_objects, lid_max[:min_len], styles["Max LIDs"], label="Max LIDs", color=colors["Max LIDs"], linewidth=4)
         ax.plot(time_objects, lid_max_gate[:min_len], styles["Max LIDs + Tide Gate"], label="Max LIDs + Tide Gate", color=colors["Max LIDs + Tide Gate"], linewidth=4)
 
         legend = ax.legend(
