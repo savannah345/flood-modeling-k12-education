@@ -248,16 +248,29 @@ else:
             f.write(text)
 
         # --- 2. Run simulation ---
-        depth_pct, timestamps = [], []
+        cumulative_flooding_acft, timestamps = [], []
+        cumulative_cuft = 0.0
+        last_report_time = None
+
         with Simulation(inp_path) as sim:
-            link = Links(sim)["C70_1"]
-            last_report_time = None
             for step in sim:
                 current_time = sim.current_time
                 if last_report_time is None or (current_time - last_report_time) >= report_interval:
-                    pct = (link.depth / full_depth) * 100
-                    depth_pct.append(pct)
+                    # Instantaneous flooding rate across all nodes (cfs)
+                    total_flooding_cfs = sum(node.flooding for node in Nodes(sim))
+
+                    # Convert to volume for this step (cfs × seconds)
+                    step_volume_cuft = total_flooding_cfs * report_interval.total_seconds()
+
+                    # Add to running total
+                    cumulative_cuft += step_volume_cuft
+
+                    # Convert to acre-feet
+                    cumulative_acft = cumulative_cuft / 43560.0
+
+                    cumulative_flooding_acft.append(cumulative_acft)
                     timestamps.append(current_time.strftime("%m-%d %H:%M"))
+
                     last_report_time = current_time
 
         # Optional rename if needed
@@ -266,7 +279,11 @@ else:
         if os.path.exists(os.path.join(temp_dir, "updated_model.out")):
             shutil.move(os.path.join(temp_dir, "updated_model.out"), out_path)
 
-        return depth_pct, timestamps, rpt_path  # so you can use it later
+        # Store the total flooding for this scenario
+        total_flood_acft = cumulative_flooding_acft[-1] if cumulative_flooding_acft else 0.0
+        st.session_state[f"{scenario_name}_total_flood"] = total_flood_acft
+
+        return cumulative_flooding_acft, timestamps, rpt_path
 
     # === Time-series Formatter ===
     def format_timeseries(name, minutes, values, start_datetime):
@@ -675,10 +692,10 @@ else:
                 st.error(f"LID simulation failed: {e}")
 
     # === Section Title ===
-    st.subheader("The Capacity of the Pipe Closest to the Outlet over Time")
+    st.subheader("Cumulative Flood Volume Across All Nodes Over Time")
 
-    required_fill_keys = [
-        f"{prefix}baseline_fill",
+    required_flood_keys = [
+        f"{prefix}baseline_fill",        # now holds flooding volumes (ac-ft)
         f"{prefix}baseline_gate_fill",
         f"{prefix}lid_fill",
         f"{prefix}lid_gate_fill",
@@ -687,18 +704,18 @@ else:
         f"{prefix}baseline_timestamps"
     ]
 
-    if all(k in st.session_state for k in required_fill_keys):
+    if all(k in st.session_state for k in required_flood_keys):
         # === Retrieve and truncate ===
         ts = st.session_state[f"{prefix}baseline_timestamps"]
-        baseline = st.session_state[f"{prefix}baseline_fill"]
+        baseline      = st.session_state[f"{prefix}baseline_fill"]
         baseline_gate = st.session_state[f"{prefix}baseline_gate_fill"]
-        lid = st.session_state[f"{prefix}lid_fill"]
-        lid_gate = st.session_state[f"{prefix}lid_gate_fill"]
-        lid_max = st.session_state[f"{prefix}lid_max_fill"]
-        lid_max_gate = st.session_state[f"{prefix}lid_max_gate_fill"]
+        lid           = st.session_state[f"{prefix}lid_fill"]
+        lid_gate      = st.session_state[f"{prefix}lid_gate_fill"]
+        lid_max       = st.session_state[f"{prefix}lid_max_fill"]
+        lid_max_gate  = st.session_state[f"{prefix}lid_max_gate_fill"]
 
-        min_len = min(len(ts), len(baseline), len(baseline_gate), len(lid),
-                    len(lid_gate), len(lid_max), len(lid_max_gate))
+        min_len = min(len(ts), len(baseline), len(baseline_gate),
+                      len(lid), len(lid_gate), len(lid_max), len(lid_max_gate))
 
         time_objects = [datetime.strptime(t, "%m-%d %H:%M") for t in ts[:min_len]]
 
@@ -721,29 +738,29 @@ else:
         }
 
         fig, ax = plt.subplots(figsize=(8, 4))
-        ax.plot(time_objects, baseline[:min_len], styles["Baseline"], label="Baseline", color=colors["Baseline"], linewidth=4)
-        ax.plot(time_objects, baseline_gate[:min_len], styles["Baseline + Tide Gate"], label="Baseline + Tide Gate", color=colors["Baseline + Tide Gate"], linewidth=4)
-        #ax.plot(time_objects, lid[:min_len], styles["With LIDs"], label="With LIDs", color=colors["With LIDs"], linewidth=4)
-        ax.plot(time_objects, lid_gate[:min_len], styles["LIDs + Tide Gate"], label="Custom LIDs + Tide Gate", color=colors["LIDs + Tide Gate"], linewidth=4)
-        #ax.plot(time_objects, lid_max[:min_len], styles["Max LIDs"], label="Max LIDs", color=colors["Max LIDs"], linewidth=4)
-        ax.plot(time_objects, lid_max_gate[:min_len], styles["Max LIDs + Tide Gate"], label="Max LIDs + Tide Gate", color=colors["Max LIDs + Tide Gate"], linewidth=4)
+        ax.plot(time_objects, baseline[:min_len],      styles["Baseline"],            label="Baseline",              color=colors["Baseline"], linewidth=4)
+        ax.plot(time_objects, baseline_gate[:min_len], styles["Baseline + Tide Gate"],label="Baseline + Tide Gate",  color=colors["Baseline + Tide Gate"], linewidth=4)
+        #ax.plot(time_objects, lid[:min_len],           styles["With LIDs"],           label="With LIDs",             color=colors["With LIDs"], linewidth=4)
+        ax.plot(time_objects, lid_gate[:min_len],      styles["LIDs + Tide Gate"],    label="Custom LIDs + Tide Gate", color=colors["LIDs + Tide Gate"], linewidth=4)
+        #ax.plot(time_objects, lid_max[:min_len],       styles["Max LIDs"],            label="Max LIDs",               color=colors["Max LIDs"], linewidth=4)
+        ax.plot(time_objects, lid_max_gate[:min_len],  styles["Max LIDs + Tide Gate"],label="Max LIDs + Tide Gate",   color=colors["Max LIDs + Tide Gate"], linewidth=4)
 
         legend = ax.legend(
             loc="upper left",
             fontsize=14,
             frameon=True,
-            ncol=2  
+            ncol=2
         )
-        legend.get_frame().set_facecolor("white") 
-        legend.get_frame().set_edgecolor("black") 
+        legend.get_frame().set_facecolor("white")
+        legend.get_frame().set_edgecolor("black")
 
-        ax.set_ylabel("Culvert Fill (%)", fontsize=14)
+        ax.set_ylabel("Cumulative Flood Volume (ac-ft)", fontsize=14)
         ax.set_xlabel("Time", fontsize=14)
-        ax.set_ylim(0, 110)
+        ax.set_ylim(bottom=0)
         ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%-I %p'))
         ax.tick_params(axis='both', labelsize=12)
-        
+
         fig.autofmt_xdate(rotation=45)
         ax.grid(False)
 
@@ -751,10 +768,23 @@ else:
         components.html(html, height=500)
 
     else:
-        st.info("🔄 Please run all six SWMM scenarios before viewing the culvert capacity plot.")
+        st.info("🔄 Please run all six SWMM scenarios before viewing the flood volume plot.")
 
 
-    def extract_volumes_from_rpt(rpt_path):
+    def extract_volumes_from_rpt(rpt_path, scenario_name=None):
+        """
+        Reads a SWMM .rpt file and extracts key volume metrics, including
+        total flooding volume for the whole simulation.
+        Returns volumes in acre-feet where applicable.
+        """
+        flooding = None
+
+        # --- 1. Prefer model-calculated total from session_state ---
+        if scenario_name:
+            model_total = st.session_state.get(f"{scenario_name}_total_flood", None)
+            if model_total is not None:
+                flooding = model_total
+
         try:
             with open(rpt_path, 'r') as f:
                 lines = f.readlines()
@@ -763,32 +793,30 @@ else:
             infiltration = None
             runoff = None
             rainfall = None
-            flooding = 0.0
 
             in_outfall_section = False
-            in_continuity_section = False
-            in_flooding_section = False
+            in_runoff_continuity_section = False
+            in_routing_continuity_section = False
 
-            for i, line in enumerate(lines):
-                # === Outfall Loading Summary ===
+            for line in lines:
+                # Outfall Loading Summary → total system outflow (MG)
                 if "Outfall Loading Summary" in line:
                     in_outfall_section = True
                     continue
-                if in_outfall_section:
-                    if line.strip().startswith("System"):
-                        parts = line.split()
-                        if len(parts) >= 5:
-                            try:
-                                outflow = float(parts[-1]) * 1e6  # Convert from MG to gallons
-                            except ValueError:
-                                outflow = None
-                        in_outfall_section = False  # Done after "System" line
+                if in_outfall_section and line.strip().startswith("System"):
+                    parts = line.split()
+                    if len(parts) >= 5:
+                        try:
+                            outflow = float(parts[-1]) * 1e6  # MG → gallons
+                        except ValueError:
+                            pass
+                    in_outfall_section = False
 
-                # === Runoff Quantity Continuity ===
+                # Runoff Quantity Continuity → precipitation, infiltration, runoff
                 if "Runoff Quantity Continuity" in line:
-                    in_continuity_section = True
+                    in_runoff_continuity_section = True
                     continue
-                if in_continuity_section:
+                if in_runoff_continuity_section:
                     if "Total Precipitation" in line:
                         rainfall = float(line.split()[-2])
                     elif "Infiltration Loss" in line:
@@ -796,20 +824,9 @@ else:
                     elif "Surface Runoff" in line:
                         runoff = float(line.split()[-2])
                     elif "Continuity Error" in line:
-                        in_continuity_section = False
-
-                # === Node Flooding Summary ===
-                if "Flow Routing Continuity" in line:
-                    in_continuity_section = True
-                    continue
-                if in_continuity_section:
-                    if "Flooding Loss" in line:
-                        flooding = float(line.split()[-2])
-                    elif "Continuity Error" in line:
-                        in_continuity_section = False
+                        in_runoff_continuity_section = False
 
             return {
-                "Outflow (gallons)": outflow,
                 "Rainfall (ac-ft)": rainfall,
                 "Infiltration (ac-ft)": infiltration,
                 "Runoff (ac-ft)": runoff,
@@ -817,14 +834,11 @@ else:
             }
 
         except Exception as e:
-            print(f"Failed to parse RPT file: {e}")
-            return {
-                "Outflow (gallons)": None,
-                "Rainfall (ac-ft)": None,
-                "Infiltration (ac-ft)": None,
-                "Runoff (ac-ft)": None,
-                "Flooding (ac-ft)": None
-            }
+            print(f"Failed to parse RPT file {rpt_path}: {e}")
+            return {k: None for k in [
+                "Rainfall (ac-ft)", "Infiltration (ac-ft)",
+                "Runoff (ac-ft)", "Flooding (ac-ft)"
+            ]}
 
     # === Water Balance Summary (Only show if RPT data exists) ===
     df_balance = None
@@ -846,22 +860,18 @@ else:
         results = []
         for name, path in rpt_scenarios.items():
             try:
-                metrics = extract_volumes_from_rpt(path)
+                # Make a scenario key that matches the one used in run_swmm_scenario()
+                scenario_key = name.lower().replace("(", "").replace(")", "").replace(" + ", "_plus_").replace(" ", "_")
+                scenario_name_for_lookup = f"{prefix}{scenario_key}"
+
+                # Prefer the stored model total flooding value over parsing RPT
+                metrics = extract_volumes_from_rpt(path, scenario_name=scenario_name_for_lookup)
+
                 if any(v is not None for k, v in metrics.items() if k != "Scenario"):
                     metrics["Scenario"] = name
                     results.append(metrics)
 
-                    # Generate a clean key
-                    key = (
-                        name.lower()
-                        .replace("(", "")
-                        .replace(")", "")
-                        .replace(" + ", "_plus_")
-                        .replace(" ", "_")
-                    )
-
-                    st.session_state[f"{prefix}outflow_{key}"] = metrics["Outflow (gallons)"]
-                    st.session_state[f"{prefix}flood_{key}"] = metrics["Flooding (ac-ft)"]
+                    st.session_state[f"{prefix}flood_{scenario_key}"] = metrics["Flooding (ac-ft)"]
 
             except Exception as e:
                 print(f"Could not process {name}: {e}")
@@ -869,9 +879,22 @@ else:
     else:
         results = []
 
-
     if results:
         df_balance = pd.DataFrame(results).set_index("Scenario")
+
+        # Force the summary table to use the graph's final cumulative flooding totals
+        scenario_to_key = {
+            "Baseline (No Tide Gate)": f"{prefix}baseline_fill",
+            "Baseline + Tide Gate": f"{prefix}baseline_gate_fill",
+            "LID (No Tide Gate)": f"{prefix}lid_fill",
+            "LID + Tide Gate": f"{prefix}lid_gate_fill",
+            "Max LID (No Tide Gate)": f"{prefix}lid_max_fill",
+            "Max LID + Tide Gate": f"{prefix}lid_max_gate_fill",
+        }
+
+        for scenario, fill_key in scenario_to_key.items():
+            if fill_key in st.session_state and len(st.session_state[fill_key]) > 0:
+                df_balance.loc[scenario, "Flooding (ac-ft)"] = st.session_state[fill_key][-1]
 
         # Convert + format logic remains the same
         convert_to_m3 = unit == "Metric (SI)"
@@ -880,6 +903,8 @@ else:
         FT3_TO_M3 = 0.0283168
 
         def convert(val, from_unit):
+            if val is None:
+                return 0  # or np.nan if you want to mark missing
             if from_unit == "gallons":
                 val_ft3 = val * GAL_TO_FT3
             elif from_unit == "ac-ft":
@@ -889,8 +914,7 @@ else:
             return val_ft3 * FT3_TO_M3 if convert_to_m3 else val_ft3
 
         df_converted = pd.DataFrame(index=df_balance.index)
-        df_converted["Flooded Volume"] = df_balance["Flooding (ac-ft)"].apply(lambda x: convert(x, "ac-ft"))
-        df_converted["Outflow Volume"] = df_balance["Outflow (gallons)"].apply(lambda x: convert(x, "gallons"))
+        df_converted["Flooded Volume (Event Total)"] = df_balance["Flooding (ac-ft)"].apply(lambda x: convert(x, "ac-ft"))
         df_converted["Infiltration"] = df_balance["Infiltration (ac-ft)"].apply(lambda x: convert(x, "ac-ft"))
         df_converted["Surface Runoff"] = df_balance["Runoff (ac-ft)"].apply(lambda x: convert(x, "ac-ft"))
         df_converted = df_converted.round(0).astype(int)
@@ -1029,8 +1053,7 @@ else:
             df_user_lid.to_excel(writer, sheet_name="User LID Selections", index=False)
 
             df_balance.to_excel(writer, sheet_name="Scenario Summary", index=False)
-            df_culvert.to_excel(writer, sheet_name="Discharge Pipe Capacity", index=False)
-
+            df_culvert.to_excel(writer, sheet_name="Flood Volume Time Series", index=False)
 
 
         # Download button
