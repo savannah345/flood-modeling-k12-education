@@ -394,11 +394,15 @@ else:
         # Optional unit conversion
         if unit != "U.S. Customary":
             factor = 2.54 if unit == "Metric (SI)" else 25.4
+            if unit == "Metric (SI)":
+                units_display = "cm"
+            else:
+                units_display = "inches"
             df_no["Impervious Runoff (in)"] *= factor
             df_no["Pervious Runoff   (in)"] *= factor
             df_no.columns = ["Subcatchment",
-                            f"Impervious Runoff ({unit})",
-                            f"Pervious Runoff ({unit})"]
+                            f"Impervious Runoff ({units_display})",
+                            f"Pervious Runoff ({units_display})"]
         else:
             df_no.columns = ["Subcatchment",
                             "Impervious Runoff (in)",
