@@ -692,7 +692,7 @@ else:
                 st.error(f"LID simulation failed: {e}")
 
     # === Section Title ===
-    st.subheader("Cumulative Flood Volume Across All Nodes Over Time")
+    #st.subheader("Cumulative Flood Volume Across All Nodes Over Time")
 
     required_flood_keys = [
         f"{prefix}baseline_fill",        # now holds flooding volumes (ac-ft)
@@ -737,38 +737,38 @@ else:
             "Max LIDs + Tide Gate": "-"
         }
 
-        fig, ax = plt.subplots(figsize=(8, 4))
-        ax.plot(time_objects, baseline[:min_len],      styles["Baseline"],            label="Baseline",              color=colors["Baseline"], linewidth=4)
-        ax.plot(time_objects, baseline_gate[:min_len], styles["Baseline + Tide Gate"],label="Baseline + Tide Gate",  color=colors["Baseline + Tide Gate"], linewidth=4)
+        #fig, ax = plt.subplots(figsize=(8, 4))
+        #ax.plot(time_objects, baseline[:min_len],      styles["Baseline"],            label="Baseline",              color=colors["Baseline"], linewidth=4)
+        #ax.plot(time_objects, baseline_gate[:min_len], styles["Baseline + Tide Gate"],label="Baseline + Tide Gate",  color=colors["Baseline + Tide Gate"], linewidth=4)
         #ax.plot(time_objects, lid[:min_len],           styles["With LIDs"],           label="With LIDs",             color=colors["With LIDs"], linewidth=4)
-        ax.plot(time_objects, lid_gate[:min_len],      styles["LIDs + Tide Gate"],    label="Custom LIDs + Tide Gate", color=colors["LIDs + Tide Gate"], linewidth=4)
+        #ax.plot(time_objects, lid_gate[:min_len],      styles["LIDs + Tide Gate"],    label="Custom LIDs + Tide Gate", color=colors["LIDs + Tide Gate"], linewidth=4)
         #ax.plot(time_objects, lid_max[:min_len],       styles["Max LIDs"],            label="Max LIDs",               color=colors["Max LIDs"], linewidth=4)
-        ax.plot(time_objects, lid_max_gate[:min_len],  styles["Max LIDs + Tide Gate"],label="Max LIDs + Tide Gate",   color=colors["Max LIDs + Tide Gate"], linewidth=4)
+        #ax.plot(time_objects, lid_max_gate[:min_len],  styles["Max LIDs + Tide Gate"],label="Max LIDs + Tide Gate",   color=colors["Max LIDs + Tide Gate"], linewidth=4)
 
-        legend = ax.legend(
-            loc="upper left",
-            fontsize=14,
-            frameon=True,
-            ncol=2
-        )
-        legend.get_frame().set_facecolor("white")
-        legend.get_frame().set_edgecolor("black")
+        #legend = ax.legend(
+            #loc="upper left",
+            #fontsize=14,
+            #frameon=True,
+            #ncol=2
+        #)
+        #legend.get_frame().set_facecolor("white")
+        #legend.get_frame().set_edgecolor("black")
 
-        ax.set_ylabel("Cumulative Flood Volume (ac-ft)", fontsize=14)
-        ax.set_xlabel("Time", fontsize=14)
-        ax.set_ylim(bottom=0)
-        ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%-I %p'))
-        ax.tick_params(axis='both', labelsize=12)
+        #ax.set_ylabel("Cumulative Flood Volume (ac-ft)", fontsize=14)
+        #ax.set_xlabel("Time", fontsize=14)
+        #ax.set_ylim(bottom=0)
+        #ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
+        #ax.xaxis.set_major_formatter(mdates.DateFormatter('%-I %p'))
+        #ax.tick_params(axis='both', labelsize=12)
 
-        fig.autofmt_xdate(rotation=45)
-        ax.grid(False)
+        #fig.autofmt_xdate(rotation=45)
+        #ax.grid(False)
 
-        html = mpld3.fig_to_html(fig)
-        components.html(html, height=500)
+        #html = mpld3.fig_to_html(fig)
+        #components.html(html, height=500)
 
-    else:
-        st.info("🔄 Please run all six SWMM scenarios before viewing the flood volume plot.")
+    #else:
+        #st.info("🔄 Please run all six SWMM scenarios before viewing the flood volume plot.")
 
 
     def extract_volumes_from_rpt(rpt_path, scenario_name=None):
