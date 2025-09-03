@@ -12,6 +12,7 @@ import tempfile
 import mpld3
 import os
 import glob
+import subprocess, sys
 from auth_supabase import create_user, authenticate_user, reset_password
 import matplotlib
 import matplotlib.pyplot as plt
@@ -19,13 +20,29 @@ from datetime import datetime, timedelta
 import matplotlib.dates as mdates
 from pyswmm import Simulation, Links, Nodes
 from rainfall_and_tide_generator import (
-    generate_rainfall,
-    convert_units,
     pf_df,
-    generate_tide_curve,
+    convert_units,
+    generate_rainfall,
     align_rainfall_to_tide,
-    moon_tide_ranges
+    generate_tide_curve,
+    moon_tide_ranges,
+    fetch_greenstream_dataframe,          # <— live data
+    build_timestep_and_resample_15min,    # <— 6-min -> 15-min + units
 )
+
+# --- Ensure Playwright browsers are installed ---
+@st.cache_resource(show_spinner=False)
+def ensure_playwright_browsers():
+    # Install Chromium once per server session
+    subprocess.run(
+        [sys.executable, "-m", "playwright", "install", "chromium"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+ensure_playwright_browsers()
 
 st.set_page_config(
     page_title="CoastWise",
@@ -86,13 +103,12 @@ else:
     prefix = f"user_{user_id}_"
 
     # === YOUR MAIN APP GOES BELOW HERE ===
-    
 
     st.title("CoastWise: A Gamified Watershed Design Toolkit for Coastal Resilience Using the Stormwater Management Model")
     st.markdown("[📘 View the CoastWise Tutorial](https://docs.google.com/document/d/1xMxoe41xhWPsPlzUIjQP4K9K_vjhjelN0hgvqfoflGY/edit?usp=sharing)")
 
     simulation_date = "05/31/2025 12:00"
-    template_inp     = "swmm_project.inp"
+    template_inp    = "swmm_project.inp"
 
     # === User Inputs ===
     unit = st.selectbox("Preferred Units", ["U.S. Customary", "Metric (SI)"])
@@ -112,7 +128,7 @@ else:
         label = "inches" if unit_type == "U.S. Customary" else "centimeters"
         factor = 1 if unit_type == "U.S. Customary" else 2.54
         return {
-            col: f"{col}-year storm ({100//int(col)}% chance of occurring each year): {row_data[col]*factor:.2f} {label}"
+            col: f"{col}-year storm ({100//int(col)}% annual chance): {row_data[col]*factor:.2f} {label}"
             for col in pf_df.columns[1:]
         }
 
@@ -121,35 +137,65 @@ else:
     return_period = [k for k, v in return_options.items() if v == return_label][0]
 
     # pf_df values are in inches
-    rain_inches = float(pf_df.loc[
-        pf_df["Duration_Minutes"] == duration_minutes,
-        return_period
-    ].values[0])
-
-    
+    rain_inches = float(
+        pf_df.loc[pf_df["Duration_Minutes"] == duration_minutes, return_period].values[0]
+    )
 
     method = "Normal"
 
-    st.subheader("Neap vs. Spring Tides") 
+    # --------------------------
+    # Tide source selection
+    # --------------------------
+    st.subheader("Tides")
+    use_live = st.toggle("Use real-time tide from Greenstream (fallback to synthetic if unavailable)", value=True)
 
-    # Load and display video
-    video_file = open('NASA_Tides.mp4', 'rb')
-    video_bytes = video_file.read()
-    st.video(video_bytes)
+    tide_source = "live"
+    tide_error  = None
 
+    if use_live:
+        # Try live; if it fails, we’ll switch to synthetic UI
+        try:
+            df_live = fetch_greenstream_dataframe()  # returns a DataFrame with 'Water Level NAVD88 (ft)'
+            tide_sim_minutes, tide_sim_curve = build_timestep_and_resample_15min(
+                df_live,
+                water_col="Water Level NAVD88 (ft)",
+                unit=unit,     # returns feet (US) or meters (Metric)
+                start_ts=None  # pass a real start if you know it; otherwise it anchors to now-48h
+            )
+            st.success("Loaded real-time tide.")
+        except Exception as e:
+            tide_source = "synthetic"
+            tide_error  = str(e)
+    else:
+        tide_source = "synthetic"
 
-    moon_phase  = st.selectbox("Moon Phase", list(moon_tide_ranges.keys()))
+    # If synthetic is needed (user turned off live or live failed), show the MP4 + moon-phase UI
+    if tide_source == "synthetic":
+        if use_live and tide_error:
+            st.warning(f"Real-time tide unavailable; using synthetic. Reason: {tide_error}")
 
-    st.subheader("When high tide and peak rainfall happen together, tidal backflow can block stormwater from draining, increasing flood risk.")
+        st.subheader("Neap vs. Spring Tides")
 
-    tide_align  = st.radio(
+        # Only show the video when synthetic is in use
+        with open("NASA_Tides.mp4", "rb") as video_file:
+            st.video(video_file.read())
+
+        moon_phase = st.selectbox("Moon Phase", list(moon_tide_ranges.keys()))
+        st.subheader("When high tide and peak rainfall happen together, tidal backflow can block stormwater from draining, increasing flood risk.")
+
+        # Synthetic tide is already 15-min and in the selected units
+        tide_sim_minutes, tide_sim_curve = generate_tide_curve(moon_phase, unit)
+
+    # --------------------------
+    # Rain alignment vs Tide
+    # --------------------------
+    tide_align = st.radio(
         "Tide Alignment",
         ["Peak aligned with High Tide", "Peak aligned with Low Tide"]
     )
-    align_mode  = "peak" if "High" in tide_align else "low"
+    align_mode = "peak" if "High" in tide_align else "low"
 
-    # --- Generate SWMM-curves (always inches & feet) ---
-    tide_sim_minutes, tide_sim_curve = generate_tide_curve(moon_phase, "U.S. Customary")
+    # align rainfall (in inches) to the 15-min tide curve (units don’t matter for alignment)
     rain_sim_minutes, rain_sim_curve = align_rainfall_to_tide(
         rain_inches,
         duration_minutes,
@@ -158,30 +204,38 @@ else:
         method=method
     )
 
-    # --- Generate display-curves based on selected unit ---
+    # --------------------------
+    # Display data in chosen units
+    # --------------------------
     if unit == "U.S. Customary":
-        display_rain_curve = rain_sim_curve
-        display_tide_curve = tide_sim_curve
-        tide_disp_unit    = "ft"
-        rain_disp_unit = "inches"
-    elif unit == "Metric (SI)":
-        display_rain_curve = rain_sim_curve * 2.54
-        display_tide_curve = tide_sim_curve * 0.3048
-        tide_disp_unit    = "meters"
-        rain_disp_unit = "centimeters"
+        display_rain_curve = rain_sim_curve            # inches
+        display_tide_curve = tide_sim_curve            # feet (live or synthetic already in ft)
+        tide_disp_unit     = "ft"
+        rain_disp_unit     = "inches"
+    else:
+        display_rain_curve = rain_sim_curve * 2.54     # inches -> cm
+        display_tide_curve = tide_sim_curve            # live build returns meters; synthetic generator returns meters
+        tide_disp_unit     = "meters"
+        rain_disp_unit     = "centimeters"
 
-    st.session_state[f"{prefix}rain_disp_unit"] = rain_disp_unit
-    st.session_state[f"{prefix}tide_disp_unit"] = tide_disp_unit
+    # --------------------------
+    # Store for export (optional; remove session_state if unused)
+    # --------------------------
+    # If you used a 'prefix' before, set it; else just keep plain keys.
+    # prefix = ""  # uncomment and set if needed
+    # st.session_state[f"{prefix}rain_minutes"] = rain_sim_minutes
+    # st.session_state[f"{prefix}tide_minutes"] = tide_sim_minutes
+    # st.session_state[f"{prefix}display_rain_curve"] = display_rain_curve
+    # st.session_state[f"{prefix}display_tide_curve"] = display_tide_curve
+    # st.session_state[f"{prefix}rain_disp_unit"] = rain_disp_unit
+    # st.session_state[f"{prefix}tide_disp_unit"] = tide_disp_unit
 
-    # --- Store display values and timestamps for Excel export ---
-    st.session_state[f"{prefix}rain_minutes"] = rain_sim_minutes
-    st.session_state[f"{prefix}tide_minutes"] = tide_sim_minutes
-    st.session_state[f"{prefix}display_rain_curve"] = display_rain_curve
-    st.session_state[f"{prefix}display_tide_curve"] = display_tide_curve
+    # --------------------------
+    # Charts
+    # --------------------------
+    time_hours = np.array(rain_sim_minutes) / 60.0
 
-    time_hours = np.array(rain_sim_minutes) / 60
-
-    # === Display Rainfall Chart ===
+    # Rainfall chart
     df_rain = pd.DataFrame({
         "Time (hours)": time_hours,
         f"Rainfall ({rain_disp_unit})": display_rain_curve
@@ -197,13 +251,13 @@ else:
     )
     st.altair_chart(rain_chart, use_container_width=True)
 
-    # === Display Total Rainfall ===
+    # Total rainfall
     total_rainfall = np.round(display_rain_curve.sum(), 2)
     st.markdown(f"**Total Rainfall for Event:** {total_rainfall} {rain_disp_unit}")
 
-    # === Display Tide Chart ===
+    # Tide chart (15-min, 48h)
     df_tide = pd.DataFrame({
-        "Time (hours)": time_hours,
+        "Time (hours)": np.array(tide_sim_minutes) / 60.0,
         f"Tide ({tide_disp_unit})": display_tide_curve
     })
     st.subheader("Tide Profile")
@@ -216,6 +270,9 @@ else:
         )
     )
     st.altair_chart(tide_chart, use_container_width=True)
+ 
+
+
 
     # Create a persistent temp folder ONCE when user logs in
     if "temp_dir" not in st.session_state:
