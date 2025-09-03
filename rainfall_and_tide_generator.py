@@ -343,7 +343,7 @@ def build_timestep_and_resample_15min(df_raw: pd.DataFrame,
     # Anchor 6-min timeline. If you know the real start time, pass start_ts.
     if start_ts is None:
         # Snap to the quarter-hour so resample bins align nicely
-        start_ts = (pd.Timestamp.now().floor("15T") - pd.Timedelta(minutes=6*(n-1)))
+        start_ts = (pd.Timestamp.now().floor("15min") - pd.Timedelta(minutes=6*(n-1)))
     tide_df["TimeStep"] = pd.date_range(start=start_ts, periods=n, freq="6T")
     tide_df = tide_df.set_index("TimeStep")
 
@@ -354,7 +354,7 @@ def build_timestep_and_resample_15min(df_raw: pd.DataFrame,
     tide_df[water_col] = vals
 
     # Resample to 15-minute bins
-    tide_15 = tide_df.resample("15T").mean(numeric_only=True)[water_col].to_numpy()
+    tide_15 = tide_df.resample("15min").mean(numeric_only=True)[water_col].to_numpy()
 
     # Minutes array (trim to actual length if some points missing)
     minutes_15 = np.arange(0, 2880, 15)[: len(tide_15)]
