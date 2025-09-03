@@ -1,4 +1,3 @@
-# Core X/GTK/Audio and GPU/GBM bits used by Chromium
 libasound2
 libatk-bridge2.0-0
 libatk1.0-0
