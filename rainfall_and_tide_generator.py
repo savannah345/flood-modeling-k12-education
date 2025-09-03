@@ -1,7 +1,7 @@
 # rainfall_and_tide_generator.py
 from __future__ import annotations
 from typing import Tuple, Optional
-
+import re
 import numpy as np
 import pandas as pd
 
@@ -227,7 +227,7 @@ def fetch_greenstream_dataframe() -> pd.DataFrame:
             headless=True,
             args=["--no-sandbox", "--disable-dev-shm-usage"]
         )
-        context = browser.new_context(accept_downloads=True, viewport={"width": 1920, "height": 1080})
+        context = browser.new_context(accept_downloads=True, viewport={"width": 1600, "height": 900})
         page = context.new_page()
         page.goto(GREENSTREAM_URL, wait_until="domcontentloaded")
 
