@@ -110,42 +110,13 @@ else:
     simulation_date = "05/31/2025 12:00"
     template_inp    = "swmm_project.inp"
 
-    # === User Inputs ===
+    # === Minimal reordering begins ===
+
+    # 1) Units FIRST (needed to compute tides correctly)
     unit = st.selectbox("Preferred Units", ["U.S. Customary", "Metric (SI)"])
     unit_label = "inches" if unit == "U.S. Customary" else "centimeters"
 
-    duration_minutes = st.selectbox(
-        "Storm Duration",
-        options=pf_df["Duration_Minutes"],
-        format_func=lambda x: f"{x // 60} hr"
-    )
-
-    def generate_return_period_labels(duration, unit_type):
-        row = pf_df[pf_df["Duration_Minutes"] == duration]
-        if row.empty:
-            return {}
-        row_data = row.iloc[0]
-        label = "inches" if unit_type == "U.S. Customary" else "centimeters"
-        factor = 1 if unit_type == "U.S. Customary" else 2.54
-        return {
-            col: f"{col}-year storm ({100//int(col)}% annual chance): {row_data[col]*factor:.2f} {label}"
-            for col in pf_df.columns[1:]
-        }
-
-    return_options = generate_return_period_labels(duration_minutes, unit)
-    return_label = st.selectbox("Return Year", list(return_options.values()))
-    return_period = [k for k, v in return_options.items() if v == return_label][0]
-
-    # pf_df values are in inches
-    rain_inches = float(
-        pf_df.loc[pf_df["Duration_Minutes"] == duration_minutes, return_period].values[0]
-    )
-
-    method = "Normal"
-
-    # --------------------------
-    # Tide source selection
-    # --------------------------
+    # 2) TIDES block SECOND (compute tide before any rainfall selections)
     st.subheader("Tides")
     use_live = st.toggle(
         "Use real-time tide Ryan Resilience Lab - Knitting Mill Creek (fallback to synthetic if unavailable)",
@@ -187,9 +158,37 @@ else:
         # Synthetic tide is already 15-min and in the selected units
         tide_sim_minutes, tide_sim_curve = generate_tide_curve(moon_phase, unit)
 
-    # --------------------------
-    # Rain alignment vs Tide
-    # --------------------------
+    # 3) RAINFALL selections THIRD (now that tide is ready)
+    duration_minutes = st.selectbox(
+        "Storm Duration",
+        options=pf_df["Duration_Minutes"],
+        format_func=lambda x: f"{x // 60} hr"
+    )
+
+    def generate_return_period_labels(duration, unit_type):
+        row = pf_df[pf_df["Duration_Minutes"] == duration]
+        if row.empty:
+            return {}
+        row_data = row.iloc[0]
+        label = "inches" if unit_type == "U.S. Customary" else "centimeters"
+        factor = 1 if unit_type == "U.S. Customary" else 2.54
+        return {
+            col: f"{col}-year storm ({100//int(col)}% annual chance): {row_data[col]*factor:.2f} {label}"
+            for col in pf_df.columns[1:]
+        }
+
+    return_options = generate_return_period_labels(duration_minutes, unit)
+    return_label = st.selectbox("Return Year", list(return_options.values()))
+    return_period = [k for k, v in return_options.items() if v == return_label][0]
+
+    # pf_df values are in inches
+    rain_inches = float(
+        pf_df.loc[pf_df["Duration_Minutes"] == duration_minutes, return_period].values[0]
+    )
+
+    method = "Normal"
+
+    # 4) Alignment uses the already-computed tide
     tide_align = st.radio(
         "Tide Alignment",
         ["Peak aligned with High Tide", "Peak aligned with Low Tide"]
@@ -205,9 +204,7 @@ else:
         method=method
     )
 
-    # --------------------------
-    # Display data in chosen units
-    # --------------------------
+    # 5) Display conversions
     if unit == "U.S. Customary":
         display_rain_curve = rain_sim_curve            # inches
         display_tide_curve = tide_sim_curve            # feet (live or synthetic already in ft)
@@ -223,24 +220,19 @@ else:
     tide_sim_minutes = np.asarray(tide_sim_minutes)
     display_tide_curve = np.asarray(display_tide_curve)
 
-    # Keep them the same length
     min_len = min(tide_sim_minutes.shape[0], display_tide_curve.shape[0])
-    tide_sim_minutes = tide_sim_minutes[:min_len]
+    tide_sim_minutes  = tide_sim_minutes[:min_len]
     display_tide_curve = display_tide_curve[:min_len]
 
-    # --------------------------
-    # Store for export
-    # --------------------------
-    st.session_state["rain_minutes"] = rain_sim_minutes
-    st.session_state["tide_minutes"] = tide_sim_minutes
+    # 6) Store for export
+    st.session_state["rain_minutes"]       = rain_sim_minutes
+    st.session_state["tide_minutes"]       = tide_sim_minutes
     st.session_state["display_rain_curve"] = display_rain_curve
     st.session_state["display_tide_curve"] = display_tide_curve
-    st.session_state["rain_disp_unit"] = rain_disp_unit
-    st.session_state["tide_disp_unit"] = tide_disp_unit
+    st.session_state["rain_disp_unit"]     = rain_disp_unit
+    st.session_state["tide_disp_unit"]     = tide_disp_unit
 
-    # --------------------------
-    # Charts
-    # --------------------------
+    # 7) Charts — keep your visual order (Rainfall first, then Tide)
     time_hours = np.array(rain_sim_minutes) / 60.0
 
     # Rainfall chart
@@ -283,14 +275,14 @@ else:
 
     # Source label
     if tide_source == "live":
-        st.caption("Source: Real-time tide (Greenstream) – last 48 hours at 15-min resolution.")
+        st.caption("Source: Real-time tide – last 48 hours at 15-min resolution.")
     else:
         st.caption(f"Source: Synthetic tide ({moon_phase}).")
-
 
     # Create a persistent temp folder ONCE when user logs in
     if "temp_dir" not in st.session_state:
         st.session_state.temp_dir = tempfile.mkdtemp()
+
 
     def run_swmm_scenario(
         scenario_name,
