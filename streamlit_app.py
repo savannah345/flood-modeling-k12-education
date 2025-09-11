@@ -241,28 +241,51 @@ else:
     st.session_state["rain_disp_unit"]     = rain_disp_unit
     st.session_state["tide_disp_unit"]     = tide_disp_unit
 
-    # 7) Charts — keep your visual order (Rainfall first, then Tide)
+    # --- Rainfall chart (current vs +20%) ---
     time_hours = np.array(rain_sim_minutes) / 60.0
 
-    # Rainfall chart
+    # current (already in display units) and future (+20%)
+    future_rain_curve_display = display_rain_curve * 1.2
+    future_rain_curve_inches  = rain_sim_curve * 1.2  # base (inches) for SWMM if/when you use it later
+
+    # make a tidy dataframe for Altair
     df_rain = pd.DataFrame({
-        "Time (hours)": time_hours,
-        f"Rainfall ({rain_disp_unit})": display_rain_curve
+        "Time (hours)": np.concatenate([time_hours, time_hours]),
+        "Rainfall": np.concatenate([display_rain_curve, future_rain_curve_display]),
+        "Scenario": (["Current"] * len(time_hours)) + (["Future (+20%)"] * len(time_hours))
     })
+
     st.subheader("Rainfall Distribution")
     rain_chart = (
         alt.Chart(df_rain)
         .mark_line()
         .encode(
-            x="Time (hours)",
-            y=f"Rainfall ({rain_disp_unit})"
+            x=alt.X("Time (hours):Q", title="Time (hours)"),
+            y=alt.Y("Rainfall:Q", title=f"Rainfall ({rain_disp_unit})"),
+            color=alt.Color("Scenario:N", legend=alt.Legend(title="Rainfall Case")),
+            tooltip=[
+                alt.Tooltip("Time (hours):Q", format=".2f"),
+                alt.Tooltip("Rainfall:Q", title=f"Rainfall ({rain_disp_unit})", format=".3f"),
+                alt.Tooltip("Scenario:N")
+            ]
         )
     )
     st.altair_chart(rain_chart, use_container_width=True)
 
-    # Total rainfall
-    total_rainfall = np.round(display_rain_curve.sum(), 2)
-    st.markdown(f"**Total Rainfall for Event:** {total_rainfall} {rain_disp_unit}")
+    # Totals (display units)
+    total_current = float(np.round(display_rain_curve.sum(), 2))
+    total_future  = float(np.round(future_rain_curve_display.sum(), 2))
+    st.markdown(f"**Total Rainfall – Current:** {total_current} {rain_disp_unit}")
+    st.markdown(f"**Total Rainfall – Future (+20%):** {total_future} {rain_disp_unit}")
+
+    # Save for later use in scenarios and exports
+    st.session_state["display_rain_curve_current"] = display_rain_curve
+    st.session_state["display_rain_curve_future"]  = future_rain_curve_display
+    st.session_state["rain_sim_curve_current_in"]  = rain_sim_curve            # inches (for SWMM)
+    st.session_state["rain_sim_curve_future_in"]   = future_rain_curve_inches  # inches (for SWMM)
+
+
+
 
     # Tide chart (15-min; length may be < 192 for live)
     tide_hours = tide_sim_minutes.astype(float) / 60.0
@@ -458,7 +481,7 @@ else:
             st.error(f"Baseline simulation failed: {e}")
 
     # ===== Watershed Choropleths (Impervious vs Pervious) =====
-    st.subheader("Watershed Runoff Maps")
+    st.subheader("Watershed Baseline Runoff Maps")
 
     WS_SHP_PATH = "Subcatchments.shp"  # you confirmed this path
 
