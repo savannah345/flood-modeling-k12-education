@@ -498,38 +498,39 @@ else:
             gdf_ws["NAME"] = gdf_ws["NAME"].astype(str).str.strip()
             gdf = gdf_ws.merge(df_swmm[["NAME","Impervious_R","Pervious_R"]], on="NAME", how="left")
 
-            # --- 4) Color helpers (continuous Blues) ---
+            # Compute ONE global scale across both metrics
+            vals = pd.concat([gdf["Impervious_R"], gdf["Pervious_R"]], ignore_index=True)
+            global_min = float(np.nanmin(vals))
+            global_max = float(np.nanmax(vals))
+
+            # Guards: all-NaN or constant field cases
+            if not np.isfinite(global_min) or not np.isfinite(global_max):
+                global_min, global_max = 0.0, 1.0
+            if abs(global_max - global_min) < 1e-9:
+                global_max = global_min + 1e-6
+
             def make_color(values, vmin, vmax, a=0.9):
-                arr = values.astype(float).to_numpy()
                 norm = mcolors.Normalize(vmin=vmin, vmax=vmax, clip=True)
                 cmap = cm.get_cmap("Blues")
-                rgba = []
+                out = []
                 for v in values:
                     if pd.isna(v):
-                        rgba.append([200,200,200,int(0.4*255)])
+                        out.append([200,200,200,int(0.4*255)])  # gray for missing
                     else:
                         r,g,b,_ = cmap(norm(float(v)))
-                        rgba.append([int(r*255), int(g*255), int(b*255), int(a*255)])
-                return rgba
+                        out.append([int(r*255), int(g*255), int(b*255), int(a*255)])
+                return out
 
-            # --- compute a shared scale ---
-            global_min = float(np.nanmin([gdf["Impervious_R"].min(), gdf["Pervious_R"].min()]))
-            global_max = float(np.nanmax([gdf["Impervious_R"].max(), gdf["Pervious_R"].max()]))
-
-            # apply colors with shared vmin/vmax
-            imp_colors = make_color(gdf["Impervious_R"], global_min, global_max)
-            perv_colors = make_color(gdf["Pervious_R"], global_min, global_max)
-
-            gdf["_fill_imp"]  = imp_colors
-            gdf["_fill_perv"] = perv_colors
-
-            gdf["_label"]     = gdf["NAME"]
+            # Apply shared scale to both
+            gdf["_fill_imp"]  = make_color(gdf["Impervious_R"], global_min, global_max)
+            gdf["_fill_perv"] = make_color(gdf["Pervious_R"], global_min, global_max)
+            gdf["_label"] = gdf["NAME"]  # <-- add this
 
             # --- 5) View + layers ---
+
             centroid = gdf.geometry.union_all().centroid
             view_state = pdk.ViewState(latitude=centroid.y, longitude=centroid.x, zoom=14.25)
 
-            # Stable GeoJSON backing both maps
             geojson = gdf.__geo_interface__
 
             imp_layer = pdk.Layer(
@@ -538,20 +539,22 @@ else:
                 pickable=True,
                 stroked=True,
                 filled=True,
-                get_fill_color="properties._fill_imp",
-                get_line_color=[255,255,255,255],
+                get_fill_color="properties._fill_imp",   #  impervious colors
+                get_line_color=[255, 255, 255, 255],
                 line_width_min_pixels=1,
             )
+
             perv_layer = pdk.Layer(
                 "GeoJsonLayer",
                 data=geojson,
                 pickable=True,
                 stroked=True,
                 filled=True,
-                get_fill_color="properties._fill_imp",
-                get_line_color=[255,255,255,255],
+                get_fill_color="properties._fill_perv",  # pervious colors (fixed)
+                get_line_color=[255, 255, 255, 255],
                 line_width_min_pixels=1,
             )
+
 
             # Labels at representative points
             reps = gdf.geometry.representative_point()
@@ -569,15 +572,31 @@ else:
             # two columns of maps
             c1, c2 = st.columns(2, gap="medium")
 
+            tooltip = {
+                "html": (
+                    "<b>{NAME}</b><br/>"
+                    "Impervious: {Impervious_R} " + runoff_unit + "<br/>"
+                    "Pervious: {Pervious_R} " + runoff_unit
+                ),
+                "style": {"backgroundColor": "white", "color": "black"}
+            }
+
+
             with c1:
                 st.markdown(f"**Impervious Runoff ({runoff_unit})**")
-                deck1 = pdk.Deck(layers=[imp_layer, text_layer], initial_view_state=view_state, map_style="light")
-                st.pydeck_chart(deck1, use_container_width=True)
+                st.pydeck_chart(pdk.Deck(layers=[imp_layer, text_layer],
+                                        initial_view_state=view_state,
+                                        map_style="light",
+                                        tooltip=tooltip),
+                                use_container_width=True)
 
             with c2:
                 st.markdown(f"**Pervious Runoff ({runoff_unit})**")
-                deck2 = pdk.Deck(layers=[perv_layer, text_layer], initial_view_state=view_state, map_style="light")
-                st.pydeck_chart(deck2, use_container_width=True)
+                st.pydeck_chart(pdk.Deck(layers=[perv_layer, text_layer],
+                                        initial_view_state=view_state,
+                                        map_style="light",
+                                        tooltip=tooltip),
+                                use_container_width=True)
 
             # === ONE shared legend centered under both maps ===
             from matplotlib import colormaps
@@ -608,11 +627,6 @@ else:
                 """,
                 unsafe_allow_html=True
             )
-
-
-
-
-
 
     # --- Cost and Sizing Assumptions ---
     data = {
