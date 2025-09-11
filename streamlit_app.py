@@ -16,6 +16,10 @@ import subprocess, sys
 from auth_supabase import create_user, authenticate_user, reset_password
 import matplotlib
 import matplotlib.pyplot as plt
+import geopandas as gpd
+import pydeck as pdk
+from shapely.geometry import Point
+from matplotlib import cm, colors as mcolors
 from datetime import datetime, timedelta
 import matplotlib.dates as mdates
 from pyswmm import Simulation, Links, Nodes
@@ -123,21 +127,26 @@ else:
         value=True
     )
 
+    @st.cache_data(show_spinner=False, ttl=3600, max_entries=4)
+    def _cached_live_tide(unit: str):
+        """Fetch once per hour per unit system; returns (tide_sim_minutes, tide_sim_curve)."""
+        df_live = fetch_greenstream_dataframe()
+        return build_timestep_and_resample_15min(
+            df_live,
+            water_col="Water Level NAVD88 (ft)",
+            unit=unit,  # feet (US) or meters (SI)
+            start_ts=None
+        )
+
     tide_source = "synthetic"
     tide_error  = None
     moon_phase  = None  # will set below
 
     if use_live:
         try:
-            df_live = fetch_greenstream_dataframe()  # DataFrame with 'Water Level NAVD88 (ft)'
-            tide_sim_minutes, tide_sim_curve = build_timestep_and_resample_15min(
-                df_live,
-                water_col="Water Level NAVD88 (ft)",
-                unit=unit,     # returns feet (US) or meters (Metric)
-                start_ts=None  # if known, pass the true start; else auto-anchors to now-48h
-            )
+            tide_sim_minutes, tide_sim_curve = _cached_live_tide(unit)
             tide_source = "live"
-            moon_phase = "Real-time (Greenstream)"
+            moon_phase = "Real-time tide data"
             st.success("Loaded real-time tide.")
         except Exception as e:
             tide_error = str(e)
@@ -448,30 +457,162 @@ else:
         except Exception as e:
             st.error(f"Baseline simulation failed: {e}")
 
+    # ===== Watershed Choropleths (Impervious vs Pervious) =====
+    st.subheader("Watershed Runoff Maps")
 
-    if f"{prefix}df_base_nogate" in st.session_state:
-        st.subheader("Baseline Runoff (No Tide Gate)")
+    WS_SHP_PATH = "Subcatchments.shp"  # you confirmed this path
 
-        df_no = st.session_state[f"{prefix}df_base_nogate"].copy()
+    # Need baseline runoff table from RPT
+    if f"{prefix}df_base_nogate" not in st.session_state:
+        st.info("Run the Baseline Scenario first.")
+    else:
+        # --- 1) SWMM runoff (inches from parser) -> to requested display units ---
+        df_swmm = st.session_state[f"{prefix}df_base_nogate"].copy()  # has: Subcatchment, Impervious Runoff (in), Pervious Runoff   (in)
+        # Normalize join key to match shapefile NAME
+        df_swmm["NAME"] = df_swmm["Subcatchment"].astype(str).str.strip()
 
-        # Optional unit conversion
-        if unit != "U.S. Customary":
-            factor = 2.54 if unit == "Metric (SI)" else 25.4
-            if unit == "Metric (SI)":
-                units_display = "cm"
-            else:
-                units_display = "inches"
-            df_no["Impervious Runoff (in)"] *= factor
-            df_no["Pervious Runoff   (in)"] *= factor
-            df_no.columns = ["Subcatchment",
-                            f"Impervious Runoff ({units_display})",
-                            f"Pervious Runoff ({units_display})"]
+        # Convert to display units
+        if unit == "U.S. Customary":
+            df_swmm["Impervious_R"] = df_swmm["Impervious Runoff (in)"]
+            df_swmm["Pervious_R"]   = df_swmm["Pervious Runoff   (in)"]
+            runoff_unit = "in"
         else:
-            df_no.columns = ["Subcatchment",
-                            "Impervious Runoff (in)",
-                            "Pervious Runoff (in)"]
+            df_swmm["Impervious_R"] = df_swmm["Impervious Runoff (in)"] * 2.54
+            df_swmm["Pervious_R"]   = df_swmm["Pervious Runoff   (in)"] * 2.54
+            runoff_unit = "cm"
 
-        st.dataframe(df_no, use_container_width=True)
+        # --- 2) Read shapefile and prep CRS ---
+        try:
+            gdf_ws = gpd.read_file(WS_SHP_PATH)
+        except Exception as e:
+            st.error(f"Could not read shapefile: {e}")
+            gdf_ws = None
+
+        if gdf_ws is not None and not gdf_ws.empty:
+            if gdf_ws.crs is None:
+                gdf_ws = gdf_ws.set_crs(4326)
+            else:
+                gdf_ws = gdf_ws.to_crs(4326)
+
+            # --- 3) Join on NAME ---
+            gdf_ws["NAME"] = gdf_ws["NAME"].astype(str).str.strip()
+            gdf = gdf_ws.merge(df_swmm[["NAME","Impervious_R","Pervious_R"]], on="NAME", how="left")
+
+            # --- 4) Color helpers (continuous Blues) ---
+            def make_color(values, vmin, vmax, a=0.9):
+                arr = values.astype(float).to_numpy()
+                norm = mcolors.Normalize(vmin=vmin, vmax=vmax, clip=True)
+                cmap = cm.get_cmap("Blues")
+                rgba = []
+                for v in values:
+                    if pd.isna(v):
+                        rgba.append([200,200,200,int(0.4*255)])
+                    else:
+                        r,g,b,_ = cmap(norm(float(v)))
+                        rgba.append([int(r*255), int(g*255), int(b*255), int(a*255)])
+                return rgba
+
+            # --- compute a shared scale ---
+            global_min = float(np.nanmin([gdf["Impervious_R"].min(), gdf["Pervious_R"].min()]))
+            global_max = float(np.nanmax([gdf["Impervious_R"].max(), gdf["Pervious_R"].max()]))
+
+            # apply colors with shared vmin/vmax
+            imp_colors = make_color(gdf["Impervious_R"], global_min, global_max)
+            perv_colors = make_color(gdf["Pervious_R"], global_min, global_max)
+
+            gdf["_fill_imp"]  = imp_colors
+            gdf["_fill_perv"] = perv_colors
+
+            gdf["_label"]     = gdf["NAME"]
+
+            # --- 5) View + layers ---
+            centroid = gdf.geometry.union_all().centroid
+            view_state = pdk.ViewState(latitude=centroid.y, longitude=centroid.x, zoom=14.25)
+
+            # Stable GeoJSON backing both maps
+            geojson = gdf.__geo_interface__
+
+            imp_layer = pdk.Layer(
+                "GeoJsonLayer",
+                data=geojson,
+                pickable=True,
+                stroked=True,
+                filled=True,
+                get_fill_color="properties._fill_imp",
+                get_line_color=[255,255,255,255],
+                line_width_min_pixels=1,
+            )
+            perv_layer = pdk.Layer(
+                "GeoJsonLayer",
+                data=geojson,
+                pickable=True,
+                stroked=True,
+                filled=True,
+                get_fill_color="properties._fill_imp",
+                get_line_color=[255,255,255,255],
+                line_width_min_pixels=1,
+            )
+
+            # Labels at representative points
+            reps = gdf.geometry.representative_point()
+            labels = pd.DataFrame({"lon": reps.x, "lat": reps.y, "text": gdf["_label"]})
+            text_layer = pdk.Layer(
+                "TextLayer",
+                data=labels,
+                get_position='[lon, lat]',
+                get_text="text",
+                get_size=12,
+                get_color=[0,0,0],
+                get_alignment_baseline="'center'"
+            )
+
+            # two columns of maps
+            c1, c2 = st.columns(2, gap="medium")
+
+            with c1:
+                st.markdown(f"**Impervious Runoff ({runoff_unit})**")
+                deck1 = pdk.Deck(layers=[imp_layer, text_layer], initial_view_state=view_state, map_style="light")
+                st.pydeck_chart(deck1, use_container_width=True)
+
+            with c2:
+                st.markdown(f"**Pervious Runoff ({runoff_unit})**")
+                deck2 = pdk.Deck(layers=[perv_layer, text_layer], initial_view_state=view_state, map_style="light")
+                st.pydeck_chart(deck2, use_container_width=True)
+
+            # === ONE shared legend centered under both maps ===
+            from matplotlib import colormaps
+            norm = mcolors.Normalize(vmin=global_min, vmax=global_max, clip=True)
+            cmap = colormaps.get_cmap("Blues")
+            c0  = [int(v*255) for v in cmap(norm(global_min))[:3]]
+            c1b = [int(v*255) for v in cmap(norm(global_max))[:3]]
+
+            st.markdown(
+                f"""
+                <div style="display:flex; justify-content:center; margin-top:6px;">
+                <div style="min-width:260px; max-width:640px; width:60%;">
+                    <div style="text-align:center; font-size:13px;"><b>Runoff Legend ({runoff_unit})</b></div>
+                    <div style="display:flex; align-items:center; gap:10px;">
+                    <span>{global_min:.2f}</span>
+                    <div style="flex:1; height:12px;
+                        background:linear-gradient(to right,
+                        rgb({c0[0]},{c0[1]},{c0[2]}),
+                        rgb({c1b[0]},{c1b[1]},{c1b[2]}));
+                        border:1px solid #888;"></div>
+                    <span>{global_max:.2f}</span>
+                    </div>
+                    <div style="color:#555; font-size:12px; text-align:center; margin-top:6px;">
+                    Same scale for both maps
+                    </div>
+                </div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+
+
+
+
 
     # --- Cost and Sizing Assumptions ---
     data = {
@@ -569,7 +710,6 @@ else:
                 ))
 
         return lines
-
 
     if st.button("Run Max LID Scenario"):
         # Load max values
@@ -783,59 +923,6 @@ else:
 
         min_len = min(len(ts), len(baseline), len(baseline_gate),
                       len(lid), len(lid_gate), len(lid_max), len(lid_max_gate))
-
-        time_objects = [datetime.strptime(t, "%m-%d %H:%M") for t in ts[:min_len]]
-
-        colors = {
-            "Baseline": "#141413",
-            "Baseline + Tide Gate": "#6c6ec9",
-            "With LIDs": "#F97DE6",
-            "LIDs + Tide Gate": "#f6b00b",
-            "Max LIDs": "#62f271",
-            "Max LIDs + Tide Gate": "#f04a4a"
-        }
-
-        styles = {
-            "Baseline": "-",
-            "Baseline + Tide Gate": "-",
-            "With LIDs": "-.",
-            "LIDs + Tide Gate": "-.",
-            "Max LIDs": "--",
-            "Max LIDs + Tide Gate": "-"
-        }
-
-        #fig, ax = plt.subplots(figsize=(8, 4))
-        #ax.plot(time_objects, baseline[:min_len],      styles["Baseline"],            label="Baseline",              color=colors["Baseline"], linewidth=4)
-        #ax.plot(time_objects, baseline_gate[:min_len], styles["Baseline + Tide Gate"],label="Baseline + Tide Gate",  color=colors["Baseline + Tide Gate"], linewidth=4)
-        #ax.plot(time_objects, lid[:min_len],           styles["With LIDs"],           label="With LIDs",             color=colors["With LIDs"], linewidth=4)
-        #ax.plot(time_objects, lid_gate[:min_len],      styles["LIDs + Tide Gate"],    label="Custom LIDs + Tide Gate", color=colors["LIDs + Tide Gate"], linewidth=4)
-        #ax.plot(time_objects, lid_max[:min_len],       styles["Max LIDs"],            label="Max LIDs",               color=colors["Max LIDs"], linewidth=4)
-        #ax.plot(time_objects, lid_max_gate[:min_len],  styles["Max LIDs + Tide Gate"],label="Max LIDs + Tide Gate",   color=colors["Max LIDs + Tide Gate"], linewidth=4)
-
-        #legend = ax.legend(
-            #loc="upper left",
-            #fontsize=14,
-            #frameon=True,
-            #ncol=2
-        #)
-        #legend.get_frame().set_facecolor("white")
-        #legend.get_frame().set_edgecolor("black")
-
-        #ax.set_ylabel("Cumulative Flood Volume (ac-ft)", fontsize=14)
-        #ax.set_xlabel("Time", fontsize=14)
-        #ax.set_ylim(bottom=0)
-        #ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
-        #ax.xaxis.set_major_formatter(mdates.DateFormatter('%-I %p'))
-        #ax.tick_params(axis='both', labelsize=12)
-
-        #fig.autofmt_xdate(rotation=45)
-        #ax.grid(False)
-
-        #html = mpld3.fig_to_html(fig)
-        #components.html(html, height=500)
-
-    #else:
-        #st.info("🔄 Please run all six SWMM scenarios before viewing the flood volume plot.")
 
 
     def extract_volumes_from_rpt(rpt_path, scenario_name=None):
