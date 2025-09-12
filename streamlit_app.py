@@ -139,7 +139,6 @@ else:
             start_ts=None,
             navd88_to_sea_level_offset_ft=offset_ft  # << subtract 1.36 (ft) internally
         )
-
     
     def tide_to_feet_for_swmm(tide_curve_ui_units: np.ndarray, ui_unit: str) -> np.ndarray:
         arr = np.asarray(tide_curve_ui_units, dtype=float)
@@ -262,23 +261,18 @@ else:
         "Scenario": (["Current"] * len(time_hours)) + (["Future (+20%)"] * len(time_hours))
     })
 
-    st.subheader("Rainfall Distribution")
-    rain_chart = (
-        alt.Chart(df_rain)
-        .mark_line()
-        .encode(
-            x=alt.X("Time (hours):Q", title="Time (hours)"),
-            y=alt.Y("Rainfall:Q", title=f"Rainfall ({rain_disp_unit})"),
-            color=alt.Color("Scenario:N", legend=alt.Legend(title="Rainfall Case")),
-            tooltip=[
-                alt.Tooltip("Time (hours):Q", format=".2f"),
-                alt.Tooltip("Rainfall:Q", title=f"Rainfall ({rain_disp_unit})", format=".3f"),
-                alt.Tooltip("Scenario:N")
-            ]
-        )
-    )
-    st.altair_chart(rain_chart, use_container_width=True)
+    # Tide chart (15-min; length may be < 192 for live)
+    tide_hours = tide_sim_minutes.astype(float) / 60.0
 
+    df_tide = pd.DataFrame({
+        "Time (hours)": tide_hours,
+        f"Tide ({tide_disp_unit})": display_tide_curve
+    })
+
+    x_min = 0
+    x_max = max(df_rain["Time (hours)"].max(), df_tide["Time (hours)"].max())
+    x_domain = [x_min, x_max]
+    
     # Totals (display units)
     total_current = float(np.round(display_rain_curve.sum(), 2))
     total_future  = float(np.round(future_rain_curve_display.sum(), 2))
@@ -291,20 +285,59 @@ else:
     st.session_state["rain_sim_curve_current_in"]  = rain_sim_curve            # inches (for SWMM)
     st.session_state["rain_sim_curve_future_in"]   = future_rain_curve_inches  # inches (for SWMM)
 
-    # Tide chart (15-min; length may be < 192 for live)
-    tide_hours = tide_sim_minutes.astype(float) / 60.0
+    st.subheader("Rainfall Distribution")
 
-    df_tide = pd.DataFrame({
-        "Time (hours)": tide_hours,
-        f"Tide ({tide_disp_unit})": display_tide_curve
-    })
+    rain_chart = (
+        alt.Chart(df_rain)
+        .mark_line(strokeWidth=5)
+        .encode(
+            x=alt.X("Time (hours):Q", title="Time (hours)", scale=alt.Scale(domain=x_domain)),
+            y=alt.Y("Rainfall:Q", title=f"Rainfall ({rain_disp_unit})"),
+            color=alt.Color(
+                "Scenario:N",
+                scale=alt.Scale(
+                    domain=["Current", "Future (+20%)"],
+                    range=["black", "orange"]
+                ),
+                legend=alt.Legend(
+                    title="Rainfall Case",
+                    orient="none",
+                    legendX=60,
+                    legendY=20,
+                    fillColor="white",
+                    strokeColor="black"
+                )
+            ),
+            opacity=alt.Opacity(
+                "Scenario:N",
+                scale=alt.Scale(
+                    domain=["Current", "Future (+20%)"],
+                    range=[1.0, 0.65]   # Current fully opaque, Future semi-transparent
+                ),
+                legend=None   # hide opacity legend
+            ),
+            tooltip=[
+                alt.Tooltip("Time (hours):Q", format=".2f"),
+                alt.Tooltip("Rainfall:Q", title=f"Rainfall ({rain_disp_unit})", format=".3f"),
+                alt.Tooltip("Scenario:N")
+            ]
+        )
+    )
+
+    st.altair_chart(rain_chart, use_container_width=True)
+
+
     st.subheader("Tide Profile")
+    # Tide chart
     tide_chart = (
         alt.Chart(df_tide)
-        .mark_line()
+        .mark_line(strokeWidth=5)
         .encode(
-            x="Time (hours)",
-            y=f"Tide ({tide_disp_unit})"
+            x=alt.X("Time (hours):Q",
+                    title="Time (hours)",
+                    scale=alt.Scale(domain=x_domain)),
+            y=alt.Y(f"Tide ({tide_disp_unit}):Q",
+                    title=f"Tide ({tide_disp_unit})")
         )
     )
     st.altair_chart(tide_chart, use_container_width=True)
