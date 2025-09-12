@@ -128,23 +128,33 @@ else:
     )
 
     @st.cache_data(show_spinner=False, ttl=3600, max_entries=4)
-    def _cached_live_tide(unit: str):
-        """Fetch once per hour per unit system; returns (tide_sim_minutes, tide_sim_curve)."""
+    def _cached_live_tide(unit: str, offset_ft: float):
+        """Fetch once per hour per unit system; returns (tide_sim_minutes, tide_sim_curve) after NAVD88->MSL shift."""
         df_live = fetch_greenstream_dataframe()
         return build_timestep_and_resample_15min(
             df_live,
             water_col="Water Level NAVD88 (ft)",
-            unit=unit,  # feet (US) or meters (SI)
-            start_ts=None
+            unit=unit,              # feet (US) or meters (SI) for display
+            start_ts=None,
+            navd88_to_sea_level_offset_ft=offset_ft
         )
+
+    
+    def tide_to_feet_for_swmm(tide_curve_ui_units: np.ndarray, ui_unit: str) -> np.ndarray:
+        """
+        UI shows ft (US) or m (Metric). SWMM always needs feet.
+        """
+        arr = np.asarray(tide_curve_ui_units, dtype=float)
+        return arr if ui_unit == "U.S. Customary" else (arr / 0.3048)
 
     tide_source = "synthetic"
     tide_error  = None
     moon_phase  = None  # will set below
+    MSL_OFFSET_NAVD88_FT = 1.36  # Sewells Point reference; NAVD88 -> MSL
 
     if use_live:
         try:
-            tide_sim_minutes, tide_sim_curve = _cached_live_tide(unit)
+            tide_sim_minutes, tide_sim_curve = _cached_live_tide(unit, MSL_OFFSET_NAVD88_FT)
             tide_source = "live"
             moon_phase = "Real-time tide data"
             st.success("Loaded real-time tide.")
@@ -205,7 +215,7 @@ else:
     align_mode = "peak" if "High" in tide_align else "low"
 
     # Align rainfall (in inches) to the 15-min tide curve
-    rain_sim_minutes, rain_sim_curve = align_rainfall_to_tide(
+    rain_sim_minutes, rain_sim_curve, _= align_rainfall_to_tide(
         rain_inches,
         duration_minutes,
         tide_sim_curve,
@@ -451,7 +461,12 @@ else:
                 st.session_state["rain_sim_curve_current_in"],
                 simulation_date
             )
-            tide_lines = format_timeseries("tide", tide_sim_minutes, tide_sim_curve, simulation_date)
+            tide_lines = format_timeseries(
+                "tide",
+                tide_sim_minutes,
+                tide_to_feet_for_swmm(tide_sim_curve, unit),
+                simulation_date
+            )
             lid_lines  = [";"]  # No LIDs in baseline
 
             # ---- CURRENT rain (2 scenarios) ----
@@ -775,7 +790,12 @@ else:
             max_lid_config[sub] = {"rain_gardens": rg_max, "rain_barrels": rb_max}
 
         lid_lines = generate_lid_usage_lines(max_lid_config)
-        tide_lines = format_timeseries("tide", tide_sim_minutes, tide_sim_curve, simulation_date)
+        tide_lines = format_timeseries(
+            "tide",
+            tide_sim_minutes,
+            tide_to_feet_for_swmm(tide_sim_curve, unit),
+            simulation_date
+        )
 
         # rain pairs
         rain_lines_cur, rain_lines_fut = _rain_lines_pair(
@@ -945,7 +965,13 @@ else:
                     st.warning("No LIDs selected.")
                     st.stop()
 
-                tide_lines = format_timeseries("tide", tide_sim_minutes, tide_sim_curve, simulation_date)
+                tide_lines = format_timeseries(
+                    "tide",
+                    tide_sim_minutes,
+                    tide_to_feet_for_swmm(tide_sim_curve, unit),
+                    simulation_date
+                )
+
                 rain_lines_cur, rain_lines_fut = _rain_lines_pair(
                     rain_sim_minutes,
                     st.session_state["rain_sim_curve_current_in"],
@@ -1256,8 +1282,8 @@ else:
         rain_time_series = st.session_state.get("display_rain_curve", [])
         tide_time_series = st.session_state.get("display_tide_curve", [])
 
-        rain_disp_unit = st.session_state.get(f"{prefix}rain_disp_unit", "inches")
-        tide_disp_unit = st.session_state.get(f"{prefix}tide_disp_unit", "ft")
+        rain_disp_unit = st.session_state.get("rain_disp_unit", "inches")
+        tide_disp_unit = st.session_state.get("tide_disp_unit", "ft")
 
         # Prepare user's LID selections (if any)
         lid_config = st.session_state.get(f"{prefix}user_lid_config", {})
@@ -1314,7 +1340,7 @@ else:
                 ]
                 df_tide = pd.DataFrame({
                     "Timestamp": tide_timestamps,
-                    f"Tide ({tide_disp_unit}": tide_time_series
+                    f"Tide ({tide_disp_unit})": tide_time_series
                 })
                 df_tide.to_excel(writer, sheet_name="Tide Event", index=False)
             

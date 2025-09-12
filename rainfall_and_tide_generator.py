@@ -16,10 +16,12 @@ __all__ = [
     "generate_rainfall",
     "moon_tide_ranges",
     "generate_tide_curve",
+    "find_tide_extrema",
     "align_rainfall_to_tide",
     "fetch_greenstream_dataframe",
     "build_timestep_and_resample_15min",
     "get_tide_real_or_synthetic",
+    "get_aligned_rainfall",
 ]
 
 # ============================================================
@@ -116,25 +118,51 @@ def generate_tide_curve(moon_phase: str, unit: str) -> Tuple[np.ndarray, np.ndar
     return minutes_15, tide_15
 
 # ============================================================
-# 5) Align rainfall to a 15-min tide curve
+# 5) Extrema detection (peaks & lows)
+# ============================================================
+def find_tide_extrema(
+    tide_curve_15min: np.ndarray,
+    distance_bins: int = 40,      # ~10 h / 15 min ≈ 40 bins; avoids double-detecting
+    prominence: Optional[float] = None
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Return indices of tide highs (peaks) and lows (troughs) on a 15-min series.
+    Tune 'distance_bins' and 'prominence' to control detection strictness.
+    """
+    peaks, _   = find_peaks(tide_curve_15min, distance=distance_bins, prominence=prominence)
+    troughs, _ = find_peaks(-tide_curve_15min, distance=distance_bins, prominence=prominence)
+    return peaks, troughs
+
+# ============================================================
+# 6) Align rainfall to a tide curve (length-agnostic)
 # ============================================================
 def align_rainfall_to_tide(total_inches: float,
                            duration_minutes: int,
                            tide_curve_15min: np.ndarray,
                            align: str = "peak",
-                           method: str = "Normal") -> Tuple[np.ndarray, np.ndarray]:
+                           method: str = "Normal",
+                           target_index: Optional[int] = None,
+                           prominence: Optional[float] = None
+                           ) -> Tuple[np.ndarray, np.ndarray, int]:
     """
-    Aligns a generated rainfall hyetograph to a 15-min tide curve.
+    Aligns a generated rainfall hyetograph to a 15-min tide curve of ANY length.
     - total_inches: storm depth (inches)
     - duration_minutes: storm duration (multiple of 15)
-    - tide_curve_15min: 192-length tide values over 48h at 15-min
+    - tide_curve_15min: N-length tide values at 15-min
     - align: "peak" (center rain at a high tide) or "low" (center at a low tide)
-    Returns (minutes_15, rain_15) both length 192.
+    - target_index: if provided, align exactly at this index (overrides 'align')
+    - prominence: passed to peak finder if 'target_index' not provided
+    Returns (minutes_15, rain_15, center_index_used)
     """
     if duration_minutes % 15 != 0:
         raise ValueError("duration_minutes must be divisible by 15.")
+    n = len(tide_curve_15min)
+    if n == 0:
+        raise ValueError("Empty tide curve.")
+
     intervals = duration_minutes // 15
 
+    # Build rainfall shape
     if method == "Normal":
         x = np.linspace(-3, 3, intervals)
         rain_profile = np.exp(-0.5 * x**2)
@@ -145,27 +173,36 @@ def align_rainfall_to_tide(total_inches: float,
         rain_profile /= rain_profile.sum()
     else:
         raise ValueError("Unsupported method for alignment.")
-
     rain_profile *= total_inches
 
-    search_curve = tide_curve_15min if align == "peak" else -tide_curve_15min
-    peaks, _ = find_peaks(search_curve)
-    if peaks.size == 0:
-        raise ValueError("Could not detect a tide peak/dip for alignment.")
-    center_index = peaks[1] if len(peaks) > 1 else peaks[0]  # pick a central-ish peak
+    # Choose center index
+    if target_index is None:
+        peaks, troughs = find_tide_extrema(tide_curve_15min, prominence=prominence)
+        candidates = peaks if align == "peak" else troughs
+        if candidates.size == 0:
+            # fallback: center of series
+            center_index = n // 2
+        else:
+            mid = n // 2
+            center_index = candidates[np.argmin(np.abs(candidates - mid))]
+    else:
+        center_index = int(target_index)
+        if not (0 <= center_index < n):
+            raise ValueError("target_index out of range.")
 
-    full_rain = np.zeros(192, dtype=float)  # 48h at 15-min
+    # Place rainfall, clipping to series bounds
+    rain = np.zeros(n, dtype=float)
     start = center_index - intervals // 2
     for i in range(intervals):
         idx = start + i
-        if 0 <= idx < 192:
-            full_rain[idx] = rain_profile[i]
+        if 0 <= idx < n:
+            rain[idx] = rain_profile[i]
 
-    minutes_15 = np.arange(0, 2880, 15)
-    return minutes_15, full_rain
+    minutes_15 = np.arange(n) * 15  # minutes from start (0,15,30,...)
+    return minutes_15, rain, center_index
 
 # ============================================================
-# 6) Real-time Greenstream fetch (48h @ 6-min) -> DataFrame
+# 7) Real-time Greenstream fetch (48h @ 6-min) -> DataFrame
 #     Then resample to 15-min with unit handling
 # ============================================================
 
@@ -312,8 +349,9 @@ def fetch_greenstream_dataframe() -> pd.DataFrame:
         browser.close()
         return df
 
+
 # ============================================================
-# 7) Build 6-min timeline and resample to 15-min (unit aware)
+# 8) Build 6-min timeline and resample to 15-min (unit aware)
 # ============================================================
 def build_timestep_and_resample_15min(df_raw: pd.DataFrame,
                                       water_col: str = WATER_COL_LIVE,
@@ -351,17 +389,26 @@ def build_timestep_and_resample_15min(df_raw: pd.DataFrame,
     vals = tide_df[water_col].astype(float)
     if unit == "Metric (SI)":
         vals = feet_to_meters(vals)
+        offset = navd88_to_sea_level_offset_ft * 0.3048   # ft -> m
+    else:
+        offset = navd88_to_sea_level_offset_ft             # ft
+
+    # Subtract NAVD88→MSL offset if provided
+    if offset != 0.0:
+        vals = vals - offset
+
     tide_df[water_col] = vals
 
     # Resample to 15-minute bins
     tide_15 = tide_df.resample("15min").mean(numeric_only=True)[water_col].to_numpy()
 
-    # Minutes array (trim to actual length if some points missing)
-    minutes_15 = np.arange(0, 2880, 15)[: len(tide_15)]
+    # Minutes array (length-agnostic)
+    minutes_15 = np.arange(len(tide_15)) * 15
     return minutes_15, tide_15
 
+
 # ============================================================
-# 8) Orchestrator: prefer real-time, fallback to synthetic
+# 9) Orchestrator: prefer real-time, fallback to synthetic
 # ============================================================
 def get_tide_real_or_synthetic(moon_phase: str,
                                unit: str,
@@ -384,3 +431,46 @@ def get_tide_real_or_synthetic(moon_phase: str,
         # Synthetic fallback (already outputs selected unit)
         m15, tide_15 = generate_tide_curve(moon_phase, unit)
         return m15, tide_15, False
+
+# ============================================================
+# 10) High-level helper: get tide (live or synthetic) and aligned rainfall
+# ============================================================
+def get_aligned_rainfall(
+    total_inches: float,
+    duration_minutes: int,
+    moon_phase: str,
+    unit: str,
+    align: str = "peak",
+    method: str = "Normal",
+    start_ts: Optional[pd.Timestamp] = None,
+    prominence: Optional[float] = None
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, bool, int]:
+    """
+    Returns (minutes_15, tide_15, rain_15, used_live, center_idx).
+    - 'align' in {"peak","low"}
+    - 'prominence' forwarded to extrema finder for noisy live data
+    """
+    m15, tide_15, used_live = get_tide_real_or_synthetic(moon_phase, unit, start_ts)
+
+    # Choose a target index near the series midpoint based on peaks/lows.
+    peaks, troughs = find_tide_extrema(tide_15, prominence=prominence)
+    if align == "peak":
+        cand = peaks
+    else:
+        cand = troughs
+
+    if cand.size == 0:
+        target_idx = len(tide_15) // 2
+    else:
+        target_idx = cand[np.argmin(np.abs(cand - len(tide_15)//2))]
+
+    _, rain_15, center_idx = align_rainfall_to_tide(
+        total_inches=total_inches,
+        duration_minutes=duration_minutes,
+        tide_curve_15min=tide_15,
+        align=align,
+        method=method,
+        target_index=target_idx,
+        prominence=prominence
+    )
+    return m15, tide_15, rain_15, used_live, center_idx
