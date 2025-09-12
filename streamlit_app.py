@@ -161,7 +161,7 @@ else:
         with open("NASA_Tides.mp4", "rb") as video_file:
             st.video(video_file.read())
 
-        moon_phase = st.selectbox("Moon Phase", list(moon_tide_ranges.keys()))
+        moon_phase = st.selectbox("Tide", list(moon_tide_ranges.keys()))
         st.subheader("When high tide and peak rainfall happen together, tidal backflow can block stormwater from draining, increasing flood risk.")
 
         # Synthetic tide is already 15-min and in the selected units
@@ -283,9 +283,6 @@ else:
     st.session_state["display_rain_curve_future"]  = future_rain_curve_display
     st.session_state["rain_sim_curve_current_in"]  = rain_sim_curve            # inches (for SWMM)
     st.session_state["rain_sim_curve_future_in"]   = future_rain_curve_inches  # inches (for SWMM)
-
-
-
 
     # Tide chart (15-min; length may be < 192 for live)
     tide_hours = tide_sim_minutes.astype(float) / 60.0
@@ -429,11 +426,18 @@ else:
             })
         return pd.DataFrame(data)
 
+    # --- helper to build rain time series for current vs future (+20%) ---
+    def _rain_lines_pair(sim_minutes, rain_curve_in, sim_start_str):
+        """Returns (rain_lines_current, rain_lines_future) in SWMM base units (inches)."""
+        rain_lines_cur = format_timeseries("rain_gage_timeseries", sim_minutes, rain_curve_in, sim_start_str)
+        rain_lines_fut = format_timeseries("rain_gage_timeseries", sim_minutes, (np.array(rain_curve_in) * 1.2), sim_start_str)
+        return rain_lines_cur, rain_lines_fut
+
     st.markdown(f"""
     ### Selected Scenario Summary
     - **Storm Duration:** {duration_minutes//60} hr  
     - **Return Period:** {return_period} yr  
-    - **Moon Phase:** {moon_phase}  
+    - **Tide:** {moon_phase}  
     - **Tide Alignment:** {'High Tide Peak' if align_mode=='peak' else 'Low Tide Dip'}  
     - **Display Units:** {unit}
     """)
@@ -441,44 +445,57 @@ else:
     # === Run Baseline Scenario ===
     if st.button("Run Baseline Scenario"):
         try:
-            rain_lines = format_timeseries("rain_gage_timeseries", rain_sim_minutes, rain_sim_curve, simulation_date)
+            # rain in SWMM base units (inches)
+            rain_lines_cur, rain_lines_fut = _rain_lines_pair(
+                rain_sim_minutes,
+                st.session_state["rain_sim_curve_current_in"],
+                simulation_date
+            )
             tide_lines = format_timeseries("tide", tide_sim_minutes, tide_sim_curve, simulation_date)
             lid_lines  = [";"]  # No LIDs in baseline
 
-            # Run both baseline scenarios
-            fill_nogate, time_nogate, rpt1 = run_swmm_scenario(f"{prefix}baseline_nogate", rain_lines, tide_lines, lid_lines, "NO")
-            fill_gate,   time_gate,   rpt2 = run_swmm_scenario(f"{prefix}baseline_gate",   rain_lines, tide_lines, lid_lines, "YES")
+            # ---- CURRENT rain (2 scenarios) ----
+            fill_nogate_cur, time_nogate, rpt1 = run_swmm_scenario(f"{prefix}baseline_nogate_current", rain_lines_cur, tide_lines, lid_lines, "NO")
+            fill_gate_cur,   _,           rpt2 = run_swmm_scenario(f"{prefix}baseline_gate_current",   rain_lines_cur, tide_lines, lid_lines, "YES")
 
-            # Save culvert depth fills + time
-            st.session_state[f"{prefix}baseline_fill"] = fill_nogate
+            # ---- FUTURE (+20%) rain (2 scenarios) ----
+            fill_nogate_fut, _, rpt1f = run_swmm_scenario(f"{prefix}baseline_nogate_future", rain_lines_fut, tide_lines, lid_lines, "NO")
+            fill_gate_fut,   _, rpt2f = run_swmm_scenario(f"{prefix}baseline_gate_future",   rain_lines_fut, tide_lines, lid_lines, "YES")
+
+            # Save time series (timestamps shared with first run)
             st.session_state[f"{prefix}baseline_timestamps"] = time_nogate
-            st.session_state[f"{prefix}baseline_gate_fill"] = fill_gate
 
-            # Parse runoff data from RPTs
-            df1 = extract_runoff_and_lid_data(rpt1)
-            df2 = extract_runoff_and_lid_data(rpt2)
-            st.session_state[f"{prefix}df_base_nogate"] = df1
-            st.session_state[f"{prefix}df_base_gate"] = df2
+            st.session_state[f"{prefix}baseline_fill_current"] = fill_nogate_cur
+            st.session_state[f"{prefix}baseline_gate_fill_current"] = fill_gate_cur
+            st.session_state[f"{prefix}baseline_fill_future"] = fill_nogate_fut
+            st.session_state[f"{prefix}baseline_gate_fill_future"] = fill_gate_fut
 
-            # Unit conversion for final display table
+            # Parse runoff summaries
+            st.session_state[f"{prefix}df_base_nogate_current"] = extract_runoff_and_lid_data(rpt1)
+            st.session_state[f"{prefix}df_base_gate_current"]   = extract_runoff_and_lid_data(rpt2)
+            st.session_state[f"{prefix}df_base_nogate_future"]  = extract_runoff_and_lid_data(rpt1f)
+            st.session_state[f"{prefix}df_base_gate_future"]    = extract_runoff_and_lid_data(rpt2f)
+
+            # Display table (keep same display-unit logic; use *_current to drive maps)
+            df1 = st.session_state[f"{prefix}df_base_nogate_current"]
             if unit == "U.S. Customary":
                 df_disp = df1.rename(columns={
                     "Impervious Runoff (in)": "Impervious Runoff (inches)",
                     "Pervious Runoff   (in)": "Pervious Runoff (inches)"
                 })
             else:
-                factor = 2.54 if unit == "Metric (SI)" else 25.4
                 df_disp = pd.DataFrame({
                     "Subcatchment": df1["Subcatchment"],
-                    f"Impervious Runoff ({unit})": df1["Impervious Runoff (in)"] * factor,
-                    f"Pervious Runoff ({unit})": df1["Pervious Runoff   (in)"] * factor
+                    f"Impervious Runoff ({unit})": df1["Impervious Runoff (in)"] * 2.54,
+                    f"Pervious Runoff ({unit})":   df1["Pervious Runoff   (in)"] * 2.54
                 })
-
             st.session_state[f"{prefix}baseline_df"] = df_disp
-            st.success("Baseline scenarios complete!")
+
+            st.success("Baseline scenarios (Current & +20%) complete!")
 
         except Exception as e:
             st.error(f"Baseline simulation failed: {e}")
+
 
     # ===== Watershed Choropleths (Impervious vs Pervious) =====
     st.subheader("Watershed Baseline Runoff Maps")
@@ -486,11 +503,11 @@ else:
     WS_SHP_PATH = "Subcatchments.shp"  # you confirmed this path
 
     # Need baseline runoff table from RPT
-    if f"{prefix}df_base_nogate" not in st.session_state:
+    if f"{prefix}df_base_nogate_current" not in st.session_state:
         st.info("Run the Baseline Scenario first.")
     else:
         # --- 1) SWMM runoff (inches from parser) -> to requested display units ---
-        df_swmm = st.session_state[f"{prefix}df_base_nogate"].copy()  # has: Subcatchment, Impervious Runoff (in), Pervious Runoff   (in)
+        df_swmm = st.session_state[f"{prefix}df_base_nogate_current"].copy()  # has: Subcatchment, Impervious Runoff (in), Pervious Runoff   (in)
         # Normalize join key to match shapefile NAME
         df_swmm["NAME"] = df_swmm["Subcatchment"].astype(str).str.strip()
 
@@ -749,7 +766,7 @@ else:
         return lines
 
     if st.button("Run Max LID Scenario"):
-        # Load max values
+        # Build max LID config
         max_lid_config = {}
         for idx, row in df.iterrows():
             sub = row["NAME"]
@@ -757,30 +774,44 @@ else:
             rb_max = int(row["MaxNumber_RB"])
             max_lid_config[sub] = {"rain_gardens": rg_max, "rain_barrels": rb_max}
 
-        rain_lines = format_timeseries("rain_gage_timeseries", rain_sim_minutes, rain_sim_curve, simulation_date)
-        tide_lines = format_timeseries("tide", tide_sim_minutes, tide_sim_curve, simulation_date)
         lid_lines = generate_lid_usage_lines(max_lid_config)
+        tide_lines = format_timeseries("tide", tide_sim_minutes, tide_sim_curve, simulation_date)
 
-        # Run SWMM with and without tide gate
-        fill_max_lid, time_max_lid, rpt5 = run_swmm_scenario(f"{prefix}lid_max_nogate", rain_lines, tide_lines, lid_lines, "NO")
-        fill_max_gate, _, rpt6 = run_swmm_scenario(f"{prefix}lid_max_gate", rain_lines, tide_lines, lid_lines, "YES")
+        # rain pairs
+        rain_lines_cur, rain_lines_fut = _rain_lines_pair(
+            rain_sim_minutes,
+            st.session_state["rain_sim_curve_current_in"],
+            simulation_date
+        )
+
+        # CURRENT (2)
+        fill_max_cur, time_max, rpt5 = run_swmm_scenario(f"{prefix}lid_max_nogate_current", rain_lines_cur, tide_lines, lid_lines, "NO")
+        fill_max_gate_cur, _,   rpt6 = run_swmm_scenario(f"{prefix}lid_max_gate_current",   rain_lines_cur, tide_lines, lid_lines, "YES")
+
+        # FUTURE (2)
+        fill_max_fut,  _, rpt5f = run_swmm_scenario(f"{prefix}lid_max_nogate_future", rain_lines_fut, tide_lines, lid_lines, "NO")
+        fill_max_gate_fut,_, rpt6f = run_swmm_scenario(f"{prefix}lid_max_gate_future",   rain_lines_fut, tide_lines, lid_lines, "YES")
 
         # Store time series
-        st.session_state[f"{prefix}lid_max_fill"] = fill_max_lid
-        st.session_state[f"{prefix}lid_max_timestamps"] = time_max_lid
-        st.session_state[f"{prefix}lid_max_gate_fill"] = fill_max_gate
+        st.session_state[f"{prefix}lid_max_timestamps"] = time_max
+        st.session_state[f"{prefix}lid_max_fill_current"] = fill_max_cur
+        st.session_state[f"{prefix}lid_max_gate_fill_current"] = fill_max_gate_cur
+        st.session_state[f"{prefix}lid_max_fill_future"] = fill_max_fut
+        st.session_state[f"{prefix}lid_max_gate_fill_future"] = fill_max_gate_fut
 
-        # Extract runoff summary
-        st.session_state[f"{prefix}df_lid_max_nogate"] = extract_runoff_and_lid_data(rpt5)
-        st.session_state[f"{prefix}df_lid_max_gate"] = extract_runoff_and_lid_data(rpt6)
+        # Runoff summaries
+        st.session_state[f"{prefix}df_lid_max_nogate_current"] = extract_runoff_and_lid_data(rpt5)
+        st.session_state[f"{prefix}df_lid_max_gate_current"]   = extract_runoff_and_lid_data(rpt6)
+        st.session_state[f"{prefix}df_lid_max_nogate_future"]  = extract_runoff_and_lid_data(rpt5f)
+        st.session_state[f"{prefix}df_lid_max_gate_future"]    = extract_runoff_and_lid_data(rpt6f)
 
-        # Compute total cost
+        # Cost (unchanged)
         max_total_cost = (df["Max_RG_DEM_Considered"].sum() * 250 +
                         df["MaxNumber_RB"].sum() * 100 +
-                        250000)  # include tide gate
+                        250000)
         st.session_state[f"{prefix}max_total_cost"] = max_total_cost
 
-        st.success(f"Max LID scenarios complete!")
+        st.success("Max LID scenarios (Current & +20%) complete!")
 
     if st.button("Clear LID Selections"):
         st.session_state[f"{prefix}user_lid_config"] = {}
@@ -909,57 +940,94 @@ else:
             st.error("Please run the baseline scenario first.")
         else:
             try:
-                rain_lines = format_timeseries("rain_gage_timeseries", rain_sim_minutes, rain_sim_curve, simulation_date)
-                tide_lines = format_timeseries("tide", tide_sim_minutes, tide_sim_curve, simulation_date)
                 lid_lines = generate_lid_usage_lines(st.session_state[f"{prefix}user_lid_config"])
                 if not lid_lines:
                     st.warning("No LIDs selected.")
                     st.stop()
 
-                # Run LID-only and LID+Gate scenarios
-                fill_lid, time_lid, rpt3 = run_swmm_scenario(f"{prefix}lid_nogate", rain_lines, tide_lines, lid_lines, "NO")
-                fill_lid_gate, _, rpt4   = run_swmm_scenario(f"{prefix}lid_gate", rain_lines, tide_lines, lid_lines, "YES")
+                tide_lines = format_timeseries("tide", tide_sim_minutes, tide_sim_curve, simulation_date)
+                rain_lines_cur, rain_lines_fut = _rain_lines_pair(
+                    rain_sim_minutes,
+                    st.session_state["rain_sim_curve_current_in"],
+                    simulation_date
+                )
 
-                # Store simulation results
-                st.session_state[f"{prefix}lid_fill"] = fill_lid
+                # CURRENT (2)
+                fill_lid_cur, time_lid, rpt3 = run_swmm_scenario(f"{prefix}lid_nogate_current", rain_lines_cur, tide_lines, lid_lines, "NO")
+                fill_lid_gate_cur, _,  rpt4  = run_swmm_scenario(f"{prefix}lid_gate_current",   rain_lines_cur, tide_lines, lid_lines, "YES")
+
+                # FUTURE (2)
+                fill_lid_fut, _,  rpt3f = run_swmm_scenario(f"{prefix}lid_nogate_future", rain_lines_fut, tide_lines, lid_lines, "NO")
+                fill_lid_gate_fut, _, rpt4f = run_swmm_scenario(f"{prefix}lid_gate_future",   rain_lines_fut, tide_lines, lid_lines, "YES")
+
+                # Store
                 st.session_state[f"{prefix}lid_timestamps"] = time_lid
-                st.session_state[f"{prefix}lid_gate_fill"] = fill_lid_gate
+                st.session_state[f"{prefix}lid_fill_current"] = fill_lid_cur
+                st.session_state[f"{prefix}lid_gate_fill_current"] = fill_lid_gate_cur
+                st.session_state[f"{prefix}lid_fill_future"] = fill_lid_fut
+                st.session_state[f"{prefix}lid_gate_fill_future"] = fill_lid_gate_fut
 
-                df_lid = extract_runoff_and_lid_data(rpt3)
-                df_lid_gate = extract_runoff_and_lid_data(rpt4)
-                st.session_state[f"{prefix}df_lid_nogate"] = df_lid
-                st.session_state[f"{prefix}df_lid_gate"] = df_lid_gate
+                # Runoff summaries
+                st.session_state[f"{prefix}df_lid_nogate_current"] = extract_runoff_and_lid_data(rpt3)
+                st.session_state[f"{prefix}df_lid_gate_current"]   = extract_runoff_and_lid_data(rpt4)
+                st.session_state[f"{prefix}df_lid_nogate_future"]  = extract_runoff_and_lid_data(rpt3f)
+                st.session_state[f"{prefix}df_lid_gate_future"]    = extract_runoff_and_lid_data(rpt4f)
 
-                st.success("LID scenarios complete!")
+                st.success("Custom LID scenarios (Current & +20%) complete!")
 
             except Exception as e:
                 st.error(f"LID simulation failed: {e}")
 
-    # === Section Title ===
-    #st.subheader("Cumulative Flood Volume Across All Nodes Over Time")
-
     required_flood_keys = [
-        f"{prefix}baseline_fill",        # now holds flooding volumes (ac-ft)
-        f"{prefix}baseline_gate_fill",
-        f"{prefix}lid_fill",
-        f"{prefix}lid_gate_fill",
-        f"{prefix}lid_max_fill",
-        f"{prefix}lid_max_gate_fill",
+        f"{prefix}baseline_fill_current",
+        f"{prefix}baseline_gate_fill_current",
+        f"{prefix}lid_fill_current",
+        f"{prefix}lid_gate_fill_current",
+        f"{prefix}lid_max_fill_current",
+        f"{prefix}lid_max_gate_fill_current",
+        f"{prefix}baseline_fill_future",
+        f"{prefix}baseline_gate_fill_future",
+        f"{prefix}lid_fill_future",
+        f"{prefix}lid_gate_fill_future",
+        f"{prefix}lid_max_fill_future",
+        f"{prefix}lid_max_gate_fill_future",
         f"{prefix}baseline_timestamps"
     ]
+
 
     if all(k in st.session_state for k in required_flood_keys):
         # === Retrieve and truncate ===
         ts = st.session_state[f"{prefix}baseline_timestamps"]
-        baseline      = st.session_state[f"{prefix}baseline_fill"]
-        baseline_gate = st.session_state[f"{prefix}baseline_gate_fill"]
-        lid           = st.session_state[f"{prefix}lid_fill"]
-        lid_gate      = st.session_state[f"{prefix}lid_gate_fill"]
-        lid_max       = st.session_state[f"{prefix}lid_max_fill"]
-        lid_max_gate  = st.session_state[f"{prefix}lid_max_gate_fill"]
 
-        min_len = min(len(ts), len(baseline), len(baseline_gate),
-                      len(lid), len(lid_gate), len(lid_max), len(lid_max_gate))
+        # Baseline
+        baseline_cur       = st.session_state[f"{prefix}baseline_fill_current"]
+        baseline_gate_cur  = st.session_state[f"{prefix}baseline_gate_fill_current"]
+        baseline_fut       = st.session_state[f"{prefix}baseline_fill_future"]
+        baseline_gate_fut  = st.session_state[f"{prefix}baseline_gate_fill_future"]
+
+        # LID
+        lid_cur            = st.session_state[f"{prefix}lid_fill_current"]
+        lid_gate_cur       = st.session_state[f"{prefix}lid_gate_fill_current"]
+        lid_fut            = st.session_state[f"{prefix}lid_fill_future"]
+        lid_gate_fut       = st.session_state[f"{prefix}lid_gate_fill_future"]
+
+        # Max LID
+        lid_max_cur        = st.session_state[f"{prefix}lid_max_fill_current"]
+        lid_max_gate_cur   = st.session_state[f"{prefix}lid_max_gate_fill_current"]
+        lid_max_fut        = st.session_state[f"{prefix}lid_max_fill_future"]
+        lid_max_gate_fut   = st.session_state[f"{prefix}lid_max_gate_fill_future"]
+
+        # Truncate to shortest
+        min_len = min(
+            len(ts),
+            len(baseline_cur), len(baseline_gate_cur),
+            len(baseline_fut), len(baseline_gate_fut),
+            len(lid_cur), len(lid_gate_cur),
+            len(lid_fut), len(lid_gate_fut),
+            len(lid_max_cur), len(lid_max_gate_cur),
+            len(lid_max_fut), len(lid_max_gate_fut)
+        )
+
 
 
     def extract_volumes_from_rpt(rpt_path, scenario_name=None):
@@ -980,29 +1048,13 @@ else:
             with open(rpt_path, 'r') as f:
                 lines = f.readlines()
 
-            outflow = None
             infiltration = None
             runoff = None
             rainfall = None
 
-            in_outfall_section = False
             in_runoff_continuity_section = False
-            in_routing_continuity_section = False
 
             for line in lines:
-                # Outfall Loading Summary → total system outflow (MG)
-                if "Outfall Loading Summary" in line:
-                    in_outfall_section = True
-                    continue
-                if in_outfall_section and line.strip().startswith("System"):
-                    parts = line.split()
-                    if len(parts) >= 5:
-                        try:
-                            outflow = float(parts[-1]) * 1e6  # MG → gallons
-                        except ValueError:
-                            pass
-                    in_outfall_section = False
-
                 # Runoff Quantity Continuity → precipitation, infiltration, runoff
                 if "Runoff Quantity Continuity" in line:
                     in_runoff_continuity_section = True
@@ -1037,12 +1089,21 @@ else:
     temp_dir = st.session_state.temp_dir
 
     rpt_scenarios = {
-        "Baseline (No Tide Gate)": os.path.join(temp_dir, f"{prefix}baseline_nogate.rpt"),
-        "Baseline + Tide Gate": os.path.join(temp_dir, f"{prefix}baseline_gate.rpt"),
-        "LID (No Tide Gate)": os.path.join(temp_dir, f"{prefix}lid_nogate.rpt"),
-        "LID + Tide Gate": os.path.join(temp_dir, f"{prefix}lid_gate.rpt"),
-        "Max LID (No Tide Gate)": os.path.join(temp_dir, f"{prefix}lid_max_nogate.rpt"),
-        "Max LID + Tide Gate": os.path.join(temp_dir, f"{prefix}lid_max_gate.rpt")
+        # Baseline
+        "Baseline (No Tide Gate) – Current": os.path.join(temp_dir, f"{prefix}baseline_nogate_current.rpt"),
+        "Baseline + Tide Gate – Current":    os.path.join(temp_dir, f"{prefix}baseline_gate_current.rpt"),
+        "Baseline (No Tide Gate) – +20%":    os.path.join(temp_dir, f"{prefix}baseline_nogate_future.rpt"),
+        "Baseline + Tide Gate – +20%":       os.path.join(temp_dir, f"{prefix}baseline_gate_future.rpt"),
+        # Custom LID
+        "LID (No Tide Gate) – Current":      os.path.join(temp_dir, f"{prefix}lid_nogate_current.rpt"),
+        "LID + Tide Gate – Current":         os.path.join(temp_dir, f"{prefix}lid_gate_current.rpt"),
+        "LID (No Tide Gate) – +20%":         os.path.join(temp_dir, f"{prefix}lid_nogate_future.rpt"),
+        "LID + Tide Gate – +20%":            os.path.join(temp_dir, f"{prefix}lid_gate_future.rpt"),
+        # Max LID
+        "Max LID (No Tide Gate) – Current":  os.path.join(temp_dir, f"{prefix}lid_max_nogate_current.rpt"),
+        "Max LID + Tide Gate – Current":     os.path.join(temp_dir, f"{prefix}lid_max_gate_current.rpt"),
+        "Max LID (No Tide Gate) – +20%":     os.path.join(temp_dir, f"{prefix}lid_max_nogate_future.rpt"),
+        "Max LID + Tide Gate – +20%":        os.path.join(temp_dir, f"{prefix}lid_max_gate_future.rpt"),
     }
 
 
@@ -1052,8 +1113,21 @@ else:
         for name, path in rpt_scenarios.items():
             try:
                 # Make a scenario key that matches the one used in run_swmm_scenario()
-                scenario_key = name.lower().replace("(", "").replace(")", "").replace(" + ", "_plus_").replace(" ", "_")
-                scenario_name_for_lookup = f"{prefix}{scenario_key}"
+                friendly_to_session_prefix = {
+                    "Baseline (No Tide Gate) – Current":  "baseline_nogate_current",
+                    "Baseline + Tide Gate – Current":     "baseline_gate_current",
+                    "Baseline (No Tide Gate) – +20%":     "baseline_nogate_future",
+                    "Baseline + Tide Gate – +20%":        "baseline_gate_future",
+                    "LID (No Tide Gate) – Current":       "lid_nogate_current",
+                    "LID + Tide Gate – Current":          "lid_gate_current",
+                    "LID (No Tide Gate) – +20%":          "lid_nogate_future",
+                    "LID + Tide Gate – +20%":             "lid_gate_future",
+                    "Max LID (No Tide Gate) – Current":   "lid_max_nogate_current",
+                    "Max LID + Tide Gate – Current":      "lid_max_gate_current",
+                    "Max LID (No Tide Gate) – +20%":      "lid_max_nogate_future",
+                    "Max LID + Tide Gate – +20%":         "lid_max_gate_future",
+                }
+                scenario_name_for_lookup = f"{prefix}{friendly_to_session_prefix[name]}"
 
                 # Prefer the stored model total flooding value over parsing RPT
                 metrics = extract_volumes_from_rpt(path, scenario_name=scenario_name_for_lookup)
@@ -1061,8 +1135,7 @@ else:
                 if any(v is not None for k, v in metrics.items() if k != "Scenario"):
                     metrics["Scenario"] = name
                     results.append(metrics)
-
-                    st.session_state[f"{prefix}flood_{scenario_key}"] = metrics["Flooding (ac-ft)"]
+                    st.session_state[f"{prefix}flood_{friendly_to_session_prefix[name]}"] = metrics["Flooding (ac-ft)"]
 
             except Exception as e:
                 print(f"Could not process {name}: {e}")
@@ -1075,13 +1148,20 @@ else:
 
         # Force the summary table to use the graph's final cumulative flooding totals
         scenario_to_key = {
-            "Baseline (No Tide Gate)": f"{prefix}baseline_fill",
-            "Baseline + Tide Gate": f"{prefix}baseline_gate_fill",
-            "LID (No Tide Gate)": f"{prefix}lid_fill",
-            "LID + Tide Gate": f"{prefix}lid_gate_fill",
-            "Max LID (No Tide Gate)": f"{prefix}lid_max_fill",
-            "Max LID + Tide Gate": f"{prefix}lid_max_gate_fill",
+            "Baseline (No Tide Gate) – Current":  f"{prefix}baseline_fill_current",
+            "Baseline + Tide Gate – Current":     f"{prefix}baseline_gate_fill_current",
+            "Baseline (No Tide Gate) – +20%":     f"{prefix}baseline_fill_future",
+            "Baseline + Tide Gate – +20%":        f"{prefix}baseline_gate_fill_future",
+            "LID (No Tide Gate) – Current":       f"{prefix}lid_fill_current",
+            "LID + Tide Gate – Current":          f"{prefix}lid_gate_fill_current",
+            "LID (No Tide Gate) – +20%":          f"{prefix}lid_fill_future",
+            "LID + Tide Gate – +20%":             f"{prefix}lid_gate_fill_future",
+            "Max LID (No Tide Gate) – Current":   f"{prefix}lid_max_fill_current",
+            "Max LID + Tide Gate – Current":      f"{prefix}lid_max_gate_fill_current",
+            "Max LID (No Tide Gate) – +20%":      f"{prefix}lid_max_fill_future",
+            "Max LID + Tide Gate – +20%":         f"{prefix}lid_max_gate_fill_future",
         }
+
 
         for scenario, fill_key in scenario_to_key.items():
             if fill_key in st.session_state and len(st.session_state[fill_key]) > 0:
@@ -1111,13 +1191,23 @@ else:
         df_converted = df_converted.round(0).astype(int)
 
         cost_lookup = {
-            "Baseline (No Tide Gate)": 0,
-            "Baseline + Tide Gate": 250000,
-            "LID (No Tide Gate)": st.session_state.get(f"{prefix}user_total_cost", 0) - 250000,
-            "LID + Tide Gate": st.session_state.get(f"{prefix}user_total_cost", 0),
-            "Max LID (No Tide Gate)": st.session_state.get(f"{prefix}max_total_cost", 0) - 250000,
-            "Max LID + Tide Gate": st.session_state.get(f"{prefix}max_total_cost", 0),
+            # Baseline
+            "Baseline (No Tide Gate) – Current": 0,
+            "Baseline + Tide Gate – Current":    250000,
+            "Baseline (No Tide Gate) – +20%":    0,
+            "Baseline + Tide Gate – +20%":       250000,
+            # LID
+            "LID (No Tide Gate) – Current":      st.session_state.get(f"{prefix}user_total_cost", 0) - 250000,
+            "LID + Tide Gate – Current":         st.session_state.get(f"{prefix}user_total_cost", 0),
+            "LID (No Tide Gate) – +20%":         st.session_state.get(f"{prefix}user_total_cost", 0) - 250000,
+            "LID + Tide Gate – +20%":            st.session_state.get(f"{prefix}user_total_cost", 0),
+            # Max LID
+            "Max LID (No Tide Gate) – Current":  st.session_state.get(f"{prefix}max_total_cost", 0) - 250000,
+            "Max LID + Tide Gate – Current":     st.session_state.get(f"{prefix}max_total_cost", 0),
+            "Max LID (No Tide Gate) – +20%":     st.session_state.get(f"{prefix}max_total_cost", 0) - 250000,
+            "Max LID + Tide Gate – +20%":        st.session_state.get(f"{prefix}max_total_cost", 0),
         }
+
         df_converted["Total Cost ($)"] = df_converted.index.map(cost_lookup).astype(int)
 
         st.session_state[f"{prefix}df_balance"] = df_converted
@@ -1133,48 +1223,38 @@ else:
 
 
     # === Export Excel Report (Single Click Download Button) ===
-
     required_excel_keys = [
         "df_balance",
         "baseline_timestamps",
-        "baseline_fill",
-        "baseline_gate_fill",
-        "lid_fill",
-        "lid_gate_fill",
-        "lid_max_fill",
-        "lid_max_gate_fill"
+
+        # Baseline – Current & Future
+        "baseline_fill_current",
+        "baseline_gate_fill_current",
+        "baseline_fill_future",
+        "baseline_gate_fill_future",
+
+        # LID – Current & Future
+        "lid_fill_current",
+        "lid_gate_fill_current",
+        "lid_fill_future",
+        "lid_gate_fill_future",
+
+        # Max LID – Current & Future
+        "lid_max_fill_current",
+        "lid_max_gate_fill_current",
+        "lid_max_fill_future",
+        "lid_max_gate_fill_future",
     ]
 
+
     if all(f"{prefix}{k}" in st.session_state for k in required_excel_keys):
-
-        # Step 1: Get min length across all culvert fills
-        min_len = min(
-            len(st.session_state[f"{prefix}baseline_fill"]),
-            len(st.session_state[f"{prefix}baseline_gate_fill"]),
-            len(st.session_state[f"{prefix}lid_fill"]),
-            len(st.session_state[f"{prefix}lid_gate_fill"]),
-            len(st.session_state[f"{prefix}lid_max_fill"]),
-            len(st.session_state[f"{prefix}lid_max_gate_fill"]),
-            len(st.session_state[f"{prefix}baseline_timestamps"])
-        )
-
-        # Step 2: Build culvert dataframe from session state
-        df_culvert = pd.DataFrame({
-            "Timestamp": st.session_state[f"{prefix}baseline_timestamps"][:min_len],
-            "Baseline": st.session_state[f"{prefix}baseline_fill"][:min_len],
-            "Baseline + Tide Gate": st.session_state[f"{prefix}baseline_gate_fill"][:min_len],
-            "With LIDs": st.session_state[f"{prefix}lid_fill"][:min_len],
-            "LIDs + Tide Gate": st.session_state[f"{prefix}lid_gate_fill"][:min_len],
-            "Max LIDs": st.session_state[f"{prefix}lid_max_fill"][:min_len],
-            "Max LIDs + Tide Gate": st.session_state[f"{prefix}lid_max_gate_fill"][:min_len]
-        })
 
         # Step 3: Retrieve water balance summary
         df_balance = st.session_state[f"{prefix}df_balance"]
 
         # Step 4: Build rainfall and tide time series if available
-        rain_time_series = st.session_state.get(f"{prefix}display_rain_curve", [])
-        tide_time_series = st.session_state.get(f"{prefix}display_tide_curve", [])
+        rain_time_series = st.session_state.get("display_rain_curve", [])
+        tide_time_series = st.session_state.get("display_tide_curve", [])
 
         rain_disp_unit = st.session_state.get(f"{prefix}rain_disp_unit", "inches")
         tide_disp_unit = st.session_state.get(f"{prefix}tide_disp_unit", "ft")
@@ -1202,7 +1282,7 @@ else:
             scenario_summary = pd.DataFrame([{
                 "Storm Duration (hr)": duration_minutes // 60,
                 "Return Period (yr)": return_period,
-                "Moon Phase": moon_phase,
+                "Tide": moon_phase,
                 "Tide Alignment": "High Tide Peak" if align_mode == "peak" else "Low Tide Dip",
                 "Units": unit
             }])
@@ -1212,7 +1292,8 @@ else:
             sim_start = datetime.strptime(simulation_date, "%m/%d/%Y %H:%M")
 
             # === Rainfall Time Series ===
-            rain_minutes = st.session_state.get(f"{prefix}rain_minutes", [])
+            rain_minutes = st.session_state.get("rain_minutes", [])
+            tide_minutes = st.session_state.get("tide_minutes", [])
             if isinstance(rain_time_series, (list, np.ndarray)) and len(rain_time_series) > 0:
                 rain_timestamps = [
                     (sim_start + timedelta(minutes=int(m))).strftime("%m/%d/%Y %H:%M")
@@ -1220,12 +1301,12 @@ else:
                 ]
                 df_rain = pd.DataFrame({
                     "Timestamp": rain_timestamps,
-                    f"Rainfall ({rain_disp_unit})": rain_time_series
+                    f"Rainfall – Current ({rain_disp_unit})": st.session_state["display_rain_curve_current"][:len(rain_timestamps)],
+                    f"Rainfall – +20% ({rain_disp_unit})":    st.session_state["display_rain_curve_future"][:len(rain_timestamps)],
                 })
                 df_rain.to_excel(writer, sheet_name="Rainfall Event", index=False)
 
             # === Tide Time Series ===
-            tide_minutes = st.session_state.get(f"{prefix}tide_minutes", [])
             if isinstance(tide_time_series, (list, np.ndarray)) and len(tide_time_series) > 0:
                 tide_timestamps = [
                     (sim_start + timedelta(minutes=int(m))).strftime("%m/%d/%Y %H:%M")
@@ -1244,7 +1325,6 @@ else:
             df_user_lid.to_excel(writer, sheet_name="User LID Selections", index=False)
 
             df_balance.to_excel(writer, sheet_name="Scenario Summary", index=False)
-            df_culvert.to_excel(writer, sheet_name="Flood Volume Time Series", index=False)
 
 
         # Download button
