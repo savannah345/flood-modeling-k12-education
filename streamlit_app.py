@@ -127,30 +127,27 @@ else:
         value=True
     )
 
+    MSL_OFFSET_NAVD88_FT = 1.36  # NAVD88 -> MSL
+
     @st.cache_data(show_spinner=False, ttl=3600, max_entries=4)
     def _cached_live_tide(unit: str, offset_ft: float):
-        """Fetch once per hour per unit system; returns (tide_sim_minutes, tide_sim_curve) after NAVD88->MSL shift."""
         df_live = fetch_greenstream_dataframe()
         return build_timestep_and_resample_15min(
             df_live,
             water_col="Water Level NAVD88 (ft)",
-            unit=unit,              # feet (US) or meters (SI) for display
+            unit=unit,                             # UI units: "U.S. Customary" or "Metric (SI)"
             start_ts=None,
-            navd88_to_sea_level_offset_ft=offset_ft
+            navd88_to_sea_level_offset_ft=offset_ft  # << subtract 1.36 (ft) internally
         )
 
     
     def tide_to_feet_for_swmm(tide_curve_ui_units: np.ndarray, ui_unit: str) -> np.ndarray:
-        """
-        UI shows ft (US) or m (Metric). SWMM always needs feet.
-        """
         arr = np.asarray(tide_curve_ui_units, dtype=float)
         return arr if ui_unit == "U.S. Customary" else (arr / 0.3048)
 
     tide_source = "synthetic"
     tide_error  = None
     moon_phase  = None  # will set below
-    MSL_OFFSET_NAVD88_FT = 1.36  # Sewells Point reference; NAVD88 -> MSL
 
     if use_live:
         try:

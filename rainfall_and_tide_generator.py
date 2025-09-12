@@ -356,7 +356,8 @@ def fetch_greenstream_dataframe() -> pd.DataFrame:
 def build_timestep_and_resample_15min(df_raw: pd.DataFrame,
                                       water_col: str = WATER_COL_LIVE,
                                       unit: str = "U.S. Customary",
-                                      start_ts: Optional[pd.Timestamp] = None
+                                      start_ts: Optional[pd.Timestamp] = None,
+                                      navd88_to_sea_level_offset_ft: float = 0.0
                                       ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Input: df_raw from Greenstream (≈480 rows @ 6-minute interval).
@@ -412,25 +413,31 @@ def build_timestep_and_resample_15min(df_raw: pd.DataFrame,
 # ============================================================
 def get_tide_real_or_synthetic(moon_phase: str,
                                unit: str,
-                               start_ts: Optional[pd.Timestamp] = None
+                               start_ts: Optional[pd.Timestamp] = None,
+                               navd88_to_sea_level_offset_ft: float = 1.36
                                ) -> Tuple[np.ndarray, np.ndarray, bool]:
     """
     Try live tide (Greenstream). If it fails, return synthetic tide.
     Returns:
       minutes_15 (np.ndarray),
-      tide_15    (np.ndarray) in selected 'unit' (ft or m),
+      tide_15    (np.ndarray) in selected 'unit' (ft or m), already shifted to MSL,
       used_live  (bool)
     """
     try:
         df_live = fetch_greenstream_dataframe()
         m15, tide_15 = build_timestep_and_resample_15min(
-            df_raw=df_live, water_col=WATER_COL_LIVE, unit=unit, start_ts=start_ts
+            df_raw=df_live,
+            water_col=WATER_COL_LIVE,
+            unit=unit,
+            start_ts=start_ts,
+            navd88_to_sea_level_offset_ft=navd88_to_sea_level_offset_ft  # << MSL shift here
         )
         return m15, tide_15, True
     except Exception:
-        # Synthetic fallback (already outputs selected unit)
+        # Synthetic fallback (already outputs selected unit; no geodetic datum shift)
         m15, tide_15 = generate_tide_curve(moon_phase, unit)
         return m15, tide_15, False
+
 
 # ============================================================
 # 10) High-level helper: get tide (live or synthetic) and aligned rainfall
@@ -443,14 +450,16 @@ def get_aligned_rainfall(
     align: str = "peak",
     method: str = "Normal",
     start_ts: Optional[pd.Timestamp] = None,
-    prominence: Optional[float] = None
+    prominence: Optional[float] = None,
+    navd88_to_sea_level_offset_ft: float = 1.36       # << add this
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, bool, int]:
     """
     Returns (minutes_15, tide_15, rain_15, used_live, center_idx).
-    - 'align' in {"peak","low"}
-    - 'prominence' forwarded to extrema finder for noisy live data
     """
-    m15, tide_15, used_live = get_tide_real_or_synthetic(moon_phase, unit, start_ts)
+    m15, tide_15, used_live = get_tide_real_or_synthetic(
+        moon_phase, unit, start_ts, navd88_to_sea_level_offset_ft  # << forward it
+    )
+    # ...rest unchanged...
 
     # Choose a target index near the series midpoint based on peaks/lows.
     peaks, troughs = find_tide_extrema(tide_15, prominence=prominence)
