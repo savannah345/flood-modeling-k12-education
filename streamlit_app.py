@@ -14,7 +14,7 @@ import os
 import glob
 import subprocess, sys
 from auth_supabase import create_user, authenticate_user, reset_password
-import matplotlib
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import geopandas as gpd
 import pydeck as pdk
@@ -427,16 +427,23 @@ else:
 
         return cumulative_flooding_acft, timestamps, rpt_path
 
-    def render_total_runoff_with_nodes_map(
-        rpt_df_in_inches,         # DataFrame from extract_runoff_and_lid_data(...), in inches
-        unit_label,               # "U.S. Customary" or "Metric (SI)"
-        ws_shp_path,              # polygon shapefile path
-        node_shp_path,            # node shapefile path
-        node_name_field,          # column in node shapefile that matches SWMM node ids
-        node_vol_dict_post5h,     # dict: node_id -> cuft (post-5h only)
-        map_title
-    ):
-        # subcatchment totals
+    def _detect_node_id_field(nodes_gdf, node_vol_dict_post5h):
+        cols = list(nodes_gdf.columns)
+        candidates = ["NAME", "Name", "node_id", "NODEID", "NodeID", "id", "ID"]
+        for c in candidates:
+            if c in nodes_gdf.columns:
+                return c
+        keys = set(map(str, node_vol_dict_post5h.keys()))
+        for c in cols:
+            try_vals = nodes_gdf[c].astype(str).unique()
+            if any(v in keys for v in try_vals[:50]):
+                return c
+        for c in cols:
+            if c.lower() != "geometry":
+                return c
+        return None
+
+    def _prep_total_runoff_gdf(rpt_df_in_inches, unit_label, ws_shp_path):
         df_swmm = rpt_df_in_inches.copy()
         if unit_label == "U.S. Customary":
             df_swmm["Total_R"] = df_swmm["Impervious Runoff (in)"] + df_swmm["Pervious Runoff   (in)"]
@@ -444,70 +451,52 @@ else:
         else:
             df_swmm["Total_R"] = (df_swmm["Impervious Runoff (in)"] + df_swmm["Pervious Runoff   (in)"]) * 2.54
             runoff_unit = "cm"
-        # in render_total_runoff_with_nodes_map(...)
         df_swmm["NAME"] = df_swmm["Subcatchment"].astype(str).str.strip()
 
-        # polygons
         gdf_ws = gpd.read_file(ws_shp_path)
         gdf_ws = (gdf_ws.set_crs(4326) if gdf_ws.crs is None else gdf_ws.to_crs(4326))
         gdf_ws["NAME"] = gdf_ws["NAME"].astype(str).str.strip()
 
         gdf = gdf_ws.merge(df_swmm[["NAME", "Total_R"]], on="NAME", how="left")
-        vals = gdf["Total_R"].to_numpy()
-        if len(vals) == 0 or not np.isfinite(np.nanmin(vals)) or not np.isfinite(np.nanmax(vals)):
-            vmin, vmax = 0.0, 1.0
-        else:
-            vmin, vmax = float(np.nanmin(vals)), float(np.nanmax(vals))
-            if abs(vmax - vmin) < 1e-9:
-                vmax = vmin + 1e-6
+        return gdf, runoff_unit
 
-        def _colorize(values, a=0.9):
-            norm = mcolors.Normalize(vmin=vmin, vmax=vmax, clip=True)
-            cmap = cm.get_cmap("Blues")
-            out = []
-            for v in values:
-                if pd.isna(v):
-                    out.append([200,200,200,int(0.4*255)])
-                else:
-                    r,g,b,_ = cmap(norm(float(v)))
-                    out.append([int(r*255), int(g*255), int(b*255), int(a*255)])
-            return out
+    def _colorize_total(values, vmin, vmax, a=0.9):
+        norm = mcolors.Normalize(vmin=vmin, vmax=vmax, clip=True)
+        cmap = mpl.colormaps.get_cmap("Blues")
+        out = []
+        for v in values:
+            if pd.isna(v):
+                out.append([200,200,200,int(0.4*255)])
+            else:
+                r,g,b,_ = cmap(norm(float(v)))
+                out.append([int(r*255), int(g*255), int(b*255), int(a*255)])
+        return out
 
-        gdf["_fill_total"] = _colorize(gdf["Total_R"])
-        gdf["_label"] = gdf["NAME"]
-
-        centroid = gdf.geometry.union_all().centroid
-        view_state = pdk.ViewState(latitude=centroid.y, longitude=centroid.x, zoom=14.25)
-        poly_layer = pdk.Layer(
-            "GeoJsonLayer",
-            data=gdf.__geo_interface__,
-            pickable=True,
-            stroked=True,
-            filled=True,
-            get_fill_color="properties._fill_total",
-            get_line_color=[255,255,255,255],
-            line_width_min_pixels=1,
-        )
-        reps = gdf.geometry.representative_point()
-        labels = pd.DataFrame({"lon": reps.x, "lat": reps.y, "text": gdf["_label"]})
-        text_layer = pdk.Layer(
-            "TextLayer",
-            data=labels,
-            get_position='[lon, lat]',
-            get_text="text",
-            get_size=12,
-            get_color=[0,0,0],
-            get_alignment_baseline="'center'"
-        )
-
-        # nodes
-        node_layer = None
+    def _node_layer_from_shp(node_shp_path, node_vol_dict_post5h, name_field="NAME", print_columns=False):
         try:
+            # Nothing to show? bail early.
+            if not node_vol_dict_post5h:
+                return None, name_field
+
             nodes_gdf = gpd.read_file(node_shp_path)
             nodes_gdf = (nodes_gdf.set_crs(4326) if nodes_gdf.crs is None else nodes_gdf.to_crs(4326))
-            nodes_gdf["_cuft_post5h"] = nodes_gdf[node_name_field].astype(str).map(lambda nid: float(node_vol_dict_post5h.get(str(nid), 0.0)))
-            nodes_gdf["_flooded_post5h"] = nodes_gdf["_cuft_post5h"].map(lambda v: v > 0.0)
-            nodes_gdf["_color_rgba"] = nodes_gdf["_flooded_post5h"].map(lambda f: [255,0,0,255] if f else [0,0,0,255])
+
+            # no expander / dropdown
+            # if you ever want it back, set print_columns=True and add an expander here
+
+            if name_field not in nodes_gdf.columns:
+                return None, name_field
+
+            # join volumes & keep only flooded nodes
+            nodes_gdf["_cuft_post5h"] = nodes_gdf[name_field].astype(str).map(
+                lambda nid: float(node_vol_dict_post5h.get(str(nid), 0.0))
+            )
+            nodes_gdf = nodes_gdf[nodes_gdf["_cuft_post5h"] > 0]
+            if nodes_gdf.empty:
+                return None, name_field
+
+            nodes_gdf["_color_rgba"] = [ [255, 0, 0, 255] ] * len(nodes_gdf)
+
             node_layer = pdk.Layer(
                 "GeoJsonLayer",
                 data=nodes_gdf.__geo_interface__,
@@ -516,30 +505,128 @@ else:
                 filled=True,
                 point_type="circle",
                 get_fill_color="properties._color_rgba",
-                get_radius=6,
+                get_point_radius=6,
+                point_radius_min_pixels=6
             )
-        except Exception as e:
-            st.warning(f"Nodes overlay issue: {e}")
+            return node_layer, name_field
+        except Exception:
+            return None, name_field
 
-        st.markdown(f"**{map_title}**")
-        layers = [poly_layer, text_layer] + ([node_layer] if node_layer is not None else [])
-        st.pydeck_chart(
-            pdk.Deck(
-                layers=layers,
-                initial_view_state=view_state,
-                map_style="light",
-                tooltip={
-                    "html": (
-                        "<b>{NAME}</b><br/>"
-                        "Total runoff: {Total_R} " + runoff_unit + "<br/>"
-                        "Node: {Name}<br/>"
-                        "Flooded post-5 h: { _flooded_post5h }<br/>"
-                        "Node vol post-5 h (cuft): { _cuft_post5h }"
-                    ),
-                    "style": {"backgroundColor":"white","color":"black"}
-                }
-            ),
-            use_container_width=True
+
+    def render_side_by_side_total_runoff_maps(
+        left_df_in_inches,  left_title,  left_nodes_post5h_dict,
+        right_df_in_inches, right_title, right_nodes_post5h_dict,
+        unit_label, ws_shp_path, node_shp_path, node_name_field_hint=None
+    ):
+        gdf_left,  runoff_unit_L = _prep_total_runoff_gdf(left_df_in_inches,  unit_label, ws_shp_path)
+        gdf_right, runoff_unit_R = _prep_total_runoff_gdf(right_df_in_inches, unit_label, ws_shp_path)
+        runoff_unit = runoff_unit_L
+
+        vals = pd.concat([gdf_left["Total_R"], gdf_right["Total_R"]], ignore_index=True)
+        if len(vals) == 0 or not np.isfinite(np.nanmin(vals)) or not np.isfinite(np.nanmax(vals)):
+            vmin, vmax = 0.0, 1.0
+        else:
+            vmin, vmax = float(np.nanmin(vals)), float(np.nanmax(vals))
+            if abs(vmax - vmin) < 1e-9:
+                vmax = vmin + 1e-6
+
+        gdf_left["_fill_total"]  = _colorize_total(gdf_left["Total_R"],  vmin, vmax)
+        gdf_right["_fill_total"] = _colorize_total(gdf_right["Total_R"], vmin, vmax)
+        for gdf in (gdf_left, gdf_right):
+            gdf["_label"] = gdf["NAME"]
+
+        centroid = pd.concat([gdf_left.geometry, gdf_right.geometry]).unary_union.centroid
+        view_state = pdk.ViewState(latitude=centroid.y, longitude=centroid.x, zoom=14.25)
+
+        def _poly_and_label_layers(gdf):
+            poly_layer = pdk.Layer(
+                "GeoJsonLayer",
+                data=gdf.__geo_interface__,
+                pickable=True,
+                stroked=True,
+                filled=True,
+                get_fill_color="properties._fill_total",
+                get_line_color=[255,255,255,255],
+                line_width_min_pixels=1,
+            )
+            reps = gdf.geometry.representative_point()
+            labels = pd.DataFrame({"lon": reps.x, "lat": reps.y, "text": gdf["_label"]})
+            text_layer = pdk.Layer(
+                "TextLayer",
+                data=labels,
+                get_position='[lon, lat]',
+                get_text="text",
+                get_size=12,
+                get_color=[0,0,0],
+                get_alignment_baseline="'center'"
+            )
+            return poly_layer, text_layer
+
+        left_poly,  left_text  = _poly_and_label_layers(gdf_left)
+        right_poly, right_text = _poly_and_label_layers(gdf_right)
+
+        left_nodes_layer,  _ = _node_layer_from_shp(node_shp_path, left_nodes_post5h_dict,  node_name_field_hint, print_columns=False)
+        right_nodes_layer, _ = _node_layer_from_shp(node_shp_path, right_nodes_post5h_dict, node_name_field_hint, print_columns=False)
+
+
+        c1, c2 = st.columns(2, gap="medium")
+        tooltip_html = (
+            "<b>{NAME}</b><br/>"
+            f"Total runoff: {{Total_R}} {runoff_unit}"
+        )
+
+
+        with c1:
+            st.markdown(f"**{left_title}**")
+            layers = [left_poly, left_text] + ([left_nodes_layer] if left_nodes_layer is not None else [])
+            st.pydeck_chart(
+                pdk.Deck(
+                    layers=layers,
+                    initial_view_state=view_state,
+                    map_style="light",
+                    tooltip={"html": tooltip_html, "style": {"backgroundColor": "white", "color": "black"}}
+                ),
+                use_container_width=True
+            )
+
+        with c2:
+            st.markdown(f"**{right_title}**")
+            layers = [right_poly, right_text] + ([right_nodes_layer] if right_nodes_layer is not None else [])
+            st.pydeck_chart(
+                pdk.Deck(
+                    layers=layers,
+                    initial_view_state=view_state,
+                    map_style="light",
+                    tooltip={"html": tooltip_html, "style": {"backgroundColor": "white", "color": "black"}}
+                ),
+                use_container_width=True
+            )
+
+        norm = mcolors.Normalize(vmin=vmin, vmax=vmax, clip=True)
+        cmap = mpl.colormaps.get_cmap("Blues")
+        c0  = [int(v*255) for v in cmap(norm(vmin))[:3]]
+        c1b = [int(v*255) for v in cmap(norm(vmax))[:3]]
+        st.markdown(
+            f"""
+            <div style="display:flex; justify-content:center; margin-top:6px;">
+            <div style="min-width:260px; max-width:640px; width:60%;">
+                <div style="text-align:center; font-size:13px;"><b>Runoff Legend ({runoff_unit})</b></div>
+                <div style="display:flex; align-items:center; gap:10px;">
+                <span>{vmin:.2f}</span>
+                <div style="flex:1; height:12px;
+                    background:linear-gradient(to right,
+                    rgb({c0[0]},{c0[1]},{c0[2]}),
+                    rgb({c1b[0]},{c1b[1]},{c1b[2]}));
+                    border:1px solid #888;"></div>
+                <span>{vmax:.2f}</span>
+                </div>
+                <div style="color:#555; font-size:12px; text-align:center; margin-top:6px;">
+                Same scale for both maps
+                </div>
+            </div>
+            </div>
+            """,
+            unsafe_allow_html=True
         )
 
 
@@ -722,7 +809,7 @@ else:
 
             def make_color(values, vmin, vmax, a=0.9):
                 norm = mcolors.Normalize(vmin=vmin, vmax=vmax, clip=True)
-                cmap = cm.get_cmap("Blues")
+                cmap = mpl.colormaps.get_cmap("Blues")
                 out = []
                 for v in values:
                     if pd.isna(v):
@@ -812,7 +899,7 @@ else:
             # === ONE shared legend centered under both maps ===
             from matplotlib import colormaps
             norm = mcolors.Normalize(vmin=global_min, vmax=global_max, clip=True)
-            cmap = colormaps.get_cmap("Blues")
+            cmap = mpl.colormaps.get_cmap("Blues")
             c0  = [int(v*255) for v in cmap(norm(global_min))[:3]]
             c1b = [int(v*255) for v in cmap(norm(global_max))[:3]]
 
@@ -1218,39 +1305,233 @@ else:
         )
 
     # === ADD: End-of-app comparison maps (keep baseline maps above unchanged) ===
-    st.subheader("Scenario Comparison Maps (Total Runoff + Binary Nodes)")
+    def _detect_node_id_field(nodes_gdf, node_vol_dict_post5h):
+        cols = list(nodes_gdf.columns)
+        candidates = ["NAME", "Name", "node_id", "NODEID", "NodeID", "id", "ID"]
+        for c in candidates:
+            if c in nodes_gdf.columns:
+                return c
+        keys = set(map(str, node_vol_dict_post5h.keys()))
+        for c in cols:
+            try_vals = nodes_gdf[c].astype(str).unique()
+            if any(v in keys for v in try_vals[:50]):
+                return c
+        for c in cols:
+            if c.lower() != "geometry":
+                return c
+        return None
 
-    WS_SHP_PATH = "Subcatchments.shp"
+    def _prep_total_runoff_gdf(rpt_df_in_inches, unit_label, ws_shp_path):
+        df_swmm = rpt_df_in_inches.copy()
+        if unit_label == "U.S. Customary":
+            df_swmm["Total_R"] = df_swmm["Impervious Runoff (in)"] + df_swmm["Pervious Runoff   (in)"]
+            runoff_unit = "in"
+        else:
+            df_swmm["Total_R"] = (df_swmm["Impervious Runoff (in)"] + df_swmm["Pervious Runoff   (in)"]) * 2.54
+            runoff_unit = "cm"
+        df_swmm["NAME"] = df_swmm["Subcatchment"].astype(str).str.strip()
+
+        gdf_ws = gpd.read_file(ws_shp_path)
+        gdf_ws = (gdf_ws.set_crs(4326) if gdf_ws.crs is None else gdf_ws.to_crs(4326))
+        gdf_ws["NAME"] = gdf_ws["NAME"].astype(str).str.strip()
+
+        gdf = gdf_ws.merge(df_swmm[["NAME", "Total_R"]], on="NAME", how="left")
+        return gdf, runoff_unit
+
+    def _colorize_total(values, vmin, vmax, a=0.9):
+        norm = mcolors.Normalize(vmin=vmin, vmax=vmax, clip=True)
+        cmap = mpl.colormaps.get_cmap("Blues")
+        out = []
+        for v in values:
+            if pd.isna(v):
+                out.append([200,200,200,int(0.4*255)])
+            else:
+                r,g,b,_ = cmap(norm(float(v)))
+                out.append([int(r*255), int(g*255), int(b*255), int(a*255)])
+        return out
+
+    def _node_layer_from_shp(node_shp_path, node_vol_dict_post5h, name_field="NAME", print_columns=False):
+        try:
+            # Nothing to show? bail early.
+            if not node_vol_dict_post5h:
+                return None, name_field
+
+            nodes_gdf = gpd.read_file(node_shp_path)
+            nodes_gdf = (nodes_gdf.set_crs(4326) if nodes_gdf.crs is None else nodes_gdf.to_crs(4326))
+
+            # no expander / dropdown
+            # if you ever want it back, set print_columns=True and add an expander here
+
+            if name_field not in nodes_gdf.columns:
+                return None, name_field
+
+            # join volumes & keep only flooded nodes
+            nodes_gdf["_cuft_post5h"] = nodes_gdf[name_field].astype(str).map(
+                lambda nid: float(node_vol_dict_post5h.get(str(nid), 0.0))
+            )
+            nodes_gdf = nodes_gdf[nodes_gdf["_cuft_post5h"] > 0]
+            if nodes_gdf.empty:
+                return None, name_field
+
+            nodes_gdf["_color_rgba"] = [ [255, 0, 0, 255] ] * len(nodes_gdf)
+
+            node_layer = pdk.Layer(
+                "GeoJsonLayer",
+                data=nodes_gdf.__geo_interface__,
+                pickable=True,
+                stroked=False,
+                filled=True,
+                point_type="circle",
+                get_fill_color="properties._color_rgba",
+                get_point_radius=6,
+                point_radius_min_pixels=6
+            )
+            return node_layer, name_field
+        except Exception:
+            return None, name_field
+
+
+    def render_side_by_side_total_runoff_maps(
+        left_df_in_inches,  left_title,  left_nodes_post5h_dict,
+        right_df_in_inches, right_title, right_nodes_post5h_dict,
+        unit_label, ws_shp_path, node_shp_path, node_name_field_hint=None
+    ):
+        gdf_left,  runoff_unit_L = _prep_total_runoff_gdf(left_df_in_inches,  unit_label, ws_shp_path)
+        gdf_right, runoff_unit_R = _prep_total_runoff_gdf(right_df_in_inches, unit_label, ws_shp_path)
+        runoff_unit = runoff_unit_L
+
+        vals = pd.concat([gdf_left["Total_R"], gdf_right["Total_R"]], ignore_index=True)
+        if len(vals) == 0 or not np.isfinite(np.nanmin(vals)) or not np.isfinite(np.nanmax(vals)):
+            vmin, vmax = 0.0, 1.0
+        else:
+            vmin, vmax = float(np.nanmin(vals)), float(np.nanmax(vals))
+            if abs(vmax - vmin) < 1e-9:
+                vmax = vmin + 1e-6
+
+        gdf_left["_fill_total"]  = _colorize_total(gdf_left["Total_R"],  vmin, vmax)
+        gdf_right["_fill_total"] = _colorize_total(gdf_right["Total_R"], vmin, vmax)
+        for gdf in (gdf_left, gdf_right):
+            gdf["_label"] = gdf["NAME"]
+
+        centroid = pd.concat([gdf_left.geometry, gdf_right.geometry]).unary_union.centroid
+        view_state = pdk.ViewState(latitude=centroid.y, longitude=centroid.x, zoom=14.25)
+
+        def _poly_and_label_layers(gdf):
+            poly_layer = pdk.Layer(
+                "GeoJsonLayer",
+                data=gdf.__geo_interface__,
+                pickable=True,
+                stroked=True,
+                filled=True,
+                get_fill_color="properties._fill_total",
+                get_line_color=[255,255,255,255],
+                line_width_min_pixels=1,
+            )
+            reps = gdf.geometry.representative_point()
+            labels = pd.DataFrame({"lon": reps.x, "lat": reps.y, "text": gdf["_label"]})
+            text_layer = pdk.Layer(
+                "TextLayer",
+                data=labels,
+                get_position='[lon, lat]',
+                get_text="text",
+                get_size=12,
+                get_color=[0,0,0],
+                get_alignment_baseline="'center'"
+            )
+            return poly_layer, text_layer
+
+        left_poly,  left_text  = _poly_and_label_layers(gdf_left)
+        right_poly, right_text = _poly_and_label_layers(gdf_right)
+
+        left_nodes_layer,  _ = _node_layer_from_shp(node_shp_path, left_nodes_post5h_dict,  node_name_field_hint, print_columns=False)
+        right_nodes_layer, _ = _node_layer_from_shp(node_shp_path, right_nodes_post5h_dict, node_name_field_hint, print_columns=False)
+
+        c1, c2 = st.columns(2, gap="medium")
+        tooltip_html = (
+            "<b>{NAME}</b><br/>"
+            f"Total runoff: {{Total_R}} {runoff_unit}"
+        )
+
+
+        with c1:
+            st.markdown(f"**{left_title}**")
+            layers = [left_poly, left_text] + ([left_nodes_layer] if left_nodes_layer is not None else [])
+            st.pydeck_chart(
+                pdk.Deck(
+                    layers=layers,
+                    initial_view_state=view_state,
+                    map_style="light",
+                    tooltip={"html": tooltip_html, "style": {"backgroundColor": "white", "color": "black"}}
+                ),
+                use_container_width=True
+            )
+
+        with c2:
+            st.markdown(f"**{right_title}**")
+            layers = [right_poly, right_text] + ([right_nodes_layer] if right_nodes_layer is not None else [])
+            st.pydeck_chart(
+                pdk.Deck(
+                    layers=layers,
+                    initial_view_state=view_state,
+                    map_style="light",
+                    tooltip={"html": tooltip_html, "style": {"backgroundColor": "white", "color": "black"}}
+                ),
+                use_container_width=True
+            )
+
+        norm = mcolors.Normalize(vmin=vmin, vmax=vmax, clip=True)
+        cmap = mpl.colormaps.get_cmap("Blues")
+        c0  = [int(v*255) for v in cmap(norm(vmin))[:3]]
+        c1b = [int(v*255) for v in cmap(norm(vmax))[:3]]
+        st.markdown(
+            f"""
+            <div style="display:flex; justify-content:center; margin-top:6px;">
+            <div style="min-width:260px; max-width:640px; width:60%;">
+                <div style="text-align:center; font-size:13px;"><b>Runoff Legend ({runoff_unit})</b></div>
+                <div style="display:flex; align-items:center; gap:10px;">
+                <span>{vmin:.2f}</span>
+                <div style="flex:1; height:12px;
+                    background:linear-gradient(to right,
+                    rgb({c0[0]},{c0[1]},{c0[2]}),
+                    rgb({c1b[0]},{c1b[1]},{c1b[2]}));
+                    border:1px solid #888;"></div>
+                <span>{vmax:.2f}</span>
+                </div>
+                <div style="color:#555; font-size:12px; text-align:center; margin-top:6px;">
+                Same scale for both maps
+                </div>
+            </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    st.subheader("Scenario Comparison Maps (Total Runoff)")
+
+    WS_SHP_PATH   = "Subcatchments.shp"
     NODE_SHP_PATH = "Nodes.shp"
-    NODE_NAME_FIELD = "NAME"
 
-    # Map 1: LID + Tide Gate — +20% rainfall
-    if f"{prefix}df_lid_gate_future" in st.session_state:
-        render_total_runoff_with_nodes_map(
-            st.session_state[f"{prefix}df_lid_gate_future"],
-            unit,
+    # Compare LID vs Baseline for +20% rainfall (runoff table is independent of gate)
+    left_df_key   = f"{prefix}df_lid_nogate_future"     # LID (+20%)
+    right_df_key  = f"{prefix}df_base_nogate_future"    # Baseline (+20%)
+
+    if left_df_key in st.session_state and right_df_key in st.session_state:
+        render_side_by_side_total_runoff_maps(
+            left_df_in_inches  = st.session_state[left_df_key],
+            left_title         = "LID — +20% Rainfall",
+            left_nodes_post5h_dict  = {},  # hide nodes
+
+            right_df_in_inches = st.session_state[right_df_key],
+            right_title        = "Baseline — +20% Rainfall",
+            right_nodes_post5h_dict = {},  # hide nodes
+
+            unit_label=unit,
             ws_shp_path=WS_SHP_PATH,
             node_shp_path=NODE_SHP_PATH,
-            node_name_field=NODE_NAME_FIELD,
-            node_vol_dict_post5h=st.session_state.get(f"{prefix}lid_gate_future_node_flood_post5h_cuft", {}),
-            map_title="LID + Tide Gate — +20% Rainfall (Total Runoff + Nodes post-5 h)"
+            node_name_field_hint="NAME",
         )
     else:
-        st.info("Run the LID + Tide Gate (+20%) scenario to view its map.")
-
-    # Map 2: Baseline — No Tide Gate — +20% rainfall
-    if f"{prefix}df_base_nogate_future" in st.session_state:
-        render_total_runoff_with_nodes_map(
-            st.session_state[f"{prefix}df_base_nogate_future"],
-            unit,
-            ws_shp_path=WS_SHP_PATH,
-            node_shp_path=NODE_SHP_PATH,
-            node_name_field=NODE_NAME_FIELD,
-            node_vol_dict_post5h=st.session_state.get(f"{prefix}baseline_nogate_future_node_flood_post5h_cuft", {}),
-            map_title="Baseline — No Tide Gate — +20% Rainfall (Total Runoff + Nodes post-5 h)"
-        )
-    else:
-        st.info("Run the Baseline No-Gate (+20%) scenario to view its map.")
+        st.info("Run both scenarios: LID (+20%) and Baseline (+20%) to view the comparison maps.")
 
 
     def extract_volumes_from_rpt(rpt_path, scenario_name=None):
@@ -1388,7 +1669,7 @@ else:
             v = st.session_state.get(f"{prefix}{scen_key}_post5h_total_flood", None)  # ac-ft
             if v is not None and scen_name in df_balance.index:
                 df_balance.loc[scen_name, "Flooding (ac-ft)"] = v
-        df_balance.rename(columns={"Flooding (ac-ft)":"Flooding (ac-ft, post-5h)"}, inplace=True)
+        df_balance.rename(columns={"Flooding (ac-ft)":"Flooding (ac-ft)"}, inplace=True)
 
         # Unit conversion frame (replace your current df_converted construction with this)
         convert_to_m3 = unit == "Metric (SI)"
@@ -1407,7 +1688,7 @@ else:
             return val_ft3 * FT3_TO_M3 if convert_to_m3 else val_ft3
 
         df_converted = pd.DataFrame(index=df_balance.index)
-        df_converted["Flooded Volume (Post-5h)"] = df_balance["Flooding (ac-ft, post-5h)"].apply(lambda x: convert(x, "ac-ft"))
+        df_converted["Flooded Volume"] = df_balance["Flooding (ac-ft)"].apply(lambda x: convert(x, "ac-ft"))
         df_converted["Infiltration"]  = df_balance["Infiltration (ac-ft)"].apply(lambda x: convert(x, "ac-ft"))
         df_converted["Surface Runoff"] = df_balance["Runoff (ac-ft)"].apply(lambda x: convert(x, "ac-ft"))
         df_converted = df_converted.round(0).astype(int)
