@@ -1214,7 +1214,7 @@ else:
 
     WS_SHP_PATH = "Subcatchments.shp"
     NODE_SHP_PATH = "Nodes.shp"
-    NODE_NAME_FIELD = "Name"
+    NODE_NAME_FIELD = "NAME"
 
     # Map 1: LID + Tide Gate — +20% rainfall
     if f"{prefix}df_lid_gate_future" in st.session_state:
