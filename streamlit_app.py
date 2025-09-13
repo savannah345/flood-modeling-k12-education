@@ -444,7 +444,8 @@ else:
         else:
             df_swmm["Total_R"] = (df_swmm["Impervious Runoff (in)"] + df_swmm["Pervious Runoff   (in)"]) * 2.54
             runoff_unit = "cm"
-        df_swmm["NAME"] = df_swmm["Subcatchment"].astype(str).strip()
+        # in render_total_runoff_with_nodes_map(...)
+        df_swmm["NAME"] = df_swmm["Subcatchment"].astype(str).str.strip()
 
         # polygons
         gdf_ws = gpd.read_file(ws_shp_path)
@@ -1092,7 +1093,14 @@ else:
                 .encode(
                     x=alt.X("Subcatchment:N", title="Subcatchment"),
                     y=alt.Y("Cost:Q", title="Cost", stack="zero"),
-                    color=alt.Color("LID Type:N", legend=alt.Legend(title="LID Type")),
+                    color=alt.Color(
+                        "LID Type:N",
+                        legend=alt.Legend(title="LID Type"),
+                        scale=alt.Scale(
+                            domain=["Rain Garden", "Rain Barrel", "Tide Gate"],
+                            range=["#1f77b4", "#6baed6", "#d62728"]  # blues for LIDs, red for gate
+                        )
+                    ),
                     tooltip=["Subcatchment","LID Type","Cost"]
                 )
                 .properties(width=650, height=350)
