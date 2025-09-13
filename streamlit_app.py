@@ -352,7 +352,6 @@ else:
     if "temp_dir" not in st.session_state:
         st.session_state.temp_dir = tempfile.mkdtemp()
 
-
     def run_swmm_scenario(
         scenario_name,
         rain_lines,
@@ -361,7 +360,8 @@ else:
         gate_flag,
         full_depth=10.0,
         report_interval=timedelta(minutes=5),
-        template_path="swmm_project.inp"
+        template_path="swmm_project.inp",
+        warmup_hours=5
     ):
         temp_dir = st.session_state.temp_dir
         inp_path = os.path.join(temp_dir, f"{scenario_name}.inp")
@@ -381,41 +381,166 @@ else:
 
         # --- 2. Run simulation ---
         cumulative_flooding_acft, timestamps = [], []
-        cumulative_cuft = 0.0
+        cum_cuft_all = 0.0          # whole event (for the on-screen cumulative plot you already use)
+        cum_cuft_post5h = 0.0       # only after warm-up
+        node_cuft_post5h = {}       # dict[node_id] = cuft after warm-up
+
         last_report_time = None
+        first_time = None
+        dt_s = int(report_interval.total_seconds())
 
         with Simulation(inp_path) as sim:
-            for step in sim:
+            for _ in sim:
                 current_time = sim.current_time
+                if first_time is None:
+                    first_time = current_time
+
                 if last_report_time is None or (current_time - last_report_time) >= report_interval:
-                    # Instantaneous flooding rate across all nodes (cfs)
-                    total_flooding_cfs = sum(node.flooding for node in Nodes(sim))
+                    total_cfs = 0.0
+                    elapsed_h = (current_time - first_time).total_seconds() / 3600.0
+                    for node in Nodes(sim):
+                        q = float(node.flooding)  # cfs
+                        total_cfs += q
+                        if elapsed_h >= warmup_hours and q > 0.0:
+                            nid = getattr(node, "nodeid", None) or getattr(node, "id", None) or str(node)
+                            vol = q * dt_s
+                            node_cuft_post5h[nid] = node_cuft_post5h.get(nid, 0.0) + vol
+                            cum_cuft_post5h += vol
 
-                    # Convert to volume for this step (cfs × seconds)
-                    step_volume_cuft = total_flooding_cfs * report_interval.total_seconds()
-
-                    # Add to running total
-                    cumulative_cuft += step_volume_cuft
-
-                    # Convert to acre-feet
-                    cumulative_acft = cumulative_cuft / 43560.0
-
-                    cumulative_flooding_acft.append(cumulative_acft)
+                    # whole-event cumulative (kept for your existing lines/plots)
+                    step_vol_all = total_cfs * dt_s
+                    cum_cuft_all += step_vol_all
+                    cumulative_flooding_acft.append(cum_cuft_all / 43560.0)
                     timestamps.append(current_time.strftime("%m-%d %H:%M"))
-
                     last_report_time = current_time
 
-        # Optional rename if needed
+        # Rename outputs if SWMM wrote to default names
         if os.path.exists(os.path.join(temp_dir, "updated_model.rpt")):
             shutil.move(os.path.join(temp_dir, "updated_model.rpt"), rpt_path)
         if os.path.exists(os.path.join(temp_dir, "updated_model.out")):
             shutil.move(os.path.join(temp_dir, "updated_model.out"), out_path)
 
-        # Store the total flooding for this scenario
-        total_flood_acft = cumulative_flooding_acft[-1] if cumulative_flooding_acft else 0.0
-        st.session_state[f"{scenario_name}_total_flood"] = total_flood_acft
+        # Store totals
+        st.session_state[f"{scenario_name}_total_flood"] = (cumulative_flooding_acft[-1] if cumulative_flooding_acft else 0.0)
+        st.session_state[f"{scenario_name}_post5h_total_flood"] = (cum_cuft_post5h / 43560.0) if cum_cuft_post5h > 0 else 0.0
+        st.session_state[f"{scenario_name}_node_flood_post5h_cuft"] = node_cuft_post5h  # for map overlay
 
         return cumulative_flooding_acft, timestamps, rpt_path
+
+    def render_total_runoff_with_nodes_map(
+        rpt_df_in_inches,         # DataFrame from extract_runoff_and_lid_data(...), in inches
+        unit_label,               # "U.S. Customary" or "Metric (SI)"
+        ws_shp_path,              # polygon shapefile path
+        node_shp_path,            # node shapefile path
+        node_name_field,          # column in node shapefile that matches SWMM node ids
+        node_vol_dict_post5h,     # dict: node_id -> cuft (post-5h only)
+        map_title
+    ):
+        # subcatchment totals
+        df_swmm = rpt_df_in_inches.copy()
+        if unit_label == "U.S. Customary":
+            df_swmm["Total_R"] = df_swmm["Impervious Runoff (in)"] + df_swmm["Pervious Runoff   (in)"]
+            runoff_unit = "in"
+        else:
+            df_swmm["Total_R"] = (df_swmm["Impervious Runoff (in)"] + df_swmm["Pervious Runoff   (in)"]) * 2.54
+            runoff_unit = "cm"
+        df_swmm["NAME"] = df_swmm["Subcatchment"].astype(str).strip()
+
+        # polygons
+        gdf_ws = gpd.read_file(ws_shp_path)
+        gdf_ws = (gdf_ws.set_crs(4326) if gdf_ws.crs is None else gdf_ws.to_crs(4326))
+        gdf_ws["NAME"] = gdf_ws["NAME"].astype(str).str.strip()
+
+        gdf = gdf_ws.merge(df_swmm[["NAME", "Total_R"]], on="NAME", how="left")
+        vals = gdf["Total_R"].to_numpy()
+        if len(vals) == 0 or not np.isfinite(np.nanmin(vals)) or not np.isfinite(np.nanmax(vals)):
+            vmin, vmax = 0.0, 1.0
+        else:
+            vmin, vmax = float(np.nanmin(vals)), float(np.nanmax(vals))
+            if abs(vmax - vmin) < 1e-9:
+                vmax = vmin + 1e-6
+
+        def _colorize(values, a=0.9):
+            norm = mcolors.Normalize(vmin=vmin, vmax=vmax, clip=True)
+            cmap = cm.get_cmap("Blues")
+            out = []
+            for v in values:
+                if pd.isna(v):
+                    out.append([200,200,200,int(0.4*255)])
+                else:
+                    r,g,b,_ = cmap(norm(float(v)))
+                    out.append([int(r*255), int(g*255), int(b*255), int(a*255)])
+            return out
+
+        gdf["_fill_total"] = _colorize(gdf["Total_R"])
+        gdf["_label"] = gdf["NAME"]
+
+        centroid = gdf.geometry.union_all().centroid
+        view_state = pdk.ViewState(latitude=centroid.y, longitude=centroid.x, zoom=14.25)
+        poly_layer = pdk.Layer(
+            "GeoJsonLayer",
+            data=gdf.__geo_interface__,
+            pickable=True,
+            stroked=True,
+            filled=True,
+            get_fill_color="properties._fill_total",
+            get_line_color=[255,255,255,255],
+            line_width_min_pixels=1,
+        )
+        reps = gdf.geometry.representative_point()
+        labels = pd.DataFrame({"lon": reps.x, "lat": reps.y, "text": gdf["_label"]})
+        text_layer = pdk.Layer(
+            "TextLayer",
+            data=labels,
+            get_position='[lon, lat]',
+            get_text="text",
+            get_size=12,
+            get_color=[0,0,0],
+            get_alignment_baseline="'center'"
+        )
+
+        # nodes
+        node_layer = None
+        try:
+            nodes_gdf = gpd.read_file(node_shp_path)
+            nodes_gdf = (nodes_gdf.set_crs(4326) if nodes_gdf.crs is None else nodes_gdf.to_crs(4326))
+            nodes_gdf["_cuft_post5h"] = nodes_gdf[node_name_field].astype(str).map(lambda nid: float(node_vol_dict_post5h.get(str(nid), 0.0)))
+            nodes_gdf["_flooded_post5h"] = nodes_gdf["_cuft_post5h"].map(lambda v: v > 0.0)
+            nodes_gdf["_color_rgba"] = nodes_gdf["_flooded_post5h"].map(lambda f: [255,0,0,255] if f else [0,0,0,255])
+            node_layer = pdk.Layer(
+                "GeoJsonLayer",
+                data=nodes_gdf.__geo_interface__,
+                pickable=True,
+                stroked=False,
+                filled=True,
+                point_type="circle",
+                get_fill_color="properties._color_rgba",
+                get_radius=6,
+            )
+        except Exception as e:
+            st.warning(f"Nodes overlay issue: {e}")
+
+        st.markdown(f"**{map_title}**")
+        layers = [poly_layer, text_layer] + ([node_layer] if node_layer is not None else [])
+        st.pydeck_chart(
+            pdk.Deck(
+                layers=layers,
+                initial_view_state=view_state,
+                map_style="light",
+                tooltip={
+                    "html": (
+                        "<b>{NAME}</b><br/>"
+                        "Total runoff: {Total_R} " + runoff_unit + "<br/>"
+                        "Node: {Name}<br/>"
+                        "Flooded post-5 h: { _flooded_post5h }<br/>"
+                        "Node vol post-5 h (cuft): { _cuft_post5h }"
+                    ),
+                    "style": {"backgroundColor":"white","color":"black"}
+                }
+            ),
+            use_container_width=True
+        )
+
 
     # === Time-series Formatter ===
     def format_timeseries(name, minutes, values, start_datetime):
@@ -1084,6 +1209,40 @@ else:
             len(lid_max_fut), len(lid_max_gate_fut)
         )
 
+    # === ADD: End-of-app comparison maps (keep baseline maps above unchanged) ===
+    st.subheader("Scenario Comparison Maps (Total Runoff + Binary Nodes)")
+
+    WS_SHP_PATH = "Subcatchments.shp"
+    NODE_SHP_PATH = "Nodes.shp"
+    NODE_NAME_FIELD = "Name"
+
+    # Map 1: LID + Tide Gate — +20% rainfall
+    if f"{prefix}df_lid_gate_future" in st.session_state:
+        render_total_runoff_with_nodes_map(
+            st.session_state[f"{prefix}df_lid_gate_future"],
+            unit,
+            ws_shp_path=WS_SHP_PATH,
+            node_shp_path=NODE_SHP_PATH,
+            node_name_field=NODE_NAME_FIELD,
+            node_vol_dict_post5h=st.session_state.get(f"{prefix}lid_gate_future_node_flood_post5h_cuft", {}),
+            map_title="LID + Tide Gate — +20% Rainfall (Total Runoff + Nodes post-5 h)"
+        )
+    else:
+        st.info("Run the LID + Tide Gate (+20%) scenario to view its map.")
+
+    # Map 2: Baseline — No Tide Gate — +20% rainfall
+    if f"{prefix}df_base_nogate_future" in st.session_state:
+        render_total_runoff_with_nodes_map(
+            st.session_state[f"{prefix}df_base_nogate_future"],
+            unit,
+            ws_shp_path=WS_SHP_PATH,
+            node_shp_path=NODE_SHP_PATH,
+            node_name_field=NODE_NAME_FIELD,
+            node_vol_dict_post5h=st.session_state.get(f"{prefix}baseline_nogate_future_node_flood_post5h_cuft", {}),
+            map_title="Baseline — No Tide Gate — +20% Rainfall (Total Runoff + Nodes post-5 h)"
+        )
+    else:
+        st.info("Run the Baseline No-Gate (+20%) scenario to view its map.")
 
 
     def extract_volumes_from_rpt(rpt_path, scenario_name=None):
@@ -1203,35 +1362,34 @@ else:
         df_balance = pd.DataFrame(results).set_index("Scenario")
 
         # Force the summary table to use the graph's final cumulative flooding totals
-        scenario_to_key = {
-            "Baseline (No Tide Gate) – Current":  f"{prefix}baseline_fill_current",
-            "Baseline + Tide Gate – Current":     f"{prefix}baseline_gate_fill_current",
-            "Baseline (No Tide Gate) – +20%":     f"{prefix}baseline_fill_future",
-            "Baseline + Tide Gate – +20%":        f"{prefix}baseline_gate_fill_future",
-            "LID (No Tide Gate) – Current":       f"{prefix}lid_fill_current",
-            "LID + Tide Gate – Current":          f"{prefix}lid_gate_fill_current",
-            "LID (No Tide Gate) – +20%":          f"{prefix}lid_fill_future",
-            "LID + Tide Gate – +20%":             f"{prefix}lid_gate_fill_future",
-            "Max LID (No Tide Gate) – Current":   f"{prefix}lid_max_fill_current",
-            "Max LID + Tide Gate – Current":      f"{prefix}lid_max_gate_fill_current",
-            "Max LID (No Tide Gate) – +20%":      f"{prefix}lid_max_fill_future",
-            "Max LID + Tide Gate – +20%":         f"{prefix}lid_max_gate_fill_future",
+        friendly_to_session_prefix = {
+            "Baseline (No Tide Gate) – Current":  "baseline_nogate_current",
+            "Baseline + Tide Gate – Current":     "baseline_gate_current",
+            "Baseline (No Tide Gate) – +20%":     "baseline_nogate_future",
+            "Baseline + Tide Gate – +20%":        "baseline_gate_future",
+            "LID (No Tide Gate) – Current":       "lid_nogate_current",
+            "LID + Tide Gate – Current":          "lid_gate_current",
+            "LID (No Tide Gate) – +20%":          "lid_nogate_future",
+            "LID + Tide Gate – +20%":             "lid_gate_future",
+            "Max LID (No Tide Gate) – Current":   "lid_max_nogate_current",
+            "Max LID + Tide Gate – Current":      "lid_max_gate_current",
+            "Max LID (No Tide Gate) – +20%":      "lid_max_nogate_future",
+            "Max LID + Tide Gate – +20%":         "lid_max_gate_future",
         }
+        for scen_name, scen_key in friendly_to_session_prefix.items():
+            v = st.session_state.get(f"{prefix}{scen_key}_post5h_total_flood", None)  # ac-ft
+            if v is not None and scen_name in df_balance.index:
+                df_balance.loc[scen_name, "Flooding (ac-ft)"] = v
+        df_balance.rename(columns={"Flooding (ac-ft)":"Flooding (ac-ft, post-5h)"}, inplace=True)
 
-
-        for scenario, fill_key in scenario_to_key.items():
-            if fill_key in st.session_state and len(st.session_state[fill_key]) > 0:
-                df_balance.loc[scenario, "Flooding (ac-ft)"] = st.session_state[fill_key][-1]
-
-        # Convert + format logic remains the same
+        # Unit conversion frame (replace your current df_converted construction with this)
         convert_to_m3 = unit == "Metric (SI)"
         GAL_TO_FT3 = 0.133681
         ACF_TO_FT3 = 43560
         FT3_TO_M3 = 0.0283168
-
         def convert(val, from_unit):
             if val is None:
-                return 0  # or np.nan if you want to mark missing
+                return 0
             if from_unit == "gallons":
                 val_ft3 = val * GAL_TO_FT3
             elif from_unit == "ac-ft":
@@ -1241,8 +1399,8 @@ else:
             return val_ft3 * FT3_TO_M3 if convert_to_m3 else val_ft3
 
         df_converted = pd.DataFrame(index=df_balance.index)
-        df_converted["Flooded Volume (Event Total)"] = df_balance["Flooding (ac-ft)"].apply(lambda x: convert(x, "ac-ft"))
-        df_converted["Infiltration"] = df_balance["Infiltration (ac-ft)"].apply(lambda x: convert(x, "ac-ft"))
+        df_converted["Flooded Volume (Post-5h)"] = df_balance["Flooding (ac-ft, post-5h)"].apply(lambda x: convert(x, "ac-ft"))
+        df_converted["Infiltration"]  = df_balance["Infiltration (ac-ft)"].apply(lambda x: convert(x, "ac-ft"))
         df_converted["Surface Runoff"] = df_balance["Runoff (ac-ft)"].apply(lambda x: convert(x, "ac-ft"))
         df_converted = df_converted.round(0).astype(int)
 
