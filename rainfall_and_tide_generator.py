@@ -7,9 +7,6 @@ import pandas as pd
 
 from scipy.signal import find_peaks
 
-# --------------------------
-# Public Exports (what your app imports)
-# --------------------------
 __all__ = [
     "pf_df",
     "convert_units",
@@ -24,9 +21,6 @@ __all__ = [
     "get_aligned_rainfall",
 ]
 
-# ============================================================
-# 1) PF Table (Depths in inches for given durations/return periods)
-# ============================================================
 pf_df = pd.DataFrame({
     "Duration_Minutes": [120, 180, 360, 720, 1440],
     "1":   [1.68, 1.80, 2.18, 2.57, 2.94],
@@ -38,9 +32,6 @@ pf_df = pd.DataFrame({
     "100": [4.67, 5.23, 6.41, 7.82, 9.20],
 })
 
-# ============================================================
-# 2) Unit conversions
-# ============================================================
 def convert_units(value_in_inches: float, unit: str) -> float:
     """
     Convert rainfall depth from inches -> inches (U.S.) or centimeters (Metric).
@@ -55,9 +46,6 @@ def convert_units(value_in_inches: float, unit: str) -> float:
 def feet_to_meters(series_or_array):
     return series_or_array * 0.3048
 
-# ============================================================
-# 3) Synthetic rainfall generator (15-min resolution)
-# ============================================================
 def generate_rainfall(total_inches: float,
                       duration_minutes: int,
                       method: str = "Normal") -> np.ndarray:
@@ -82,9 +70,6 @@ def generate_rainfall(total_inches: float,
 
     return total_inches * y  # inches by design
 
-# ============================================================
-# 4) Tide definitions + synthetic tide generator (15-min)
-# ============================================================
 moon_tide_ranges = {
     "🌓 First Quarter: Neap": (-0.8, 1.2),   # feet
     "🌕 Full Moon: Spring":   (-1.2, 1.8),   # feet
@@ -117,9 +102,6 @@ def generate_tide_curve(moon_phase: str, unit: str) -> Tuple[np.ndarray, np.ndar
 
     return minutes_15, tide_15
 
-# ============================================================
-# 5) Extrema detection (peaks & lows)
-# ============================================================
 def find_tide_extrema(
     tide_curve_15min: np.ndarray,
     distance_bins: int = 40,      # ~10 h / 15 min ≈ 40 bins; avoids double-detecting
@@ -201,12 +183,6 @@ def align_rainfall_to_tide(total_inches: float,
     minutes_15 = np.arange(n) * 15  # minutes from start (0,15,30,...)
     return minutes_15, rain, center_index
 
-# ============================================================
-# 7) Real-time Greenstream fetch (48h @ 6-min) -> DataFrame
-#     Then resample to 15-min with unit handling
-# ============================================================
-
-# --- You may tune these constants if the site moves icons around ---
 GREENSTREAM_URL = "https://dashboard.greenstream.cloud/detail?id=SITE#d935fec2-7a0b-4df0-986c-76f25d773070"
 WATER_COL_LIVE = "Water Level NAVD88 (ft)"  # column name in CSV/XLSX
 
@@ -349,10 +325,6 @@ def fetch_greenstream_dataframe() -> pd.DataFrame:
         browser.close()
         return df
 
-
-# ============================================================
-# 8) Build 6-min timeline and resample to 15-min (unit aware)
-# ============================================================
 def build_timestep_and_resample_15min(df_raw: pd.DataFrame,
                                       water_col: str = WATER_COL_LIVE,
                                       unit: str = "U.S. Customary",
@@ -360,11 +332,8 @@ def build_timestep_and_resample_15min(df_raw: pd.DataFrame,
                                       navd88_to_sea_level_offset_ft: float = 0.0
                                       ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Input: df_raw from Greenstream (≈480 rows @ 6-minute interval).
-    - Creates a 6-min datetime index across len(df)
-    - Converts ft->m if unit == 'Metric (SI)'
-    - Resamples to 15-min mean
-    Returns: (minutes_15, tide_15) where tide_15 is in ft or m per 'unit'.
+    Input: df_raw from Greenstream (~>=480 rows @ 6-min).
+    Returns exactly 48h @ 15-min (192 bins), no padding/interpolation.
     """
 
     # Find the water level column
@@ -379,12 +348,24 @@ def build_timestep_and_resample_15min(df_raw: pd.DataFrame,
     if n == 0:
         raise ValueError("Empty tide DataFrame (live).")
 
-    # Anchor 6-min timeline. If you know the real start time, pass start_ts.
+    # We only want the last 48h of 6-min data: 48*60/6 = 480 rows.
+    # If more than 480 are present, keep the most recent 480. If fewer, fail fast.
+    REQUIRED_6MIN = 48 * 60 // 6  # 480
+    if n < REQUIRED_6MIN:
+        raise ValueError(f"Live dataset too short ({n} rows). Expected at least {REQUIRED_6MIN} rows for 48h.")
+    if n > REQUIRED_6MIN:
+        tide_df = tide_df.tail(REQUIRED_6MIN)
+        n = REQUIRED_6MIN
+
+    # Build a strict 6-min timeline ending "now" (or aligned to provided start_ts)
     if start_ts is None:
-        # Snap to the quarter-hour so resample bins align nicely
-        start_ts = (pd.Timestamp.now().floor("15min") - pd.Timedelta(minutes=6*(n-1)))
-    tide_df["TimeStep"] = pd.date_range(start=start_ts, periods=n, freq="6T")
-    tide_df = tide_df.set_index("TimeStep")
+        end6 = pd.Timestamp.now().floor("6min")
+    else:
+        # If caller provides a start_ts (meaning the first of the n samples),
+        # compute the corresponding end timestamp consistently:
+        end6 = (pd.Timestamp(start_ts).floor("6min") + pd.Timedelta(minutes=6*(n-1)))
+    idx6 = pd.date_range(end=end6, periods=n, freq="6T")
+    tide_df = tide_df.set_index(idx6)
 
     # Unit conversion (live data are in feet)
     vals = tide_df[water_col].astype(float)
@@ -393,24 +374,24 @@ def build_timestep_and_resample_15min(df_raw: pd.DataFrame,
         offset = navd88_to_sea_level_offset_ft * 0.3048   # ft -> m
     else:
         offset = navd88_to_sea_level_offset_ft             # ft
-
-    # Subtract NAVD88→MSL offset if provided
     if offset != 0.0:
         vals = vals - offset
-
     tide_df[water_col] = vals
 
-    # Resample to 15-minute bins
-    tide_15 = tide_df.resample("15min").mean(numeric_only=True)[water_col].to_numpy()
+    # Downsample to 15-min means, then keep exactly the last 48h (192 bins)
+    tide_15_series = tide_df.resample("15min").mean(numeric_only=True)[water_col]
+    REQUIRED_15MIN = 48 * 60 // 15  # 192
+    if len(tide_15_series) < REQUIRED_15MIN:
+        # If Greenstream gave exactly 480×6-min rows, this won’t happen; guard anyway.
+        raise ValueError(f"After resampling, got {len(tide_15_series)}×15-min bins; expected {REQUIRED_15MIN}.")
+    tide_15_series = tide_15_series.tail(REQUIRED_15MIN)
 
-    # Minutes array (length-agnostic)
-    minutes_15 = np.arange(len(tide_15)) * 15
+    # Return fixed 0..48h minutes and values (no padding; pure slice+resample)
+    minutes_15 = np.arange(0, 48*60, 15, dtype=int)  # 0,15,...,287*15
+    tide_15 = tide_15_series.to_numpy()
+
     return minutes_15, tide_15
 
-
-# ============================================================
-# 9) Orchestrator: prefer real-time, fallback to synthetic
-# ============================================================
 def get_tide_real_or_synthetic(moon_phase: str,
                                unit: str,
                                start_ts: Optional[pd.Timestamp] = None,
