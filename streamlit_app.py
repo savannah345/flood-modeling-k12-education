@@ -106,125 +106,126 @@ def make_color(values, vmin, vmax, a=0.9):
     return out
 
 def prep_total_runoff_gdf(rpt_df: pd.DataFrame, unit_ui: str, ws_gdf: gpd.GeoDataFrame):
+    """
+    Join per-subcatchment Total Runoff to polygons.
+
+    Expects rpt_df with:
+      - Subcatchment
+      - Total_in  (depth units from report; your RPT shows inches)
+
+    Back-compat:
+      - If Total_in is missing but Impervious/Pervious exist, uses their sum.
+    Returns: (GeoDataFrame_with_Total_R, display_unit_str)
+    """
     g = ws_gdf.copy()
-    if rpt_df.empty:
+
+    # Empty -> return NaNs with unit label
+    if rpt_df is None or rpt_df.empty:
         g["Total_R"] = np.nan
         return g, ("in" if unit_ui == "U.S. Customary" else "cm")
 
-    if unit_ui == "U.S. Customary":
-        total = rpt_df["Impervious"] + rpt_df["Pervious"]; unit = "in"
+    # Choose a source column for total depth
+    if "Total_in" in rpt_df.columns:
+        total_in = rpt_df["Total_in"].astype(float)
+    elif {"Impervious","Pervious"} <= set(rpt_df.columns):
+        total_in = (rpt_df["Impervious"].astype(float).fillna(0.0) +
+                    rpt_df["Pervious"].astype(float).fillna(0.0))
     else:
-        total = (rpt_df["Impervious"] + rpt_df["Pervious"]) * 2.54; unit = "cm"
+        # nothing usable
+        g["Total_R"] = np.nan
+        return g, ("in" if unit_ui == "U.S. Customary" else "cm")
 
-    # normalize names on both sides
-    def norm(n):
-        if not isinstance(n, str): n = str(n)
+    # Normalize names on both sides for a robust join
+    def _norm(n):
+        n = "" if n is None else str(n)
         n = n.strip().lower()
-        # coerce Sub_01 -> Sub_1 and Sub_1 -> Sub_1
-        m = re.fullmatch(r"sub[_\s-]*0*(\d+)", n)
+        m = re.fullmatch(r"sub[_\s-]*0*(\d+)", n)  # Sub_01 -> sub_1 ; Sub-1 -> sub_1
         return f"sub_{m.group(1)}" if m else re.sub(r"\s+", "", n)
 
-    left = rpt_df.assign(NAME_JOIN=rpt_df["Subcatchment"].astype(str).map(norm)).loc[:, ["NAME_JOIN"]]
-    left["Total_R"] = total.values
+    left = rpt_df.assign(NAME_JOIN=rpt_df["Subcatchment"].astype(str).map(_norm))[
+        ["NAME_JOIN"]
+    ].copy()
+    left["Total_in"] = total_in.values
 
-    g["NAME_JOIN"] = g["NAME"].astype(str).map(norm)
+    g["NAME_JOIN"] = g["NAME"].astype(str).map(_norm)
     merged = g.merge(left, on="NAME_JOIN", how="left").drop(columns=["NAME_JOIN"])
+
+    # Convert to display units for the UI
+    if unit_ui == "U.S. Customary":
+        merged["Total_R"] = merged["Total_in"]  # inches
+        unit = "in"
+    else:
+        merged["Total_R"] = merged["Total_in"] * 2.54  # -> cm
+        unit = "cm"
+
     return merged, unit
 
-def extract_runoff_and_lid_data(rpt_file: str) -> pd.DataFrame:
+def extract_total_runoff(rpt_file: str):
     """
-    Robustly parse the 'Subcatchment Runoff Summary' table.
-    Returns columns: Subcatchment, Impervious, Pervious (values in the report's unit).
-    If only a single 'Runoff' column exists, it is placed in Impervious and Pervious=0.
+    Robustly parse 'Subcatchment Runoff Summary' from an SWMM .rpt file.
+    Returns DataFrame: Subcatchment, Total_in  (Total Runoff depth)
+    Strategy: find the section, skip header lines, then for each data row
+    read the first token as the name and take the 7th numeric value.
     """
-    import re
+    import os, re
+    import pandas as pd
 
     if not os.path.exists(rpt_file):
-        return pd.DataFrame(columns=["Subcatchment", "Impervious", "Pervious"])
+        return pd.DataFrame(columns=["Subcatchment","Total_in"])
 
     with open(rpt_file, "r", errors="ignore") as f:
         lines = f.readlines()
 
-    # 1) Find the section header
+    # 1) locate the section
     sec_i = next((i for i, l in enumerate(lines) if "Subcatchment Runoff Summary" in l), None)
     if sec_i is None:
-        return pd.DataFrame(columns=["Subcatchment", "Impervious", "Pervious"])
+        return pd.DataFrame(columns=["Subcatchment","Total_in"])
 
-    # dash line helper
-    def is_dash_line(s: str) -> bool:
+    def is_dash(s: str) -> bool:
         s = s.strip()
         return len(s) > 0 and set(s) <= set("- ")
 
-    # 2) Find the header line between two dash lines
+    # 2) advance to the line that actually starts with "Subcatchment"
     i = sec_i + 1
-    while i < len(lines) and not is_dash_line(lines[i]):  # first dashes
+    while i < len(lines) and "Subcatchment" not in lines[i]:
         i += 1
     if i >= len(lines):
-        return pd.DataFrame(columns=["Subcatchment", "Impervious", "Pervious"])
+        return pd.DataFrame(columns=["Subcatchment","Total_in"])
 
-    # header should be next non-blank, non-dash line
+    # 3) skip the underline dashes after that units line
     i += 1
-    while i < len(lines) and (is_dash_line(lines[i]) or not lines[i].strip()):
+    while i < len(lines) and not is_dash(lines[i]):
         i += 1
     if i >= len(lines):
-        return pd.DataFrame(columns=["Subcatchment", "Impervious", "Pervious"])
-    header_line = lines[i].rstrip("\n")
+        return pd.DataFrame(columns=["Subcatchment","Total_in"])
+    i += 1  # move to first data row
 
-    # find the underline dashes after header
-    i += 1
-    while i < len(lines) and not is_dash_line(lines[i]):
-        i += 1
-    if i >= len(lines):
-        return pd.DataFrame(columns=["Subcatchment", "Impervious", "Pervious"])
-
-    # 3) Map header columns
-    header_cols = re.split(r"\s{2,}", header_line.strip())
-    norm = lambda s: re.sub(r"\s+", " ", s.strip().lower())
-
-    name_idx = next((k for k, c in enumerate(header_cols) if norm(c).startswith("subcatchment")), 0)
-    imperv_idx = next((k for k, c in enumerate(header_cols) if "imperv" in norm(c) and "runoff" in norm(c)), None)
-    perv_idx   = next((k for k, c in enumerate(header_cols) if "perv"   in norm(c) and "runoff" in norm(c)), None)
-    runoff_idx = next((k for k, c in enumerate(header_cols) if norm(c) == "runoff" or norm(c).endswith(" runoff")), None)
-
-    # 4) Iterate data rows
+    # 4) parse data rows
     rows = []
-    i += 1  # start after underline
+    float_re = re.compile(r"[-+]?\d+(?:\.\d+)?")
     while i < len(lines):
-        s = lines[i].rstrip("\n")
-        if not s.strip() or is_dash_line(s):
+        raw = lines[i].rstrip("\n")
+        if not raw.strip() or is_dash(raw):
             break
-        if "Analysis Options" in s or "Node Depth Summary" in s:
+        # stop at next section just in case
+        if raw.lstrip().startswith("*") or "Node Depth Summary" in raw or "Analysis Options" in raw:
             break
 
-        parts = re.split(r"\s{2,}", s.strip())
-        if len(parts) < 2:
-            i += 1
-            continue
-        if len(parts) < len(header_cols):
-            parts = parts + [""] * (len(header_cols) - len(parts))
+        # name = first contiguous non-space token
+        parts = raw.strip().split()
+        name = parts[0] if parts else None
 
-        sub = parts[name_idx] if name_idx < len(parts) else parts[0]
-
-        def fget(idx):
-            try:
-                return float(parts[idx]) if idx is not None and parts[idx] not in ("", None) else None
-            except Exception:
-                return None
-
-        imperv = fget(imperv_idx)
-        perv   = fget(perv_idx)
-
-        if imperv is None and perv is None:
-            r = fget(runoff_idx)
-            if r is not None:
-                imperv, perv = r, 0.0
-
-        if imperv is not None or perv is not None:
-            rows.append({"Subcatchment": sub, "Impervious": imperv or 0.0, "Pervious": perv or 0.0})
+        # grab all numeric tokens on the line
+        nums = [float(m.group(0)) for m in float_re.finditer(raw)]
+        # Expect at least 10 numbers; Total Runoff (in) is the 7th numeric (0-based idx 6)
+        if name and len(nums) >= 7:
+            total_in = nums[6]
+            rows.append({"Subcatchment": name, "Total_in": total_in})
 
         i += 1
 
-    return pd.DataFrame(rows, columns=["Subcatchment", "Impervious", "Pervious"])
+    return pd.DataFrame(rows, columns=["Subcatchment","Total_in"])
+
 
 # ---- Node overlay helpers (flooded YES/NO) ----
 def node_layer_from_shp(node_shp_path: str, node_vol_dict_post5h: Dict, name_field_hint: str = "NAME"):
@@ -418,6 +419,37 @@ def render_side_by_side_total_runoff_maps(
         unsafe_allow_html=True
     )
 
+def _workspace_dir_from_session() -> str:
+    paths = [
+        st.session_state.get("WS_SHP_PATH", "Subcatchments.shp"),
+        st.session_state.get("NODE_SHP_PATH", "Nodes.shp"),
+        st.session_state.get("PIPE_SHP_PATH", "Conduits.shp"),
+    ]
+    for p in paths:
+        if isinstance(p, str):
+            d = os.path.dirname(os.path.abspath(p)) or os.getcwd()
+            # if the shp exists or the directory looks real, accept it
+            if os.path.isdir(d) and (os.path.exists(p) or any(fn.lower().endswith(".shp") for fn in os.listdir(d))):
+                return d
+    return os.getcwd()
+
+
+def _safe_copy(src: str, dst_dir: str, new_name: str | None = None) -> str | None:
+    try:
+        if not (src and os.path.exists(src) and os.path.isdir(dst_dir)):
+            return None
+        base = new_name if new_name else os.path.basename(src)
+        root, ext = os.path.splitext(base)
+        dst = os.path.join(dst_dir, base)
+        i = 1
+        while os.path.exists(dst):
+            dst = os.path.join(dst_dir, f"{root}__{i}{ext}")
+            i += 1
+        shutil.copy2(src, dst)
+        return dst
+    except Exception:
+        return None
+
 def run_swmm_scenario(
     scenario_name: str,
     rain_lines: List[str],
@@ -481,6 +513,15 @@ def run_swmm_scenario(
         p = os.path.join(temp_dir, src)
         if os.path.exists(p):
             shutil.move(p, dst)
+    try:
+        ws_dir = _workspace_dir_from_session()
+        # Make filenames clear and user-specific
+        # e.g., user_123_baseline_nogate_current.rpt
+        _safe_copy(rpt_path, ws_dir, new_name=f"{scenario_name}.rpt")
+        _safe_copy(out_path, ws_dir, new_name=f"{scenario_name}.out")
+        _safe_copy(inp_path, ws_dir, new_name=f"{scenario_name}.inp")
+    except Exception:
+        pass  # don't block the app if workspace copy fails
 
     st.session_state[f"{scenario_name}_total_flood"] = (cumulative_flooding_acft[-1] if cumulative_flooding_acft else 0.0)
     st.session_state[f"{scenario_name}_post5h_total_flood"] = (cum_cuft_post5h / 43560.0) if cum_cuft_post5h > 0 else 0.0
@@ -859,7 +900,6 @@ def app_ui():
     st.caption(("Source: Real-time tide (last 48 h)" if tide_source == "live"
             else f"Source: Synthetic tide ({moon_phase})") + ". X-axis = hours since start.")
 
-
     # ---------- Run Baseline Scenario ----------
     st.markdown("---")
     if st.button("Run Baseline Scenario"):
@@ -889,10 +929,10 @@ def app_ui():
                 f"{prefix}baseline_gate_fill_current": fill_gate_cur,
                 f"{prefix}baseline_fill_future": fill_nogate_fut,
                 f"{prefix}baseline_gate_fill_future": fill_gate_fut,
-                f"{prefix}df_base_nogate_current": extract_runoff_and_lid_data(rpt1),
-                f"{prefix}df_base_gate_current":   extract_runoff_and_lid_data(rpt2),
-                f"{prefix}df_base_nogate_future":  extract_runoff_and_lid_data(rpt3),
-                f"{prefix}df_base_gate_future":    extract_runoff_and_lid_data(rpt4),
+                f"{prefix}df_base_nogate_current": extract_total_runoff(rpt1),
+                f"{prefix}df_base_gate_current":   extract_total_runoff(rpt2),
+                f"{prefix}df_base_nogate_future":  extract_total_runoff(rpt3),
+                f"{prefix}df_base_gate_future":    extract_total_runoff(rpt4),
             })
             df_swmm_now = st.session_state[f"{prefix}df_base_nogate_current"]
             if len(df_swmm_now) == 0:
@@ -1002,10 +1042,10 @@ def app_ui():
                     f"{prefix}lid_gate_fill_current": fill_lid_gate_cur,
                     f"{prefix}lid_fill_future": fill_lid_fut,
                     f"{prefix}lid_gate_fill_future": fill_lid_gate_fut,
-                    f"{prefix}df_lid_nogate_current": extract_runoff_and_lid_data(rpt1),
-                    f"{prefix}df_lid_gate_current":   extract_runoff_and_lid_data(rpt2),
-                    f"{prefix}df_lid_nogate_future":  extract_runoff_and_lid_data(rpt3),
-                    f"{prefix}df_lid_gate_future":    extract_runoff_and_lid_data(rpt4),
+                    f"{prefix}df_lid_nogate_current": extract_total_runoff(rpt1),
+                    f"{prefix}df_lid_gate_current":   extract_total_runoff(rpt2),
+                    f"{prefix}df_lid_nogate_future":  extract_total_runoff(rpt3),
+                    f"{prefix}df_lid_gate_future":    extract_total_runoff(rpt4),
                 })
                 st.success("Custom LID scenarios complete.")
             except Exception as e:
@@ -1040,10 +1080,10 @@ def app_ui():
                 f"{prefix}lid_max_gate_fill_current": fill_max_gate_cur,
                 f"{prefix}lid_max_fill_future": fill_max_fut,
                 f"{prefix}lid_max_gate_fill_future": fill_max_gate_fut,
-                f"{prefix}df_lid_max_nogate_current": extract_runoff_and_lid_data(rpt1),
-                f"{prefix}df_lid_max_gate_current":   extract_runoff_and_lid_data(rpt2),
-                f"{prefix}df_lid_max_nogate_future":  extract_runoff_and_lid_data(rpt3),
-                f"{prefix}df_lid_max_gate_future":    extract_runoff_and_lid_data(rpt4),
+                f"{prefix}df_lid_max_nogate_current": extract_total_runoff(rpt1),
+                f"{prefix}df_lid_max_gate_current":   extract_total_runoff(rpt2),
+                f"{prefix}df_lid_max_nogate_future":  extract_total_runoff(rpt3),
+                f"{prefix}df_lid_max_gate_future":    extract_total_runoff(rpt4),
             })
             st.success("Max LID scenarios complete.")
         except Exception as e:
