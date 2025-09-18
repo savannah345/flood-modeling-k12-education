@@ -1186,7 +1186,6 @@ def app_ui():
         df = df.round(0).astype(int)  # whole ft³/m³
         return df, unit_label
 
-    # ---- UI: Three figures (high→low, left→right) + single-sheet Excel ----
     if st.button("Watershed Volumes: Flooding / Infiltration / Surface Runoff"):
         df_vol, unit_lbl = _gather_scenario_volumes()
         if df_vol.empty:
@@ -1194,65 +1193,149 @@ def app_ui():
         else:
             st.subheader(f"Scenario Volumes ({unit_lbl})")
 
-            # Build sorted series for each metric (descending)
+            # --- group mapping for consistent colors
+            def scenario_group(name: str) -> str:
+                # use the part before " – " (en dash surrounded by spaces)
+                prefix = name.split("–", 1)[0].strip()
+
+                prefix_to_group = {
+                    "Baseline (No Tide Gate)":  "Baseline (No Gate)",
+                    "Baseline + Tide Gate":     "Baseline (With Gate)",
+                    "LID (No Tide Gate)":       "LID (No Gate)",
+                    "LID + Tide Gate":          "LID (With Gate)",
+                    "Max LID (No Tide Gate)":   "Max LID (No Gate)",
+                    "Max LID + Tide Gate":      "Max LID (With Gate)",
+                }
+                return prefix_to_group.get(prefix, "Other")
+
+            group_domain = [
+                "Baseline (No Gate)", "Baseline (With Gate)",
+                "LID (No Gate)", "LID (With Gate)",
+                "Max LID (No Gate)", "Max LID (With Gate)"
+            ]
+            group_colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
+
+            # common renderer
+            def bar_chart(df_vals: pd.DataFrame, value_col: str, title_text: str | None):
+                df = df_vals.reset_index().rename(columns={"index": "Scenario", value_col: unit_lbl})
+                df["Group"] = df["Scenario"].map(scenario_group)
+
+                order = df.sort_values(unit_lbl, ascending=False)["Scenario"].tolist()
+                height_px = max(44 * len(order), 400)
+
+                chart = (
+                    alt.Chart(df)
+                    .mark_bar(size=14)
+                    .encode(
+                        x=alt.X(f"{unit_lbl}:Q", sort='-x', title=unit_lbl),
+                        y=alt.Y("Scenario:N",
+                                sort=order,
+                                title=None,
+                                axis=alt.Axis(labelFontSize=14, titleFontSize=16, labelLimit=1000)),
+                        color=alt.Color(
+                            "Group:N",
+                            scale=alt.Scale(domain=group_domain, range=group_colors),
+                            legend=alt.Legend(title="Scenario Group")
+                        ),
+                        tooltip=["Scenario", f"{unit_lbl}:Q", "Group:N"]
+                    )
+                    .properties(height=height_px)   # set height first
+                    .configure_axis(labelFontSize=14, titleFontSize=16)
+                    .configure_view(strokeWidth=0)
+                )
+
+                # apply title only if provided
+                if isinstance(title_text, str) and title_text != "":
+                    chart = chart.properties(title=title_text)
+
+                st.altair_chart(chart, use_container_width=True)
+
+
+            # sorted series for each metric
             s_flood  = df_vol["Flooding"].sort_values(ascending=False)
             s_infil  = df_vol["Infiltration"].sort_values(ascending=False)
             s_runoff = df_vol["Surface Runoff"].sort_values(ascending=False)
 
-            # Flooding
+            # render vertically
             st.markdown("**Flooding**")
-            st.altair_chart(
-                alt.Chart(s_flood.reset_index().rename(columns={"index":"Scenario","Flooding":unit_lbl}))
-                .mark_bar(size=20)   # thinner bars (default is ~20–25)
-                .encode(
-                    x=alt.X(f"{unit_lbl}:Q", sort='-x', title=unit_lbl),
-                    y=alt.Y("Scenario:N", sort='-x', title=None,
-                            axis=alt.Axis(labelFontSize=14, titleFontSize=16, labelLimit=400)),  # bigger y-axis labels
-                    tooltip=["Scenario", f"{unit_lbl}:Q"]
-                )
-                .properties(height=600),  # taller plot so all text fits
-                use_container_width=True
-)
-            # Infiltration
-            st.markdown("**Infiltration**")
-            st.altair_chart(
-                alt.Chart(s_infil.reset_index().rename(columns={"index":"Scenario","Infiltration":unit_lbl}))
-                .mark_bar(size=20)
-                .encode(
-                    x=alt.X(f"{unit_lbl}:Q", sort='-x', title=unit_lbl),
-                    y=alt.Y("Scenario:N", sort='-x', title=None,
-                            axis=alt.Axis(labelFontSize=14, titleFontSize=16, labelLimit=400)),
-                    tooltip=["Scenario", f"{unit_lbl}:Q"]
-                )
-                .properties(height=600),
-                use_container_width=True
-            )
+            bar_chart(s_flood.to_frame(), "Flooding", None)
 
-            # Surface Runoff
+            st.markdown("**Infiltration**")
+            bar_chart(s_infil.to_frame(), "Infiltration", None)
+
             st.markdown("**Surface Runoff**")
-            st.altair_chart(
-                alt.Chart(s_runoff.reset_index().rename(columns={"index":"Scenario","Surface Runoff":unit_lbl}))
-                .mark_bar(size=20)
-                .encode(
-                    x=alt.X(f"{unit_lbl}:Q", sort='-x', title=unit_lbl),
-                    y=alt.Y("Scenario:N", sort='-x', title=None,
-                            axis=alt.Axis(labelFontSize=14, titleFontSize=16, labelLimit=400)),
-                    tooltip=["Scenario", f"{unit_lbl}:Q"]
-                )
-                .properties(height=600),
-                use_container_width=True
-            )
-            # Final Excel: one sheet with the three features (converted units)
+            bar_chart(s_runoff.to_frame(), "Surface Runoff", None)
+
             excel_output = io.BytesIO()
             with pd.ExcelWriter(excel_output, engine="openpyxl") as writer:
+                # 0) Scenario settings (same as before)
+                scenario_summary = pd.DataFrame([{
+                    "Storm Duration (hr)": duration_minutes // 60,
+                    "Return Period (yr)": return_period,
+                    "Tide": ("Real-time" if st.session_state["tide_source"]=="live" else st.session_state["moon_phase"]),
+                    "Tide Alignment": "High Tide Peak" if st.session_state["align_mode"] == "peak" else "Low Tide Dip",
+                    "Units": st.session_state["unit_ui"]
+                }])
+                scenario_summary.to_excel(writer, sheet_name="Scenario Settings", index=False)
+
+                # 1) Rainfall & Tide series (same as before)
+                sim_start = datetime.strptime(simulation_date, "%m/%d/%Y %H:%M")
+                rain_minutes = st.session_state.get("rain_minutes", [])
+                tide_minutes = st.session_state.get("tide_minutes", [])
+                rain_disp_unit = st.session_state.get("rain_disp_unit", "inches")
+                tide_disp_unit = st.session_state.get("tide_disp_unit", "ft")
+                rain_ts = st.session_state.get("display_rain_curve_current", [])
+                rain_ts_f = st.session_state.get("display_rain_curve_future", [])
+                tide_ts = st.session_state.get("display_tide_curve", [])
+
+                if len(rain_ts) > 0:
+                    r_t = [(sim_start + timedelta(minutes=int(m))).strftime("%m/%d/%Y %H:%M")
+                        for m in rain_minutes[:len(rain_ts)]]
+                    df_rain = pd.DataFrame({
+                        "Timestamp": r_t,
+                        f"Rainfall – Current ({rain_disp_unit})": rain_ts[:len(r_t)],
+                        f"Rainfall – +20% ({rain_disp_unit})":    rain_ts_f[:len(r_t)]
+                    })
+                else:
+                    df_rain = pd.DataFrame(columns=[
+                        "Timestamp",
+                        f"Rainfall – Current ({rain_disp_unit})",
+                        f"Rainfall – +20% ({rain_disp_unit})"
+                    ])
+                df_rain.to_excel(writer, sheet_name="Rainfall Event", index=False)
+
+                if len(tide_ts) > 0:
+                    t_t = [(sim_start + timedelta(minutes=int(m))).strftime("%m/%d/%Y %H:%M")
+                        for m in tide_minutes[:len(tide_ts)]]
+                    df_tide = pd.DataFrame({"Timestamp": t_t, f"Tide ({tide_disp_unit})": tide_ts[:len(t_t)]})
+                else:
+                    df_tide = pd.DataFrame(columns=["Timestamp", f"Tide ({tide_disp_unit})"])
+                df_tide.to_excel(writer, sheet_name="Tide Event", index=False)
+
+                # 2) User LID selections (same as before)
+                lid_cfg = st.session_state.get(f"{prefix}user_lid_config", {})
+                if lid_cfg:
+                    rows = [{"Subcatchment": sub,
+                            "Selected Rain Gardens": cfg.get("rain_gardens", 0),
+                            "Selected Rain Barrels":  cfg.get("rain_barrels", 0)}
+                            for sub, cfg in lid_cfg.items()]
+                    df_user_lid = pd.DataFrame(rows)
+                else:
+                    df_user_lid = pd.DataFrame(columns=["Subcatchment","Selected Rain Gardens","Selected Rain Barrels"])
+                df_user_lid.to_excel(writer, sheet_name="User LID Selections", index=False)
+
+                # 3) NEW: combined volumes (Flooding, Infiltration, Surface Runoff) in chosen units
                 out = df_vol.reset_index()
-                out.columns = ["Scenario", f"Flooding ({unit_lbl})", f"Infiltration ({unit_lbl})", f"Surface Runoff ({unit_lbl})"]
+                out.columns = ["Scenario",
+                            f"Flooding ({unit_lbl})",
+                            f"Infiltration ({unit_lbl})",
+                            f"Surface Runoff ({unit_lbl})"]
                 out.to_excel(writer, sheet_name="Scenario Volumes", index=False)
 
             st.download_button(
-                label=f"Download Report ({unit_lbl})",
+                label=f"Download Results",
                 data=excel_output.getvalue(),
-                file_name="CoastWise_Report.xlsx",
+                file_name="CoastWise_Results.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
