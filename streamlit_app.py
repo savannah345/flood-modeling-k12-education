@@ -39,7 +39,11 @@ def ensure_playwright_browsers():
     )
 ensure_playwright_browsers()
 
-MSL_OFFSET_NAVD88_FT = 1.36  # NAVD88 -> MSL
+MSL_OFFSET_NAVD88_FT = 1.36  
+WS_SHP_PATH  = st.session_state.get("WS_SHP_PATH", "Subcatchments.shp")
+NODE_SHP_PATH= st.session_state.get("NODE_SHP_PATH", "Nodes.shp")
+PIPE_SHP_PATH= st.session_state.get("PIPE_SHP_PATH", "Conduits.shp")
+
 
 @st.cache_resource(show_spinner=False)
 def load_ws(path="Subcatchments.shp") -> gpd.GeoDataFrame:
@@ -106,17 +110,7 @@ def make_color(values, vmin, vmax, a=0.9):
     return out
 
 def prep_total_runoff_gdf(rpt_df: pd.DataFrame, unit_ui: str, ws_gdf: gpd.GeoDataFrame):
-    """
-    Join per-subcatchment Total Runoff to polygons.
 
-    Expects rpt_df with:
-      - Subcatchment
-      - Total_in  (depth units from report; your RPT shows inches)
-
-    Back-compat:
-      - If Total_in is missing but Impervious/Pervious exist, uses their sum.
-    Returns: (GeoDataFrame_with_Total_R, display_unit_str)
-    """
     g = ws_gdf.copy()
 
     # Empty -> return NaNs with unit label
@@ -161,12 +155,7 @@ def prep_total_runoff_gdf(rpt_df: pd.DataFrame, unit_ui: str, ws_gdf: gpd.GeoDat
     return merged, unit
 
 def extract_total_runoff(rpt_file: str):
-    """
-    Robustly parse 'Subcatchment Runoff Summary' from an SWMM .rpt file.
-    Returns DataFrame: Subcatchment, Total_in  (Total Runoff depth)
-    Strategy: find the section, skip header lines, then for each data row
-    read the first token as the name and take the 7th numeric value.
-    """
+
     import os, re
     import pandas as pd
 
@@ -219,7 +208,7 @@ def extract_total_runoff(rpt_file: str):
         nums = [float(m.group(0)) for m in float_re.finditer(raw)]
         # Expect at least 10 numbers; Total Runoff (in) is the 7th numeric (0-based idx 6)
         if name and len(nums) >= 7:
-            total_in = nums[6]
+            total_in = nums[7]
             rows.append({"Subcatchment": name, "Total_in": total_in})
 
         i += 1
@@ -419,37 +408,6 @@ def render_side_by_side_total_runoff_maps(
         unsafe_allow_html=True
     )
 
-def _workspace_dir_from_session() -> str:
-    paths = [
-        st.session_state.get("WS_SHP_PATH", "Subcatchments.shp"),
-        st.session_state.get("NODE_SHP_PATH", "Nodes.shp"),
-        st.session_state.get("PIPE_SHP_PATH", "Conduits.shp"),
-    ]
-    for p in paths:
-        if isinstance(p, str):
-            d = os.path.dirname(os.path.abspath(p)) or os.getcwd()
-            # if the shp exists or the directory looks real, accept it
-            if os.path.isdir(d) and (os.path.exists(p) or any(fn.lower().endswith(".shp") for fn in os.listdir(d))):
-                return d
-    return os.getcwd()
-
-
-def _safe_copy(src: str, dst_dir: str, new_name: str | None = None) -> str | None:
-    try:
-        if not (src and os.path.exists(src) and os.path.isdir(dst_dir)):
-            return None
-        base = new_name if new_name else os.path.basename(src)
-        root, ext = os.path.splitext(base)
-        dst = os.path.join(dst_dir, base)
-        i = 1
-        while os.path.exists(dst):
-            dst = os.path.join(dst_dir, f"{root}__{i}{ext}")
-            i += 1
-        shutil.copy2(src, dst)
-        return dst
-    except Exception:
-        return None
-
 def run_swmm_scenario(
     scenario_name: str,
     rain_lines: List[str],
@@ -513,20 +471,53 @@ def run_swmm_scenario(
         p = os.path.join(temp_dir, src)
         if os.path.exists(p):
             shutil.move(p, dst)
-    try:
-        ws_dir = _workspace_dir_from_session()
-        # Make filenames clear and user-specific
-        # e.g., user_123_baseline_nogate_current.rpt
-        _safe_copy(rpt_path, ws_dir, new_name=f"{scenario_name}.rpt")
-        _safe_copy(out_path, ws_dir, new_name=f"{scenario_name}.out")
-        _safe_copy(inp_path, ws_dir, new_name=f"{scenario_name}.inp")
-    except Exception:
-        pass  # don't block the app if workspace copy fails
 
     st.session_state[f"{scenario_name}_total_flood"] = (cumulative_flooding_acft[-1] if cumulative_flooding_acft else 0.0)
     st.session_state[f"{scenario_name}_post5h_total_flood"] = (cum_cuft_post5h / 43560.0) if cum_cuft_post5h > 0 else 0.0
     st.session_state[f"{scenario_name}_node_flood_post5h_cuft"] = node_cuft_post5h
     return cumulative_flooding_acft, timestamps, rpt_path
+
+def extract_infiltration_and_runoff(rpt_file: str) -> pd.DataFrame:
+    """
+    Parse 'Runoff Quantity Continuity' from an SWMM .rpt.
+    Return rows for Infiltration Loss and Surface Runoff with volume_acft only.
+    Columns: label ∈ {infiltration_loss, surface_runoff}, volume_acft
+    """
+    if not os.path.exists(rpt_file):
+        return pd.DataFrame(columns=["label", "volume_acft"])
+
+    with open(rpt_file, "r", errors="ignore") as f:
+        lines = f.readlines()
+
+    hdr_i = next((i for i, l in enumerate(lines) if "Runoff Quantity Continuity" in l), None)
+    if hdr_i is None:
+        return pd.DataFrame(columns=["label", "volume_acft"])
+
+    i = hdr_i + 1
+    def _decor(s):
+        s = s.strip()
+        return not s or all(ch in "*- " for ch in s)
+    while i < len(lines) and _decor(lines[i]):
+        i += 1
+
+    targets = {
+        "Infiltration Loss": "infiltration_loss",
+        "Surface Runoff": "surface_runoff",
+    }
+    rows = []
+    while i < len(lines):
+        raw = lines[i].rstrip("\n")
+        if not raw.strip() or raw.lstrip().startswith("*"):
+            break
+        for disp, key in targets.items():
+            if disp.lower() in raw.lower():
+                nums = [float(x) for x in re.findall(r"[-+]?\d+(?:\.\d+)?", raw)]
+                vol = nums[0] if len(nums) >= 1 else float("nan")  # acre-feet
+                rows.append({"label": key, "volume_acft": vol})
+                break
+        i += 1
+
+    return pd.DataFrame(rows, columns=["label", "volume_acft"])
 
 
 def _build_baseline_map_html(df_swmm_local: pd.DataFrame, unit_ui: str, ws_shp_path: str) -> str:
@@ -548,7 +539,7 @@ def _build_baseline_map_html(df_swmm_local: pd.DataFrame, unit_ui: str, ws_shp_p
     gdf["_label"] = gdf["NAME"]
 
     # Map view centered on overall centroid
-    centroid = gdf.geometry.unary_union.centroid
+    centroid = gdf.geometry.union_all().centroid
     view_state = pdk.ViewState(latitude=centroid.y, longitude=centroid.x, zoom=14.25)
 
     # Polygons
@@ -1127,7 +1118,19 @@ def app_ui():
         "Max LID + Tide Gate – +20%":        os.path.join(temp_dir, f"{prefix}lid_max_gate_future.rpt"),
     }
 
-    def _extract_summary_table() -> pd.DataFrame:
+    def _gather_scenario_volumes() -> tuple[pd.DataFrame, str]:
+        """
+        Build a per-scenario table with Flooding, Infiltration, Surface Runoff.
+        Convert to ft³ (U.S.) or m³ (Metric).
+        Returns (df_disp, unit_label).
+        """
+        ACF_TO_FT3 = 43560.0
+        FT3_TO_M3  = 0.0283168
+        to_m3 = (st.session_state.get("unit_ui") == "Metric (SI)")
+        unit_label = "m³" if to_m3 else "ft³"
+
+        rows = []
+        # Map friendly -> session keys (already defined above)
         friendly_map = {
             "Baseline (No Tide Gate) – Current":  "baseline_nogate_current",
             "Baseline + Tide Gate – Current":     "baseline_gate_current",
@@ -1142,102 +1145,114 @@ def app_ui():
             "Max LID (No Tide Gate) – +20%":      "lid_max_nogate_future",
             "Max LID + Tide Gate – +20%":         "lid_max_gate_future",
         }
-        rows = []
-        for disp, path in rpt_scenarios.items():
-            if not os.path.exists(path): continue
-            key = friendly_map[disp]
-            flood_acft = st.session_state.get(f"{prefix}{key}_post5h_total_flood",
-                                              st.session_state.get(f"{prefix}{key}_total_flood", 0.0))
-            rows.append({"Scenario": disp, "Flooding (ac-ft)": flood_acft})
-        return pd.DataFrame(rows).set_index("Scenario")
 
-    if st.button("Show Water Balance Summary Table"):
-        df_balance = _extract_summary_table()
-        if df_balance.empty:
+        for disp, path in rpt_scenarios.items():
+            if not os.path.exists(path):
+                continue
+
+            key = friendly_map[disp]
+
+            # Flooding (ac-ft) already tracked in session
+            flood_acft = st.session_state.get(
+                f"{prefix}{key}_post5h_total_flood",
+                st.session_state.get(f"{prefix}{key}_total_flood", 0.0)
+            ) or 0.0
+
+            # Infiltration/Surface Runoff (ac-ft) from RPT
+            df_ir = extract_infiltration_and_runoff(path)
+            infil_acft  = df_ir.loc[df_ir["label"]=="infiltration_loss", "volume_acft"].squeeze()
+            runoff_acft = df_ir.loc[df_ir["label"]=="surface_runoff",   "volume_acft"].squeeze()
+            infil_acft  = float(infil_acft)  if pd.notna(infil_acft)  else 0.0
+            runoff_acft = float(runoff_acft) if pd.notna(runoff_acft) else 0.0
+
+            # Convert to display units
+            def conv(v_acft: float) -> float:
+                v_ft3 = v_acft * ACF_TO_FT3
+                return v_ft3 * FT3_TO_M3 if to_m3 else v_ft3
+
+            rows.append({
+                "Scenario": disp,
+                "Flooding":        conv(float(flood_acft)),
+                "Infiltration":    conv(infil_acft),
+                "Surface Runoff":  conv(runoff_acft),
+            })
+
+        if not rows:
+            return pd.DataFrame(), unit_label
+
+        df = pd.DataFrame(rows).set_index("Scenario")
+
+        # Round nicely for display/Excel
+        df = df.round(0).astype(int)  # whole ft³/m³
+        return df, unit_label
+
+    # ---- UI: Three figures (high→low, left→right) + single-sheet Excel ----
+    if st.button("Watershed Volumes: Flooding / Infiltration / Surface Runoff"):
+        df_vol, unit_lbl = _gather_scenario_volumes()
+        if df_vol.empty:
             st.info("Run scenarios first.")
         else:
-            convert_to_m3 = (st.session_state["unit_ui"] == "Metric (SI)")
-            ACF_TO_FT3 = 43560.0
-            FT3_TO_M3 = 0.0283168
+            st.subheader(f"Scenario Volumes ({unit_lbl})")
 
-            def to_disp_ft3(x):
-                if x is None: return 0.0
-                return float(x) * ACF_TO_FT3
+            # Build sorted series for each metric (descending)
+            s_flood  = df_vol["Flooding"].sort_values(ascending=False)
+            s_infil  = df_vol["Infiltration"].sort_values(ascending=False)
+            s_runoff = df_vol["Surface Runoff"].sort_values(ascending=False)
 
-            def maybe_m3(v_ft3):
-                return v_ft3 * FT3_TO_M3 if convert_to_m3 else v_ft3
+            # Flooding
+            st.markdown("**Flooding**")
+            st.altair_chart(
+                alt.Chart(s_flood.reset_index().rename(columns={"index":"Scenario","Flooding":unit_lbl}))
+                .mark_bar(size=20)   # thinner bars (default is ~20–25)
+                .encode(
+                    x=alt.X(f"{unit_lbl}:Q", sort='-x', title=unit_lbl),
+                    y=alt.Y("Scenario:N", sort='-x', title=None,
+                            axis=alt.Axis(labelFontSize=14, titleFontSize=16, labelLimit=400)),  # bigger y-axis labels
+                    tooltip=["Scenario", f"{unit_lbl}:Q"]
+                )
+                .properties(height=600),  # taller plot so all text fits
+                use_container_width=True
+)
+            # Infiltration
+            st.markdown("**Infiltration**")
+            st.altair_chart(
+                alt.Chart(s_infil.reset_index().rename(columns={"index":"Scenario","Infiltration":unit_lbl}))
+                .mark_bar(size=20)
+                .encode(
+                    x=alt.X(f"{unit_lbl}:Q", sort='-x', title=unit_lbl),
+                    y=alt.Y("Scenario:N", sort='-x', title=None,
+                            axis=alt.Axis(labelFontSize=14, titleFontSize=16, labelLimit=400)),
+                    tooltip=["Scenario", f"{unit_lbl}:Q"]
+                )
+                .properties(height=600),
+                use_container_width=True
+            )
 
-            df_conv = pd.DataFrame(index=df_balance.index)
-            df_conv["Flooded Volume"] = (
-                df_balance["Flooding (ac-ft)"].apply(to_disp_ft3).apply(maybe_m3)
-            ).round(0).astype(int)
-
-            st.subheader(f"Summary ({'m³' if convert_to_m3 else 'ft³'})")
-            st.dataframe(df_conv)
-
-            # Build Excel payload
-            sim_start = datetime.strptime(simulation_date, "%m/%d/%Y %H:%M")
-            rain_minutes = st.session_state.get("rain_minutes", [])
-            tide_minutes = st.session_state.get("tide_minutes", [])
-            rain_disp_unit = st.session_state.get("rain_disp_unit", "inches")
-            tide_disp_unit = st.session_state.get("tide_disp_unit", "ft")
-            rain_ts = st.session_state.get("display_rain_curve_current", [])
-            rain_ts_f = st.session_state.get("display_rain_curve_future", [])
-            tide_ts = st.session_state.get("display_tide_curve", [])
-
-            if len(rain_ts) > 0:
-                r_t = [(sim_start + timedelta(minutes=int(m))).strftime("%m/%d/%Y %H:%M")
-                       for m in rain_minutes[:len(rain_ts)]]
-                df_rain = pd.DataFrame({
-                    "Timestamp": r_t,
-                    f"Rainfall – Current ({rain_disp_unit})": rain_ts[:len(r_t)],
-                    f"Rainfall – +20% ({rain_disp_unit})":    rain_ts_f[:len(r_t)]
-                })
-            else:
-                df_rain = pd.DataFrame(columns=[
-                    "Timestamp",
-                    f"Rainfall – Current ({rain_disp_unit})",
-                    f"Rainfall – +20% ({rain_disp_unit})"
-                ])
-
-            if len(tide_ts) > 0:
-                t_t = [(sim_start + timedelta(minutes=int(m))).strftime("%m/%d/%Y %H:%M")
-                       for m in tide_minutes[:len(tide_ts)]]
-                df_tide = pd.DataFrame({"Timestamp": t_t, f"Tide ({tide_disp_unit})": tide_ts[:len(t_t)]})
-            else:
-                df_tide = pd.DataFrame(columns=["Timestamp", f"Tide ({tide_disp_unit})"])
-
-            lid_cfg = st.session_state.get(f"{prefix}user_lid_config", {})
-            if lid_cfg:
-                rows = [{"Subcatchment": sub,
-                         "Selected Rain Gardens": cfg.get("rain_gardens", 0),
-                         "Selected Rain Barrels":  cfg.get("rain_barrels", 0)}
-                        for sub, cfg in lid_cfg.items()]
-                df_user_lid = pd.DataFrame(rows)
-            else:
-                df_user_lid = pd.DataFrame(columns=["Subcatchment","Selected Rain Gardens","Selected Rain Barrels"])
-
+            # Surface Runoff
+            st.markdown("**Surface Runoff**")
+            st.altair_chart(
+                alt.Chart(s_runoff.reset_index().rename(columns={"index":"Scenario","Surface Runoff":unit_lbl}))
+                .mark_bar(size=20)
+                .encode(
+                    x=alt.X(f"{unit_lbl}:Q", sort='-x', title=unit_lbl),
+                    y=alt.Y("Scenario:N", sort='-x', title=None,
+                            axis=alt.Axis(labelFontSize=14, titleFontSize=16, labelLimit=400)),
+                    tooltip=["Scenario", f"{unit_lbl}:Q"]
+                )
+                .properties(height=600),
+                use_container_width=True
+            )
+            # Final Excel: one sheet with the three features (converted units)
             excel_output = io.BytesIO()
             with pd.ExcelWriter(excel_output, engine="openpyxl") as writer:
-                scenario_summary = pd.DataFrame([{
-                    "Storm Duration (hr)": duration_minutes // 60,
-                    "Return Period (yr)": return_period,
-                    "Tide": ("Real-time" if st.session_state["tide_source"]=="live" else st.session_state["moon_phase"]),
-                    "Tide Alignment": "High Tide Peak" if st.session_state["align_mode"] == "peak" else "Low Tide Dip",
-                    "Units": st.session_state["unit_ui"]
-                }])
-                scenario_summary.to_excel(writer, sheet_name="Scenario Settings", index=False)
-                df_rain.to_excel(writer, sheet_name="Rainfall Event", index=False)
-                df_tide.to_excel(writer, sheet_name="Tide Event", index=False)
-                df_user_lid.to_excel(writer, sheet_name="User LID Selections", index=False)
-                df_balance.reset_index().rename(columns={"index":"Scenario"}).to_excel(
-                    writer, sheet_name="Scenario Summary", index=False
-                )
+                out = df_vol.reset_index()
+                out.columns = ["Scenario", f"Flooding ({unit_lbl})", f"Infiltration ({unit_lbl})", f"Surface Runoff ({unit_lbl})"]
+                out.to_excel(writer, sheet_name="Scenario Volumes", index=False)
 
             st.download_button(
-                label="Generate & Download Scenario Results (Excel)",
+                label=f"Download Report ({unit_lbl})",
                 data=excel_output.getvalue(),
-                file_name="CoastWise_Results.xlsx",
+                file_name="CoastWise_Report.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
