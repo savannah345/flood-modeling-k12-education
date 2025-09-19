@@ -961,7 +961,7 @@ def app_ui():
     st.markdown(
         f"Source: Real-time tide (last 48 h) {tide_disp_unit}"
         if tide_source == "live"
-        else f"Source: Synthetic tide {tide_disp_unit} ({moon_phase})"
+        else f"Source: Synthetic tide    Units: {tide_disp_unit}    Phase: ({moon_phase})"
     )
 
     # ---------- Run Baseline Scenario ----------
