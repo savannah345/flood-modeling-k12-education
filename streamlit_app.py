@@ -154,6 +154,26 @@ def prep_total_runoff_gdf(rpt_df: pd.DataFrame, unit_ui: str, ws_gdf: gpd.GeoDat
 
     return merged, unit
 
+def _global_runoff_range_across(
+    dfs: List[pd.DataFrame], unit_ui: str, ws_path: str
+) -> Tuple[float,float]:
+    vals = []
+    ws_gdf = load_ws(ws_path)
+    for df in dfs:
+        gdf, _unit = prep_total_runoff_gdf(df, unit_ui, ws_gdf)
+        if "Total_R" in gdf:
+            vals.append(gdf["Total_R"].to_numpy(dtype=float))
+    if not vals:
+        return (0.0, 1.0)
+    arr = np.concatenate(vals)
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        return (0.0, 1.0)
+    vmin, vmax = float(finite.min()), float(finite.max())
+    if abs(vmax - vmin) < 1e-9:
+        vmax = vmin + 1e-6
+    return (vmin, vmax)
+
 def extract_total_runoff(rpt_file: str):
 
     import os, re
@@ -206,7 +226,7 @@ def extract_total_runoff(rpt_file: str):
 
         # grab all numeric tokens on the line
         nums = [float(m.group(0)) for m in float_re.finditer(raw)]
-        # Expect at least 10 numbers; Total Runoff (in) is the 7th numeric (0-based idx 6)
+        # Expect at least 10 numbers; Total Runoff (in) is the 8th numeric (0-based idx 7)
         if name and len(nums) >= 7:
             total_in = nums[7]
             rows.append({"Subcatchment": name, "Total_in": total_in})
@@ -254,25 +274,29 @@ def node_layer_from_shp(node_shp_path: str, node_vol_dict_post5h: Dict, name_fie
         return None
 
 def render_side_by_side_total_runoff_maps(
-    left_df_in_inches: pd.DataFrame,  left_title: str,  left_nodes_post5h_dict: Dict,
-    right_df_in_inches: pd.DataFrame, right_title: str, right_nodes_post5h_dict: Dict,
-    unit_ui: str, ws_shp_path: str, node_shp_path: str, pipe_shp_path: str,
-    node_name_field_hint: str = "NAME"
-):
+    left_df_in_inches, left_title, left_nodes_post5h_dict,
+    right_df_in_inches, right_title, right_nodes_post5h_dict,
+    unit_ui, ws_shp_path, node_shp_path, pipe_shp_path,
+    node_name_field_hint="NAME",
+    legend_range: Tuple[float,float] | None = None,   
+) -> str: 
     # --- Prep watershed + runoff geodata ---
     ws_gdf = load_ws(ws_shp_path)
     gdf_left,  runoff_unit_L = prep_total_runoff_gdf(left_df_in_inches,  unit_ui, ws_gdf)
     gdf_right, runoff_unit_R = prep_total_runoff_gdf(right_df_in_inches, unit_ui, ws_gdf)
     runoff_unit = runoff_unit_L  # both should match
 
-    # Shared color scale across both sides
-    vals = pd.concat([gdf_left["Total_R"], gdf_right["Total_R"]], ignore_index=True)
-    if len(vals) == 0 or not np.isfinite(np.nanmin(vals)) or not np.isfinite(np.nanmax(vals)):
-        vmin, vmax = 0.0, 1.0
+    # Shared color scale across both sides (use global override if provided)
+    if legend_range is not None:
+        vmin, vmax = legend_range
     else:
-        vmin, vmax = float(np.nanmin(vals)), float(np.nanmax(vals))
-        if abs(vmax - vmin) < 1e-9:
-            vmax = vmin + 1e-6
+        vals = pd.concat([gdf_left["Total_R"], gdf_right["Total_R"]], ignore_index=True)
+        if len(vals) == 0 or not np.isfinite(np.nanmin(vals)) or not np.isfinite(np.nanmax(vals)):
+            vmin, vmax = 0.0, 1.0
+        else:
+            vmin, vmax = float(np.nanmin(vals)), float(np.nanmax(vals))
+            if abs(vmax - vmin) < 1e-9:
+                vmax = vmin + 1e-6
 
     # Fill colors + labels
     gdf_left["_fill_total"]  = make_color(gdf_left["Total_R"],  vmin, vmax)
@@ -385,28 +409,26 @@ def render_side_by_side_total_runoff_maps(
     cmap = mpl.colormaps.get_cmap("Blues")
     c0  = [int(v * 255) for v in cmap(norm(vmin))[:3]]
     c1b = [int(v * 255) for v in cmap(norm(vmax))[:3]]
-    st.markdown(
-        f"""
-        <div style="display:flex; justify-content:center; margin-top:6px;">
-          <div style="min-width:260px; max-width:640px; width:60%;">
-            <div style="text-align:center; font-size:13px;"><b>Runoff Legend ({runoff_unit})</b></div>
-            <div style="display:flex; align-items:center; gap:10px;">
-              <span>{vmin:.2f}</span>
-              <div style="flex:1; height:12px;
-                  background:linear-gradient(to right,
-                  rgb({c0[0]},{c0[1]},{c0[2]}),
-                  rgb({c1b[0]},{c1b[1]},{c1b[2]}));
-                  border:1px solid #888;"></div>
-              <span>{vmax:.2f}</span>
-            </div>
-            <div style="color:#555; font-size:12px; text-align:center; margin-top:6px;">
-              Same scale for both maps
-            </div>
-          </div>
+    legend_html = f"""
+    <div style="display:flex; justify-content:center; margin-top:6px;">
+    <div style="min-width:260px; max-width:640px; width:60%;">
+        <div style="text-align:center; font-size:13px;"><b>Runoff Legend ({runoff_unit})</b></div>
+        <div style="display:flex; align-items:center; gap:10px;">
+        <span>{vmin:.2f}</span>
+        <div style="flex:1; height:12px;
+            background:linear-gradient(to right,
+            rgb({c0[0]},{c0[1]},{c0[2]}),
+            rgb({c1b[0]},{c1b[1]},{c1b[2]}));
+            border:1px solid #888;"></div>
+        <span>{vmax:.2f}</span>
         </div>
-        """,
-        unsafe_allow_html=True
-    )
+        <div style="color:#555; font-size:12px; text-align:center; margin-top:6px;">
+        Same scale for all four maps
+        </div>
+    </div>
+    </div>
+    """
+    return legend_html
 
 def run_swmm_scenario(
     scenario_name: str,
@@ -521,15 +543,11 @@ def extract_infiltration_and_runoff(rpt_file: str) -> pd.DataFrame:
 
 
 def _build_baseline_map_html(df_swmm_local: pd.DataFrame, unit_ui: str, ws_shp_path: str) -> str:
-
-    # Build geodataframe with Total_R joined and unit label returned
     ws_gdf_local = load_ws(ws_shp_path)
     gdf, unit_r = prep_total_runoff_gdf(df_swmm_local, unit_ui, ws_gdf_local)
 
-    # Color scale from Total_R (robust to NaNs and constant arrays)
     vals = gdf["Total_R"].to_numpy()
-    vmin_raw = np.nanmin(vals)
-    vmax_raw = np.nanmax(vals)
+    vmin_raw, vmax_raw = np.nanmin(vals), np.nanmax(vals)
     vmin = float(vmin_raw) if np.isfinite(vmin_raw) else 0.0
     vmax = float(vmax_raw) if np.isfinite(vmax_raw) else 1.0
     if abs(vmax - vmin) < 1e-9:
@@ -538,50 +556,62 @@ def _build_baseline_map_html(df_swmm_local: pd.DataFrame, unit_ui: str, ws_shp_p
     gdf["_fill"] = make_color(gdf["Total_R"], vmin, vmax)
     gdf["_label"] = gdf["NAME"]
 
-    # Map view centered on overall centroid
+    # ↑ zoom in a little more (was 14.25)
     centroid = gdf.geometry.union_all().centroid
-    view_state = pdk.ViewState(latitude=centroid.y, longitude=centroid.x, zoom=14.25)
+    view_state = pdk.ViewState(latitude=centroid.y, longitude=centroid.x, zoom=14.75)
 
-    # Polygons
     poly_layer = pdk.Layer(
-        "GeoJsonLayer",
-        data=gdf.__geo_interface__,
-        pickable=True,
-        stroked=True,
-        filled=True,
+        "GeoJsonLayer", data=gdf.__geo_interface__,
+        pickable=True, stroked=True, filled=True,
         get_fill_color="properties._fill",
         get_line_color=[255, 255, 255, 255],
         line_width_min_pixels=1,
     )
-
-    # Labels at representative points
     reps = gdf.geometry.representative_point()
     labels_df = pd.DataFrame({"lon": reps.x, "lat": reps.y, "text": gdf["_label"]})
     text_layer = pdk.Layer(
-        "TextLayer",
-        data=labels_df,
-        get_position='[lon, lat]',
-        get_text="text",
-        get_size=12,
-        get_color=[0, 0, 0],
-        get_alignment_baseline="'center'",
+        "TextLayer", data=labels_df,
+        get_position='[lon, lat]', get_text="text",
+        get_size=12, get_color=[0, 0, 0], get_alignment_baseline="'center'"
     )
 
     tooltip = {
         "html": "<b>{NAME}</b><br/>Total runoff: {Total_R} " + unit_r,
         "style": {"backgroundColor": "white", "color": "black",
-                "fontFamily": "Inter, Arial, Helvetica, sans-serif", "fontSize": "12px"},
+                  "fontFamily": "Inter, Arial, Helvetica, sans-serif", "fontSize": "12px"},
     }
 
     deck_obj = pdk.Deck(
-        layers=[poly_layer, text_layer],   # NO PIPES here
+        layers=[poly_layer, text_layer],
         initial_view_state=view_state,
         map_provider="carto",
         map_style="light",
         tooltip=tooltip,
     )
-    return deck_obj.to_html(as_string=True)
+    map_html = deck_obj.to_html(as_string=True)
 
+    # Legend (same style as side-by-side maps)
+    cmap = mpl.colormaps.get_cmap("Blues")
+    norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax, clip=True)
+    c0 = [int(v * 255) for v in cmap(norm(vmin))[:3]]
+    c1 = [int(v * 255) for v in cmap(norm(vmax))[:3]]
+    legend_html = f"""
+    <div style="display:flex; justify-content:center; margin-top:6px;">
+      <div style="min-width:260px; max-width:640px; width:60%;">
+        <div style="text-align:center; font-size:13px;"><b>Runoff Legend ({unit_r})</b></div>
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span>{vmin:.2f}</span>
+          <div style="flex:1; height:12px;
+              background:linear-gradient(to right,
+              rgb({c0[0]},{c0[1]},{c0[2]}),
+              rgb({c1[0]},{c1[1]},{c1[2]}));
+              border:1px solid #888;"></div>
+          <span>{vmax:.2f}</span>
+        </div>
+      </div>
+    </div>
+    """
+    return map_html, legend_html
 
 def generate_lid_usage_lines(lid_config: Dict[str, Dict[str, int]], excel_df: pd.DataFrame) -> List[str]:
 
@@ -879,7 +909,7 @@ def app_ui():
         "Future (+20%)": st.session_state["display_rain_curve_future"],
     }).set_index("Hour")
     st.line_chart(rain_df, height=220, use_container_width=True)
-    st.caption(f"Rainfall units: {rain_disp_unit}. X-axis = hours since start (0–48, 15-min steps).")
+    st.markdown(f"Rainfall units: {rain_disp_unit}")
 
     # Tide
     st.subheader("Tide Profile")
@@ -888,8 +918,8 @@ def app_ui():
         "Tide": st.session_state["display_tide_curve"],
     }).set_index("Hour")
     st.line_chart(tide_df, height=220, use_container_width=True)
-    st.caption(("Source: Real-time tide (last 48 h)" if tide_source == "live"
-            else f"Source: Synthetic tide ({moon_phase})") + ". X-axis = hours since start.")
+    st.markdown(("Source: Real-time tide (last 48 h)" if tide_source == "live"
+            else f"Source: Synthetic tide ({moon_phase})"))
 
     # ---------- Run Baseline Scenario ----------
     st.markdown("---")
@@ -930,13 +960,13 @@ def app_ui():
                 st.error("No rows parsed from 'Subcatchment Runoff Summary' in the .rpt")
             else:
                 st.success("Baseline scenarios complete.")
-                html_str = _build_baseline_map_html(
+                map_html, legend_html = _build_baseline_map_html(
                     df_swmm_local=df_swmm_now,
                     unit_ui=st.session_state["unit_ui"],
                     ws_shp_path=WS_SHP_PATH
                 )
-                st.session_state[f"{prefix}baseline_map_html"] = html_str
-                st.session_state[f"{prefix}show_baseline_map"] = True
+                st.session_state[f"{prefix}baseline_map_html"] = map_html
+                st.session_state[f"{prefix}baseline_legend_html"] = legend_html
         except Exception as e:
             st.error(f"Baseline simulation failed: {e}")
 
@@ -973,9 +1003,10 @@ def app_ui():
         st.stop()
 
     # ---------- Baseline Map + LID selection UI ----------
-    if st.session_state.get(f"{prefix}show_baseline_map") and st.session_state.get(f"{prefix}baseline_map_html"):
+    if st.session_state.get(f"{prefix}baseline_map_html"):
         st.subheader("Watershed Baseline Runoff Map")
-        components.v1.html(st.session_state[f"{prefix}baseline_map_html"], height=620, scrolling=False)
+        components.v1.html(st.session_state[f"{prefix}baseline_map_html"], height=600, scrolling=False)
+        st.markdown(st.session_state[f"{prefix}baseline_legend_html"], unsafe_allow_html=True)
         st.subheader("Add LID Features")
         if f"{prefix}user_lid_config" not in st.session_state:
             st.session_state[f"{prefix}user_lid_config"] = {}
@@ -1082,24 +1113,56 @@ def app_ui():
 
     # ---------- Comparison Maps ----------
     st.subheader("Scenario Comparison Maps (Total Runoff + Flooded Nodes)")
-    left_df_key   = f"{prefix}df_lid_nogate_future"     # LID (+20%)
-    right_df_key  = f"{prefix}df_base_nogate_future"    # Baseline (+20%)
-    if left_df_key in st.session_state and right_df_key in st.session_state:
-        render_side_by_side_total_runoff_maps(
+    left_df_key   = f"{prefix}df_lid_nogate_future"   # LID (+20%)
+    right_df_key  = f"{prefix}df_base_nogate_future"  # Baseline (+20%)
+    gate_cur_key  = f"{prefix}df_lid_gate_current"
+    gate_fut_key  = f"{prefix}df_lid_gate_future"
+
+    # Only proceed if all four exist
+    if all(k in st.session_state for k in [left_df_key, right_df_key, gate_cur_key, gate_fut_key]):
+        global_range = _global_runoff_range_across(
+            [
+                st.session_state[left_df_key],
+                st.session_state[right_df_key],
+                st.session_state[gate_cur_key],
+                st.session_state[gate_fut_key],
+            ],
+            st.session_state["unit_ui"],
+            WS_SHP_PATH,
+        )
+
+        # --- Set 1: LID (+20%) vs Baseline (+20%)
+        legend_html_1 = render_side_by_side_total_runoff_maps(
             left_df_in_inches  = st.session_state[left_df_key],
-            left_title         = "LID — +20% Rainfall",
+            left_title         = "Custom LID — +20% Rainfall",
             left_nodes_post5h_dict  = st.session_state.get(f"{prefix}lid_nogate_future_node_flood_post5h_cuft", {}),
             right_df_in_inches = st.session_state[right_df_key],
             right_title        = "Baseline — +20% Rainfall",
             right_nodes_post5h_dict = st.session_state.get(f"{prefix}baseline_nogate_future_node_flood_post5h_cuft", {}),
             unit_ui=st.session_state["unit_ui"],
-            ws_shp_path=WS_SHP_PATH,
-            pipe_shp_path=PIPE_SHP_PATH,
-            node_shp_path=NODE_SHP_PATH,
+            ws_shp_path=WS_SHP_PATH, pipe_shp_path=PIPE_SHP_PATH, node_shp_path=NODE_SHP_PATH,
             node_name_field_hint="NAME",
+            legend_range=global_range,     # <-- force same scale
         )
+        st.markdown(legend_html_1, unsafe_allow_html=True)  # <-- legend under set 1
+
+        # --- Set 2: Tide Gate + Custom LID (Current vs +20%)
+        legend_html_2 = render_side_by_side_total_runoff_maps(
+            left_df_in_inches  = st.session_state[gate_cur_key],
+            left_title         = "Tide Gate + Custom LID — Current Rainfall",
+            left_nodes_post5h_dict  = st.session_state.get(f"{prefix}lid_gate_current_node_flood_post5h_cuft", {}),
+            right_df_in_inches = st.session_state[gate_fut_key],
+            right_title        = "Tide Gate + Custom LID — +20% Rainfall",
+            right_nodes_post5h_dict = st.session_state.get(f"{prefix}lid_gate_future_node_flood_post5h_cuft", {}),
+            unit_ui=st.session_state["unit_ui"],
+            ws_shp_path=WS_SHP_PATH, pipe_shp_path=PIPE_SHP_PATH, node_shp_path=NODE_SHP_PATH,
+            node_name_field_hint="NAME",
+            legend_range=global_range,     # <-- same scale again
+        )
+        st.markdown(legend_html_2, unsafe_allow_html=True)  # <-- legend under set 2
     else:
-        st.info("Run both scenarios: LID (+20%) and Baseline (+20%) to view the comparison maps.")
+        st.info("Run all four scenarios to show comparison maps with shared legend.")
+
 
     # ---------- Summary table + Excel export ----------
     temp_dir = st.session_state.temp_dir
@@ -1119,11 +1182,7 @@ def app_ui():
     }
 
     def _gather_scenario_volumes() -> tuple[pd.DataFrame, str]:
-        """
-        Build a per-scenario table with Flooding, Infiltration, Surface Runoff.
-        Convert to ft³ (U.S.) or m³ (Metric).
-        Returns (df_disp, unit_label).
-        """
+
         ACF_TO_FT3 = 43560.0
         FT3_TO_M3  = 0.0283168
         to_m3 = (st.session_state.get("unit_ui") == "Metric (SI)")
