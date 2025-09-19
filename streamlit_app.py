@@ -958,8 +958,11 @@ def app_ui():
         "Tide": st.session_state["display_tide_curve"],
     }).set_index("Hour")
     st.line_chart(tide_df, height=220, use_container_width=True)
-    st.markdown(("Source: Real-time tide (last 48 h)" if tide_source == "live"
-            else f"Source: Synthetic tide ({moon_phase})"))
+    st.markdown(
+        f"Source: Real-time tide (last 48 h) {tide_disp_unit}"
+        if tide_source == "live"
+        else f"Source: Synthetic tide {tide_disp_unit} ({moon_phase})"
+    )
 
     # ---------- Run Baseline Scenario ----------
     if st.button("Run Baseline Scenario"):
@@ -1264,7 +1267,7 @@ def app_ui():
         )
         st.markdown(legend_html_2, unsafe_allow_html=True)  # <-- legend under set 2
     else:
-        st.info("Run all four scenarios to show comparison maps with shared legend.")
+        st.info("Run Baseline & Custom LID & Max LID to show comparison maps with shared legend.")
 
 
     # ---------- Summary table + Excel export ----------

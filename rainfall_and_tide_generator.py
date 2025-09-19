@@ -364,7 +364,7 @@ def build_timestep_and_resample_15min(df_raw: pd.DataFrame,
         # If caller provides a start_ts (meaning the first of the n samples),
         # compute the corresponding end timestamp consistently:
         end6 = (pd.Timestamp(start_ts).floor("6min") + pd.Timedelta(minutes=6*(n-1)))
-    idx6 = pd.date_range(end=end6, periods=n, freq="6T")
+    idx6 = pd.date_range(end=end6, periods=n, freq="6min")
     tide_df = tide_df.set_index(idx6)
 
     # Unit conversion (live data are in feet)
