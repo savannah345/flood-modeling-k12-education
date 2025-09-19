@@ -237,10 +237,9 @@ def extract_total_runoff(rpt_file: str):
 
 
 # ---- Node overlay helpers (flooded YES/NO) ----
-def node_layer_from_shp(node_shp_path: str, node_vol_dict_post5h: Dict, name_field_hint: str = "NAME"):
+def node_layer_from_shp(node_shp_path: str, node_vol_dict: Dict, name_field_hint: str = "NAME"):
     try:
         nodes_gdf = load_nodes(node_shp_path)
-        # choose join field
         name_field = name_field_hint if name_field_hint in nodes_gdf.columns else None
         if name_field is None:
             for c in ["NAME","Name","node_id","NODEID","NodeID","id","ID"]:
@@ -255,9 +254,9 @@ def node_layer_from_shp(node_shp_path: str, node_vol_dict_post5h: Dict, name_fie
             return None
 
         nodes_gdf["_node_id"] = nodes_gdf[name_field].astype(str).str.strip()
-        vol_map = {str(k).strip(): float(v) for k, v in (node_vol_dict_post5h or {}).items()}
-        nodes_gdf["_cuft_post5h"] = nodes_gdf["_node_id"].map(lambda nid: vol_map.get(nid, 0.0))
-        nodes_gdf["_flooded"] = nodes_gdf["_cuft_post5h"] > 0.0
+        vol_map = {str(k).strip(): float(v) for k, v in (node_vol_dict or {}).items()}
+        nodes_gdf["_cuft_event"] = nodes_gdf["_node_id"].map(lambda nid: vol_map.get(nid, 0.0))
+        nodes_gdf["_flooded"] = nodes_gdf["_cuft_event"] > 0.0
         nodes_gdf["_color_rgba"] = nodes_gdf["_flooded"].map(lambda f: [255,0,0,255] if f else [0,0,0,255])
 
         return pdk.Layer(
@@ -272,6 +271,7 @@ def node_layer_from_shp(node_shp_path: str, node_vol_dict_post5h: Dict, name_fie
         )
     except Exception:
         return None
+
 
 def render_side_by_side_total_runoff_maps(
     left_df_in_inches, left_title, left_nodes_post5h_dict,
@@ -430,6 +430,27 @@ def render_side_by_side_total_runoff_maps(
     """
     return legend_html
 
+def rain_window_with_buffer(sim_start_str: str,
+                            minutes_15: List[int] | np.ndarray,
+                            rain_curve_in: List[float] | np.ndarray,
+                            buffer_hours: float = 2.0,
+                            eps: float = 1e-9) -> Tuple[datetime, datetime] | None:
+    """Return (t_start, t_end) covering all times where rain>eps, plus +buffer_hours."""
+    if minutes_15 is None or rain_curve_in is None:
+        return None
+    if len(minutes_15) == 0 or len(rain_curve_in) == 0:
+        return None
+
+    t0 = datetime.strptime(sim_start_str, "%m/%d/%Y %H:%M")
+    wet_idx = [i for i, v in enumerate(rain_curve_in) if (float(v) if v is not None else 0.0) > eps]
+    if not wet_idx:
+        return None
+
+    i0, i1 = wet_idx[0], wet_idx[-1]
+    t_start = t0 + timedelta(minutes=int(minutes_15[i0]))
+    t_end   = t0 + timedelta(minutes=int(minutes_15[i1])) + timedelta(hours=float(buffer_hours))
+    return (t_start, t_end)
+
 def run_swmm_scenario(
     scenario_name: str,
     rain_lines: List[str],
@@ -438,8 +459,14 @@ def run_swmm_scenario(
     gate_flag: str,
     report_interval=timedelta(minutes=5),
     template_path="swmm_project.inp",
-    warmup_hours=5,
+    warmup_hours=5,                        # kept for the all-time curve if you still want it
+    event_window_mode: str = "rain+2h",    # "rain+2h" or "none"
+    event_buffer_hours: float = 2.0,       # hours after last rain
+    rain_minutes: List[int] | None = None, # the minutes array used for this run
+    rain_curve_in: List[float] | None = None,  # the inch series used for this run
+    sim_start_str: str | None = None,   
 ) -> Tuple[List[float], List[str], str]:
+
     temp_dir = st.session_state.temp_dir
     inp_path = os.path.join(temp_dir, f"{scenario_name}.inp")
     rpt_path = os.path.join(temp_dir, f"{scenario_name}.rpt")
@@ -457,11 +484,18 @@ def run_swmm_scenario(
 
     cumulative_flooding_acft, timestamps = [], []
     cum_cuft_all = 0.0
-    cum_cuft_post5h = 0.0
-    node_cuft_post5h = {}
+    # event-window (system + per-node)
+    cum_cuft_event = 0.0
+    node_cuft_event: Dict[str, float] = {}
 
     step_s = int(report_interval.total_seconds())
-    warmup_s = int(warmup_hours * 3600)
+
+    # Build event window if requested
+    event_window = None
+    if event_window_mode == "rain+2h" and sim_start_str:
+        event_window = rain_window_with_buffer(
+            sim_start_str, rain_minutes, rain_curve_in, buffer_hours=event_buffer_hours
+        )
 
     with Simulation(inp_path) as sim:
         sim.step_advance(step_s)
@@ -471,33 +505,39 @@ def run_swmm_scenario(
             now = sim.current_time
             if t0 is None:
                 t0 = now
-            elapsed_s = int((now - t0).total_seconds())
+            # elapsed_s = int((now - t0).total_seconds())  # keep if you still use warmup elsewhere
+
+            in_window = True
+            if event_window_mode == "rain+2h" and event_window is not None:
+                in_window = (event_window[0] <= now <= event_window[1])
 
             total_cfs = 0.0
-            post5h = elapsed_s >= warmup_s
             for n in nodes:
                 q = float(n.flooding)  # cfs
                 total_cfs += q
-                if post5h and q > 0.0:
+                if in_window and q > 0.0:
                     nid = getattr(n, "nodeid", None) or getattr(n, "id", None) or str(n)
                     vol = q * step_s  # ft^3
-                    node_cuft_post5h[nid] = node_cuft_post5h.get(nid, 0.0) + vol
-                    cum_cuft_post5h += vol
+                    node_cuft_event[nid] = node_cuft_event.get(nid, 0.0) + vol
 
             cum_cuft_all += total_cfs * step_s
+            if in_window:
+                cum_cuft_event += total_cfs * step_s
+
             cumulative_flooding_acft.append(cum_cuft_all / 43560.0)
             timestamps.append(now.strftime("%m-%d %H:%M"))
 
-    # move SWMM’s default-named outputs into our scenario-named paths if present
+    # move SWMM outputs if needed
     for src, dst in [("updated_model.rpt", rpt_path), ("updated_model.out", out_path)]:
         p = os.path.join(temp_dir, src)
         if os.path.exists(p):
             shutil.move(p, dst)
 
     st.session_state[f"{scenario_name}_total_flood"] = (cumulative_flooding_acft[-1] if cumulative_flooding_acft else 0.0)
-    st.session_state[f"{scenario_name}_post5h_total_flood"] = (cum_cuft_post5h / 43560.0) if cum_cuft_post5h > 0 else 0.0
-    st.session_state[f"{scenario_name}_node_flood_post5h_cuft"] = node_cuft_post5h
+    st.session_state[f"{scenario_name}_event_total_flood"] = (cum_cuft_event / 43560.0) if cum_cuft_event > 0 else 0.0
+    st.session_state[f"{scenario_name}_node_flood_event_cuft"] = node_cuft_event
     return cumulative_flooding_acft, timestamps, rpt_path
+
 
 def extract_infiltration_and_runoff(rpt_file: str) -> pd.DataFrame:
     """
@@ -922,28 +962,49 @@ def app_ui():
             else f"Source: Synthetic tide ({moon_phase})"))
 
     # ---------- Run Baseline Scenario ----------
-    st.markdown("---")
     if st.button("Run Baseline Scenario"):
         try:
             lid_lines = [";"]  # none
+
             # current, with/without tide gate
             fill_nogate_cur, ts, rpt1 = run_swmm_scenario(
                 f"{prefix}baseline_nogate_current", rain_lines_cur, tide_lines, lid_lines, "NO",
-                template_path=template_inp
+                template_path=template_inp,
+                event_window_mode="rain+2h",
+                event_buffer_hours=2.0,
+                rain_minutes=minutes_15,
+                rain_curve_in=st.session_state["rain_sim_curve_current_in"],
+                sim_start_str=simulation_date,
             )
             fill_gate_cur,  _,  rpt2 = run_swmm_scenario(
                 f"{prefix}baseline_gate_current",   rain_lines_cur, tide_lines, lid_lines, "YES",
-                template_path=template_inp
+                template_path=template_inp,
+                event_window_mode="rain+2h",
+                event_buffer_hours=2.0,
+                rain_minutes=minutes_15,
+                rain_curve_in=st.session_state["rain_sim_curve_current_in"],
+                sim_start_str=simulation_date,
             )
             # +20%, with/without tide gate
             fill_nogate_fut,_,  rpt3 = run_swmm_scenario(
                 f"{prefix}baseline_nogate_future",  rain_lines_fut, tide_lines, lid_lines, "NO",
-                template_path=template_inp
+                template_path=template_inp,
+                event_window_mode="rain+2h",
+                event_buffer_hours=2.0,
+                rain_minutes=minutes_15,
+                rain_curve_in=st.session_state["rain_sim_curve_future_in"],
+                sim_start_str=simulation_date,
             )
             fill_gate_fut,  _,  rpt4 = run_swmm_scenario(
                 f"{prefix}baseline_gate_future",    rain_lines_fut, tide_lines, lid_lines, "YES",
-                template_path=template_inp
+                template_path=template_inp,
+                event_window_mode="rain+2h",
+                event_buffer_hours=2.0,
+                rain_minutes=minutes_15,
+                rain_curve_in=st.session_state["rain_sim_curve_future_in"],
+                sim_start_str=simulation_date,
             )
+
             st.session_state.update({
                 f"{prefix}baseline_timestamps": ts,
                 f"{prefix}baseline_fill_current": fill_nogate_cur,
@@ -969,6 +1030,7 @@ def app_ui():
                 st.session_state[f"{prefix}baseline_legend_html"] = legend_html
         except Exception as e:
             st.error(f"Baseline simulation failed: {e}")
+
 
     REQUIRED_RASTER_COLS = {
         "NAME", "Max_RG_DEM_Considered", "MaxNumber_RB",
@@ -1041,22 +1103,42 @@ def app_ui():
                 fill_lid_cur, ts, rpt1 = run_swmm_scenario(
                     f"{prefix}lid_nogate_current", st.session_state["rain_lines_cur"],
                     st.session_state["tide_lines"], lid_lines, "NO",
-                    template_path=template_inp
+                    template_path=template_inp,
+                    event_window_mode="rain+2h",
+                    event_buffer_hours=2.0,
+                    rain_minutes=minutes_15,
+                    rain_curve_in=st.session_state["rain_sim_curve_current_in"],
+                    sim_start_str=simulation_date,
                 )
                 fill_lid_gate_cur,_, rpt2 = run_swmm_scenario(
                     f"{prefix}lid_gate_current",   st.session_state["rain_lines_cur"],
                     st.session_state["tide_lines"], lid_lines, "YES",
-                    template_path=template_inp
+                    template_path=template_inp,
+                    event_window_mode="rain+2h",
+                    event_buffer_hours=2.0,
+                    rain_minutes=minutes_15,
+                    rain_curve_in=st.session_state["rain_sim_curve_current_in"],
+                    sim_start_str=simulation_date,
                 )
                 fill_lid_fut,_,      rpt3 = run_swmm_scenario(
                     f"{prefix}lid_nogate_future",  st.session_state["rain_lines_fut"],
                     st.session_state["tide_lines"], lid_lines, "NO",
-                    template_path=template_inp
+                    template_path=template_inp,
+                    event_window_mode="rain+2h",
+                    event_buffer_hours=2.0,
+                    rain_minutes=minutes_15,
+                    rain_curve_in=st.session_state["rain_sim_curve_future_in"],
+                    sim_start_str=simulation_date,
                 )
                 fill_lid_gate_fut,_, rpt4 = run_swmm_scenario(
                     f"{prefix}lid_gate_future",    st.session_state["rain_lines_fut"],
                     st.session_state["tide_lines"], lid_lines, "YES",
-                    template_path=template_inp
+                    template_path=template_inp,
+                    event_window_mode="rain+2h",
+                    event_buffer_hours=2.0,
+                    rain_minutes=minutes_15,
+                    rain_curve_in=st.session_state["rain_sim_curve_future_in"],
+                    sim_start_str=simulation_date,
                 )
                 st.session_state.update({
                     f"{prefix}lid_timestamps": ts,
@@ -1073,28 +1155,49 @@ def app_ui():
             except Exception as e:
                 st.error(f"LID simulation failed: {e}")
 
+
     # ---------- Run Max LID ----------
     if st.button("Run Max LID Scenario"):
         lid_cfg = {row["NAME"]: {"rain_gardens": int(row["Max_RG_DEM_Considered"]),
-                                 "rain_barrels": int(row["MaxNumber_RB"])}
-                   for _, row in raster_df.iterrows()}
+                                "rain_barrels": int(row["MaxNumber_RB"])}
+                for _, row in raster_df.iterrows()}
         try:
             lid_lines = generate_lid_usage_lines(lid_cfg, raster_df)
             fill_max_cur, ts, rpt1 = run_swmm_scenario(
                 f"{prefix}lid_max_nogate_current", st.session_state["rain_lines_cur"],
-                st.session_state["tide_lines"], lid_lines, "NO", template_path=template_inp
+                st.session_state["tide_lines"], lid_lines, "NO", template_path=template_inp,
+                event_window_mode="rain+2h",
+                event_buffer_hours=2.0,
+                rain_minutes=minutes_15,
+                rain_curve_in=st.session_state["rain_sim_curve_current_in"],
+                sim_start_str=simulation_date,
             )
             fill_max_gate_cur,_, rpt2 = run_swmm_scenario(
                 f"{prefix}lid_max_gate_current",   st.session_state["rain_lines_cur"],
-                st.session_state["tide_lines"], lid_lines, "YES", template_path=template_inp
+                st.session_state["tide_lines"], lid_lines, "YES", template_path=template_inp,
+                event_window_mode="rain+2h",
+                event_buffer_hours=2.0,
+                rain_minutes=minutes_15,
+                rain_curve_in=st.session_state["rain_sim_curve_current_in"],
+                sim_start_str=simulation_date,
             )
             fill_max_fut,_,      rpt3 = run_swmm_scenario(
                 f"{prefix}lid_max_nogate_future",  st.session_state["rain_lines_fut"],
-                st.session_state["tide_lines"], lid_lines, "NO", template_path=template_inp
+                st.session_state["tide_lines"], lid_lines, "NO", template_path=template_inp,
+                event_window_mode="rain+2h",
+                event_buffer_hours=2.0,
+                rain_minutes=minutes_15,
+                rain_curve_in=st.session_state["rain_sim_curve_future_in"],
+                sim_start_str=simulation_date,
             )
             fill_max_gate_fut,_, rpt4 = run_swmm_scenario(
                 f"{prefix}lid_max_gate_future",    st.session_state["rain_lines_fut"],
-                st.session_state["tide_lines"], lid_lines, "YES", template_path=template_inp
+                st.session_state["tide_lines"], lid_lines, "YES", template_path=template_inp,
+                event_window_mode="rain+2h",
+                event_buffer_hours=2.0,
+                rain_minutes=minutes_15,
+                rain_curve_in=st.session_state["rain_sim_curve_future_in"],
+                sim_start_str=simulation_date,
             )
             st.session_state.update({
                 f"{prefix}lid_max_timestamps": ts,
@@ -1135,10 +1238,10 @@ def app_ui():
         legend_html_1 = render_side_by_side_total_runoff_maps(
             left_df_in_inches  = st.session_state[left_df_key],
             left_title         = "Custom LID — +20% Rainfall",
-            left_nodes_post5h_dict  = st.session_state.get(f"{prefix}lid_nogate_future_node_flood_post5h_cuft", {}),
+            left_nodes_post5h_dict  = st.session_state.get(f"{prefix}lid_nogate_future_node_flood_event_cuft", {}),
             right_df_in_inches = st.session_state[right_df_key],
             right_title        = "Baseline — +20% Rainfall",
-            right_nodes_post5h_dict = st.session_state.get(f"{prefix}baseline_nogate_future_node_flood_post5h_cuft", {}),
+            right_nodes_post5h_dict = st.session_state.get(f"{prefix}baseline_nogate_future_node_flood_event_cuft", {}),
             unit_ui=st.session_state["unit_ui"],
             ws_shp_path=WS_SHP_PATH, pipe_shp_path=PIPE_SHP_PATH, node_shp_path=NODE_SHP_PATH,
             node_name_field_hint="NAME",
@@ -1150,10 +1253,10 @@ def app_ui():
         legend_html_2 = render_side_by_side_total_runoff_maps(
             left_df_in_inches  = st.session_state[gate_cur_key],
             left_title         = "Tide Gate + Custom LID — Current Rainfall",
-            left_nodes_post5h_dict  = st.session_state.get(f"{prefix}lid_gate_current_node_flood_post5h_cuft", {}),
+            left_nodes_post5h_dict  = st.session_state.get(f"{prefix}lid_gate_current_node_flood_event_cuft", {}), 
             right_df_in_inches = st.session_state[gate_fut_key],
             right_title        = "Tide Gate + Custom LID — +20% Rainfall",
-            right_nodes_post5h_dict = st.session_state.get(f"{prefix}lid_gate_future_node_flood_post5h_cuft", {}),
+            right_nodes_post5h_dict = st.session_state.get(f"{prefix}lid_gate_future_node_flood_event_cuft", {}),
             unit_ui=st.session_state["unit_ui"],
             ws_shp_path=WS_SHP_PATH, pipe_shp_path=PIPE_SHP_PATH, node_shp_path=NODE_SHP_PATH,
             node_name_field_hint="NAME",
@@ -1213,7 +1316,7 @@ def app_ui():
 
             # Flooding (ac-ft) already tracked in session
             flood_acft = st.session_state.get(
-                f"{prefix}{key}_post5h_total_flood",
+                f"{prefix}{key}_event_total_flood",
                 st.session_state.get(f"{prefix}{key}_total_flood", 0.0)
             ) or 0.0
 
