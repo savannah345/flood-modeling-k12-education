@@ -1218,8 +1218,8 @@ def app_ui():
     st.subheader("Scenario Comparison Maps (Total Runoff + Flooded Nodes)")
     left_df_key   = f"{prefix}df_lid_nogate_future"   # LID (+20%)
     right_df_key  = f"{prefix}df_base_nogate_future"  # Baseline (+20%)
-    gate_cur_key  = f"{prefix}df_lid_gate_current"
-    gate_fut_key  = f"{prefix}df_lid_gate_future"
+    gate_cur_key  = f"{prefix}df_lid_max_gate_current"
+    gate_fut_key  = f"{prefix}df_lid_max_gate_future"
 
     # Only proceed if all four exist
     if all(k in st.session_state for k in [left_df_key, right_df_key, gate_cur_key, gate_fut_key]):
@@ -1252,10 +1252,10 @@ def app_ui():
         # --- Set 2: Tide Gate + Custom LID (Current vs +20%)
         legend_html_2 = render_side_by_side_total_runoff_maps(
             left_df_in_inches  = st.session_state[gate_cur_key],
-            left_title         = "Tide Gate + Custom LID — Current Rainfall",
+            left_title         = "Tide Gate + MAX LID — Current Rainfall",
             left_nodes_post5h_dict  = st.session_state.get(f"{prefix}lid_gate_current_node_flood_event_cuft", {}), 
             right_df_in_inches = st.session_state[gate_fut_key],
-            right_title        = "Tide Gate + Custom LID — +20% Rainfall",
+            right_title        = "Tide Gate + MAX LID — +20% Rainfall",
             right_nodes_post5h_dict = st.session_state.get(f"{prefix}lid_gate_future_node_flood_event_cuft", {}),
             unit_ui=st.session_state["unit_ui"],
             ws_shp_path=WS_SHP_PATH, pipe_shp_path=PIPE_SHP_PATH, node_shp_path=NODE_SHP_PATH,
@@ -1355,11 +1355,8 @@ def app_ui():
         else:
             st.subheader(f"Scenario Volumes ({unit_lbl})")
 
-            # --- group mapping for consistent colors
             def scenario_group(name: str) -> str:
-                # use the part before " – " (en dash surrounded by spaces)
                 prefix = name.split("–", 1)[0].strip()
-
                 prefix_to_group = {
                     "Baseline (No Tide Gate)":  "Baseline (No Gate)",
                     "Baseline + Tide Gate":     "Baseline (With Gate)",
@@ -1377,56 +1374,86 @@ def app_ui():
             ]
             group_colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
 
-            # common renderer
             def bar_chart(df_vals: pd.DataFrame, value_col: str, title_text: str | None):
                 df = df_vals.reset_index().rename(columns={"index": "Scenario", value_col: unit_lbl})
                 df["Group"] = df["Scenario"].map(scenario_group)
-
                 order = df.sort_values(unit_lbl, ascending=False)["Scenario"].tolist()
                 height_px = max(44 * len(order), 400)
-
                 chart = (
                     alt.Chart(df)
                     .mark_bar(size=14)
                     .encode(
                         x=alt.X(f"{unit_lbl}:Q", sort='-x', title=unit_lbl),
-                        y=alt.Y("Scenario:N",
-                                sort=order,
-                                title=None,
+                        y=alt.Y("Scenario:N", sort=order, title=None,
                                 axis=alt.Axis(labelFontSize=14, titleFontSize=16, labelLimit=1000)),
-                        color=alt.Color(
-                            "Group:N",
-                            scale=alt.Scale(domain=group_domain, range=group_colors),
-                            legend=alt.Legend(title="Scenario Group")
-                        ),
+                        color=alt.Color("Group:N",
+                                        scale=alt.Scale(domain=group_domain, range=group_colors),
+                                        legend=alt.Legend(title="Scenario Group")),
                         tooltip=["Scenario", f"{unit_lbl}:Q", "Group:N"]
                     )
-                    .properties(height=height_px)   # set height first
+                    .properties(height=height_px)
                     .configure_axis(labelFontSize=14, titleFontSize=16)
                     .configure_view(strokeWidth=0)
                 )
-
-                # apply title only if provided
                 if isinstance(title_text, str) and title_text != "":
                     chart = chart.properties(title=title_text)
-
                 st.altair_chart(chart, use_container_width=True)
 
-
-            # sorted series for each metric
-            s_flood  = df_vol["Flooding"].sort_values(ascending=False)
-            s_infil  = df_vol["Infiltration"].sort_values(ascending=False)
-            s_runoff = df_vol["Surface Runoff"].sort_values(ascending=False)
-
-            # render vertically
+            # Flooding — keep ALL scenarios
             st.markdown("**Flooding**")
+            s_flood  = df_vol["Flooding"].sort_values(ascending=False)
             bar_chart(s_flood.to_frame(), "Flooding", None)
 
-            st.markdown("**Infiltration**")
-            bar_chart(s_infil.to_frame(), "Infiltration", None)
+            # Infiltration — ONLY scenarios with Tide Gate
 
+            st.markdown("**Infiltration**")
+            gate_mask = df_vol.index.str.contains(r"\+ Tide Gate")
+            s_infil_gate = df_vol.loc[gate_mask, "Infiltration"].sort_values(ascending=False)
+
+            df_i = s_infil_gate.to_frame().reset_index().rename(columns={"index":"Scenario","Infiltration":unit_lbl})
+            order_i = df_i.sort_values(unit_lbl, ascending=False)["Scenario"].tolist()
+            height_i = max(44 * len(order_i), 400)
+
+            chart_i = (
+                alt.Chart(df_i)
+                .mark_bar(size=14)
+                .encode(
+                    x=alt.X(f"{unit_lbl}:Q", sort='-x', title=unit_lbl),
+                    y=alt.Y("Scenario:N", sort=order_i, title=None,
+                            axis=alt.Axis(labelFontSize=14, titleFontSize=16, labelLimit=1000)),
+                    # different color per bar; NO legend
+                    color=alt.Color("Scenario:N", legend=None)
+                )
+                .properties(height=height_i)
+                .configure_axis(labelFontSize=14, titleFontSize=16)
+                .configure_view(strokeWidth=0)
+            )
+            st.altair_chart(chart_i, use_container_width=True)
+
+            # Surface Runoff — ONLY scenarios with Tide Gate, each bar its own color, NO legend
             st.markdown("**Surface Runoff**")
-            bar_chart(s_runoff.to_frame(), "Surface Runoff", None)
+            s_runoff_gate = df_vol.loc[gate_mask, "Surface Runoff"].sort_values(ascending=False)
+
+            df_r = s_runoff_gate.to_frame().reset_index().rename(columns={"index":"Scenario","Surface Runoff":unit_lbl})
+            order_r = df_r.sort_values(unit_lbl, ascending=False)["Scenario"].tolist()
+            height_r = max(44 * len(order_r), 400)
+
+            chart_r = (
+                alt.Chart(df_r)
+                .mark_bar(size=14)
+                .encode(
+                    x=alt.X(f"{unit_lbl}:Q", sort='-x', title=unit_lbl),
+                    y=alt.Y("Scenario:N", sort=order_r, title=None,
+                            axis=alt.Axis(labelFontSize=14, titleFontSize=16, labelLimit=1000)),
+                    # different color per bar; NO legend
+                    color=alt.Color("Scenario:N", legend=None)
+                )
+                .properties(height=height_r)
+                .configure_axis(labelFontSize=14, titleFontSize=16)
+                .configure_view(strokeWidth=0)
+            )
+            st.altair_chart(chart_r, use_container_width=True)
+
 
             excel_output = io.BytesIO()
             with pd.ExcelWriter(excel_output, engine="openpyxl") as writer:
