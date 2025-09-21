@@ -777,7 +777,8 @@ def app_ui():
     NODE_SHP_PATH   = st.session_state.get("NODE_SHP_PATH", "Nodes.shp")
     PIPE_SHP_PATH   = st.session_state.get("PIPE_SHP_PATH", "Conduits.shp")
 
-    st.title("CoastWise: Watershed Design Toolkit (SWMM)")
+    st.title("CoastWise: Watershed Design Toolkit")
+    st.markdown("[Tutorial](https://docs.google.com/document/d/1xMxoe41xhWPsPlzUIjQP4K9K_vjhjelN0hgvqfoflGY/edit?usp=sharing)")
 
     # ---------- Persisted config ----------
     if "cfg" not in st.session_state:
@@ -1384,18 +1385,18 @@ def app_ui():
                 height_px = max(44 * len(order), 400)
                 chart = (
                     alt.Chart(df)
-                    .mark_bar(size=14)
+                    .mark_bar(size=25)
                     .encode(
                         x=alt.X(f"{unit_lbl}:Q", sort='-x', title=unit_lbl),
                         y=alt.Y("Scenario:N", sort=order, title=None,
-                                axis=alt.Axis(labelFontSize=14, titleFontSize=16, labelLimit=1000)),
+                                axis=alt.Axis(labelFontSize=14, titleFontSize=20, labelLimit=1000)),
                         color=alt.Color("Group:N",
                                         scale=alt.Scale(domain=group_domain, range=group_colors),
                                         legend=alt.Legend(title="Scenario Group")),
                         tooltip=["Scenario", f"{unit_lbl}:Q", "Group:N"]
                     )
                     .properties(height=height_px)
-                    .configure_axis(labelFontSize=14, titleFontSize=16)
+                    .configure_axis(labelFontSize=14, titleFontSize=20)
                     .configure_view(strokeWidth=0)
                 )
                 if isinstance(title_text, str) and title_text != "":
@@ -1419,11 +1420,11 @@ def app_ui():
 
             chart_i = (
                 alt.Chart(df_i)
-                .mark_bar(size=14)
+                .mark_bar(size=25)
                 .encode(
                     x=alt.X(f"{unit_lbl}:Q", sort='-x', title=unit_lbl),
                     y=alt.Y("Scenario:N", sort=order_i, title=None,
-                            axis=alt.Axis(labelFontSize=14, titleFontSize=16, labelLimit=1000)),
+                            axis=alt.Axis(labelFontSize=14, titleFontSize=20, labelLimit=1000)),
                     # different color per bar; NO legend
                     color=alt.Color("Scenario:N", legend=None)
                 )
@@ -1443,7 +1444,7 @@ def app_ui():
 
             chart_r = (
                 alt.Chart(df_r)
-                .mark_bar(size=14)
+                .mark_bar(size=25)
                 .encode(
                     x=alt.X(f"{unit_lbl}:Q", sort='-x', title=unit_lbl),
                     y=alt.Y("Scenario:N", sort=order_r, title=None,
