@@ -778,7 +778,8 @@ def app_ui():
     PIPE_SHP_PATH   = st.session_state.get("PIPE_SHP_PATH", "Conduits.shp")
 
     st.title("CoastWise: Watershed Design Toolkit")
-    st.markdown("[Tutorial](https://drive.google.com/file/d/1dYSZfvPl1d7Xg8GI4tzY9ged0qLn8yew/view?usp=sharing")
+    st.markdown('<a href="https://drive.google.com/file/d/1dYSZfvPl1d7Xg8GI4tzY9ged0qLn8yew/view?usp=drive_link" target="_blank">Tutorial</a>', unsafe_allow_html=True)
+
 
     # ---------- Persisted config ----------
     if "cfg" not in st.session_state:
