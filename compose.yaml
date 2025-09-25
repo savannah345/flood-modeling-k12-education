@@ -1,0 +1,39 @@
+services:
+  coastwise-app:
+    build: 
+      context: .
+      dockerfile: ./streamlit-config/Dockerfile
+    container_name: streamlit-app
+    restart: unless-stopped
+    ports:
+      - '8501:8501'
+    volumes:
+          - 'streamlit_storage:/app'
+    depends_on:
+      - db
+    networks:
+      - front-tier
+      - back-tier
+  db:
+    build: ./database-config
+    container_name: postgresql
+    restart: unless-stopped
+    shm_size: 128mb
+    environment:
+      POSTGRES_USER: admin_postgresql
+      POSTGRES_PASSWORD: KdsR01AGHH6klxlaTC
+      POSTGRES_DB: selfhostedpostgresql
+    ports:
+      - '5432:5432'
+    volumes:
+      - 'postgresql_storage:/var/lib/postgresql/data'
+    networks:
+      - back-tier
+volumes:
+  postgresql_storage: {}
+  streamlit_storage: {}
+
+networks:
+  # The presence of these objects is sufficient to define them
+  front-tier: {}
+  back-tier: {}
