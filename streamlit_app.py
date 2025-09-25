@@ -40,20 +40,20 @@ def ensure_playwright_browsers():
 ensure_playwright_browsers()
 
 MSL_OFFSET_NAVD88_FT = 1.36  
-WS_SHP_PATH  = st.session_state.get("WS_SHP_PATH", "Subcatchments.shp")
-NODE_SHP_PATH= st.session_state.get("NODE_SHP_PATH", "Nodes.shp")
-PIPE_SHP_PATH= st.session_state.get("PIPE_SHP_PATH", "Conduits.shp")
+WS_SHP_PATH  = st.session_state.get("WS_SHP_PATH", "map_files/Subcatchments.shp")
+NODE_SHP_PATH= st.session_state.get("NODE_SHP_PATH", "map_files/Nodes.shp")
+PIPE_SHP_PATH= st.session_state.get("PIPE_SHP_PATH", "map_files/Conduits.shp")
 
 
 @st.cache_resource(show_spinner=False)
-def load_ws(path="Subcatchments.shp") -> gpd.GeoDataFrame:
+def load_ws(path="map_files/Subcatchments.shp") -> gpd.GeoDataFrame:
     gdf = gpd.read_file(path)
     gdf = (gdf.set_crs(4326) if gdf.crs is None else gdf.to_crs(4326))
     gdf = gdf[gdf.geometry.notnull() & gdf.is_valid].copy()   # <—
     return gdf
 
 @st.cache_resource(show_spinner=False)
-def load_nodes(path="Nodes.shp") -> gpd.GeoDataFrame:
+def load_nodes(path="map_files/Nodes.shp") -> gpd.GeoDataFrame:
     gdf = gpd.read_file(path)
     gdf = (gdf.set_crs(4326) if gdf.crs is None else gdf.to_crs(4326))
     gdf = gdf[gdf.geometry.notnull() & gdf.is_valid].copy()   # <—
@@ -773,9 +773,9 @@ def app_ui():
     # Defaults / resources
     simulation_date = "05/31/2025 12:00"
     template_inp    = "swmm_project.inp"
-    WS_SHP_PATH     = st.session_state.get("WS_SHP_PATH", "Subcatchments.shp")
-    NODE_SHP_PATH   = st.session_state.get("NODE_SHP_PATH", "Nodes.shp")
-    PIPE_SHP_PATH   = st.session_state.get("PIPE_SHP_PATH", "Conduits.shp")
+    WS_SHP_PATH     = st.session_state.get("WS_SHP_PATH", "map_files/Subcatchments.shp")
+    NODE_SHP_PATH   = st.session_state.get("NODE_SHP_PATH", "map_files/Nodes.shp")
+    PIPE_SHP_PATH   = st.session_state.get("PIPE_SHP_PATH", "map_files/Conduits.shp")
 
     st.title("CoastWise: Watershed Design Toolkit")
     st.markdown('<a href="https://drive.google.com/file/d/1dYSZfvPl1d7Xg8GI4tzY9ged0qLn8yew/view?usp=drive_link" target="_blank">Tutorial</a>', unsafe_allow_html=True)
