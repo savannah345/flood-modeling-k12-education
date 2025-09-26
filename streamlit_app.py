@@ -778,7 +778,7 @@ def app_ui():
     PIPE_SHP_PATH   = st.session_state.get("PIPE_SHP_PATH", "map_files/Conduits.shp")
 
     st.title("CoastWise: Watershed Design Toolkit")
-    st.markdown('<a href="https://drive.google.com/file/d/1dYSZfvPl1d7Xg8GI4tzY9ged0qLn8yew/view?usp=drive_link" target="_blank">Tutorial</a>', unsafe_allow_html=True)
+    st.markdown('<a href="https://github.com/savannah345/flood-modeling-k12-education/blob/main/CoastWise_Tutorial.docx" target="_blank">Tutorial</a>', unsafe_allow_html=True)
 
 
     # ---------- Persisted config ----------
