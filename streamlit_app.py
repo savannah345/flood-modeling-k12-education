@@ -697,7 +697,7 @@ def generate_lid_usage_lines(lid_config: Dict[str, Dict[str, int]], excel_df: pd
         rg = int(cfg.get("rain_gardens", 0) or 0)
         if rg > 0:
             # % of pervious contributing to RG; 500 ft² per garden as contribution basis
-            pct_perv = (rg * 500.0) / (perv if perv > 0 else 1e-9) * 100.0
+            pct_perv = (rg * 400.0) / (perv if perv > 0 else 1e-9) * 100.0
             lines.append(
                 tpl.format(
                     sub=sub,
