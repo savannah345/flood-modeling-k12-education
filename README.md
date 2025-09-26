@@ -18,28 +18,33 @@ CoastWise is a browser app that runs real SWMM simulations (via PySWMM) so peopl
   Start with your watershed as a standard SWMM INP.
   Replace IDs to something clean and stable if needed.
   Add four placeholders anywhere appropriate in the INP:
+
       $RAINFALL_TIMESERIES$
+   
       $TIDE_TIMESERIES$
+
       $LID_USAGE$
+
       $TIDE_GATE_CONTROL$
+   
   Save this as your template INP.
 
-2) Provide minimal spatial layers
+3) Provide minimal spatial layers
   Subcatchments polygon layer with a field that matches your INP subcatchment IDs.
   Nodes point layer with IDs that match your INP node IDs.
   (Optional) Conduits for context.
 
-3) Define your design knobs
+4) Define your design knobs
   Rainfall: supply return-period depths for a few durations (e.g., 2–24 h). Use your local IDF/Atlas values.
   Tide boundary: choose either a live gage you trust or a simple semidiurnal curve with reasonable min/max levels.
   LID rules: simple table per subcatchment with “max rain gardens” and “max rain barrels,” based on your land cover assumptions.
 
-4) Check one end-to-end run
+5) Check one end-to-end run
   Pick one storm and run baseline.
   Add a small LID count in 1–2 subcatchments and confirm outputs change as expected.
   Toggle tide gate and confirm the outlet boundary condition reacts.
 
-5) Scale up
+6) Scale up
   Turn on the full scenario set (baseline, +tide gate, custom/max LID, and optional +20% rainfall sensitivity).
   Export Excel and spot-check totals and maps.
 
