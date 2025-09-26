@@ -1,4 +1,3 @@
-**CoastWise**
 CoastWise is a browser app that runs real SWMM simulations (via PySWMM) so people can test coastal flood strategies quickly. You pick a storm, align it with high/low tide, turn a tide gate on/off, and add LID (rain gardens, rain barrels). The app shows flooded nodes, subcatchment runoff, and watershed totals (flooding, infiltration, runoff). It exports a simple Excel summary. No desktop GIS or SWMM UI required.
 
 **What it does**
