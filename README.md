@@ -19,9 +19,9 @@ CoastWise is a browser app that runs real SWMM simulations (via PySWMM) so peopl
   Replace IDs to something clean and stable if needed.
   Add four placeholders anywhere appropriate in the INP:
 
-      RAINFALL_TIMESERIES
-      TIDE_TIMESERIES
-      LID_USAGE
+      RAINFALL_TIMESERIES; 
+      TIDE_TIMESERIES; 
+      LID_USAGE; 
       TIDE_GATE_CONTROL
    
   Save this as your template INP.
