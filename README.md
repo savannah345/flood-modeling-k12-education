@@ -1,96 +1,53 @@
-# 🌊 CoastWise: A Gamified Coastal Flood Simulation Tool
+CoastWise is a browser app that runs real SWMM simulations (via PySWMM) so people can test coastal flood strategies quickly. You pick a storm, align it with high/low tide, turn a tide gate on/off, and add LID (rain gardens, rain barrels). The app shows flooded nodes, subcatchment runoff, and watershed totals (flooding, infiltration, runoff). It exports a simple Excel summary. No desktop GIS or SWMM UI required.
 
-**CoastWise** is an interactive Streamlit application that simulates coastal flooding under different rainfall and tidal scenarios using the **EPA Storm Water Management Model (SWMM)**. Users can explore how **Low Impact Development (LID)** practices—like rain gardens and rain barrels—alongside **tide gates**, affect flooding and system performance across six different scenarios.
+**What it does**
+  Builds a 48-hour rainfall + tide timeline for your scenario.
+  Writes those inputs into a SWMM template file.
+  Runs a small set of scenarios (baseline, ± tide gate, ± LID, ± +20% rain).
+  Maps where water piles up and how much flows or infiltrates.
+  Gives you a one-click Excel with inputs and results.
 
-## 📁 Project Structure
+**How it works**
+  UI: Streamlit.
+  Engine: SWMM via PySWMM.
+  Model file: one SWMM template that has placeholders for rainfall, tides, LID, and tide-gate control.
+  Data: basic watershed shapefiles (subcatchments and nodes) and a lightweight table for LID limits.
 
-Make sure your project directory includes the following:
+**Adapting to your watershed** 
+1) Bring your SWMM model
+  Start with your watershed as a standard SWMM INP.
+  Replace IDs to something clean and stable if needed.
+  Add four placeholders anywhere appropriate in the INP:
 
-```
-📂 your_project_directory/
-├── streamlit_app.py                # Main Streamlit app
-├── rainfall_and_tide_generator.py  # Rainfall & tide generation functions
-├── swmm_project.inp                # Base SWMM template with placeholders
-├── raster_cells_per_sub.xlsx       # Subcatchment-level LID eligibility
-├── requirements.txt                # List of required Python packages
-├── [optional images]               # PNGs for land cover, DEM, LID visuals
-├── [optional videos]               # MP4 for tide explanation (e.g., NASA)
-```
+      RAINFALL_TIMESERIES; 
+      TIDE_TIMESERIES; 
+      LID_USAGE; 
+      TIDE_GATE_CONTROL
+   
+  Save this as your template INP.
 
-## 🚀 Quick Start
+3) Provide minimal spatial layers
+  Subcatchments polygon layer with a field that matches your INP subcatchment IDs.
+  Nodes point layer with IDs that match your INP node IDs.
+  (Optional) Conduits for context.
 
-### 1. Clone the repository
+4) Define your design knobs
+  Rainfall: supply return-period depths for a few durations (e.g., 2–24 h). Use your local IDF/Atlas values.
+  Tide boundary: choose either a live gage you trust or a simple semidiurnal curve with reasonable min/max levels.
+  LID rules: simple table per subcatchment with “max rain gardens” and “max rain barrels,” based on your land cover assumptions.
 
-```bash
-git clone https://github.com/savannah345/flood-modeling-k12-education.git
-cd flood-modeling-k12-education
-```
+5) Check one end-to-end run
+  Pick one storm and run baseline.
+  Add a small LID count in 1–2 subcatchments and confirm outputs change as expected.
+  Toggle tide gate and confirm the outlet boundary condition reacts.
 
-### 2. Install dependencies
+6) Scale up
+  Turn on the full scenario set (baseline, +tide gate, custom/max LID, and optional +20% rainfall sensitivity).
+  Export Excel and spot-check totals and maps.
 
-Use the included `requirements.txt`:
-
-```bash
-pip install -r requirements.txt
-```
-
-### 3. Run the app
-
-```bash
-streamlit run streamlit_app.py
-```
-
-## 🧰 Scenario Setup
-
-Within the app, users can:
-
-* Select storm **duration**, **return period**, and **rainfall shape**
-* Choose **moon phase** and **tide alignment** (peak rain vs. tide)
-* View generated rainfall and tide curves
-* Run simulations with:
-
-  * No infrastructure (baseline)
-  * Tide gate only
-  * Custom LID placement
-  * Tide gate + Custom LID placement
-  * Max LID across all eligible areas without Tide Gate
-  * Max LID across all eligible areas with Tide Gate
-
-## 📦 Outputs
-
-* Culvert fill (%) time series for six scenarios
-* Subcatchment runoff (impervious and pervious)
-* Total infiltration, runoff, flooding, and outflow
-* Cost estimates for selected LID + tide gate strategies
-* Downloadable Excel workbook:
-
-  * Scenario summary
-  * Rainfall and tide curves
-  * Water balance volumes (ft³ or m³)
-  * Culvert performance
-
-## 📌 Notes for Users
-
-* **You must use the provided `swmm_project.inp`** template. The app fills in time series, LID usage, and gate logic automatically.
-* Only **four files are needed to start**:
-
-  1. `streamlit_app.py`
-  2. `rainfall_and_tide_generator.py`
-  3. `swmm_project.inp`
-  4. `raster_cells_per_sub.xlsx`
-
-All other output files (`.inp`, `.rpt`, `.out`) are created dynamically during simulation runs.
-
-## 🧪 Educational Goals
-
-This tool is designed for students, planners, and engineers to:
-
-* Understand how rainfall and tides interact in coastal flooding
-* Explore spatial and structural trade-offs in green infrastructure
-* Evaluate costs and benefits of upstream vs. downstream interventions
-
-## 👩‍🔬 License & Attribution
-
-* Built on top of the **EPA SWMM** engine (via `pyswmm`)
-* Developed for education and outreach in coastal resilience planning
-* Demo data includes Norfolk, VA watershed as a case study
+**What you need to change**
+  IDF/return-period table → your city/region.
+  Tide source or ranges → your coastline/estuary (or set fixed synthetic values).
+  LID limits → your sizing rules and land cover (simple per-subcatchment caps are enough).
+  Shapefile IDs → must match the INP IDs.
+  Template INP → must include the four placeholders above.
