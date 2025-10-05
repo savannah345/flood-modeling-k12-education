@@ -1,4 +1,8 @@
-CoastWise is a browser app that runs real SWMM simulations (via PySWMM) so people can test coastal resilience strategies quickly. You pick a storm, align it with high/low tide, turn a tide gate on/off, and add LID (rain gardens, rain barrels). The app shows flooded nodes, subcatchment runoff, and watershed totals (flooding, infiltration, runoff). It exports a simple Excel summary. No desktop GIS or SWMM user interface (UI) required.
+CoastWise performs fully dynamic rainfall–runoff and tidal simulations using the Stormwater Management Model (SWMM) in real time. By incorporating live tide data, the platform enables users to explore compound flooding scenarios, add low-impact development (LID) features interactively, and receive immediate feedback on runoff and infiltration outcomes. 
+
+Built on a real urban watershed in Norfolk, Virginia, CoastWise demonstrates how rainfall–tide–infrastructure interactions can be visualized and simplified for education and decision support. The framework bridges critical gaps in serious gaming by integrating hydrologic modeling, coastal dynamics, and infrastructure planning within a freely accessible web environment. 
+
+Adaptable to other watersheds through minimal input changes, CoastWise provides a practical tool for classrooms, local governments, and community planners to promote flood literacy and support data-informed resilience planning.
 
 **What it does**
   Builds a 48-hour rainfall + tide timeline for your scenario.
@@ -9,7 +13,7 @@ CoastWise is a browser app that runs real SWMM simulations (via PySWMM) so peopl
   Gives you an Excel with inputs and results for multiple run comparisons.
 
 **How it works**
-  UI: Streamlit.
+  User Interface: Streamlit.
   Engine: SWMM via PySWMM.
   Model file: one SWMM template that has placeholders for rainfall, tides, LID, and tide-gate control.
   Data: basic watershed shapefiles (subcatchments and nodes) and a table for LID upper bounds (per subcatchment).
