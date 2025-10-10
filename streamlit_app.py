@@ -39,7 +39,7 @@ def ensure_playwright_browsers():
     )
 ensure_playwright_browsers()
 
-MSL_OFFSET_NAVD88_FT = 1.36  
+MSL_OFFSET_NAVD88_FT = 0
 WS_SHP_PATH  = st.session_state.get("WS_SHP_PATH", "map_files/Subcatchments.shp")
 NODE_SHP_PATH= st.session_state.get("NODE_SHP_PATH", "map_files/Nodes.shp")
 PIPE_SHP_PATH= st.session_state.get("PIPE_SHP_PATH", "map_files/Conduits.shp")
@@ -272,6 +272,37 @@ def node_layer_from_shp(node_shp_path: str, node_vol_dict: Dict, name_field_hint
     except Exception:
         return None
 
+def _apply_percent_uptake(raster_df: pd.DataFrame, pct_rg: float, pct_rb: float) -> pd.DataFrame:
+    out = raster_df[["NAME", "Max_RG_DEM_Considered", "MaxNumber_RB"]].copy()
+    # ensure integer max columns
+    out["Max_RG_DEM_Considered"] = out["Max_RG_DEM_Considered"].astype(int)
+    out["MaxNumber_RB"] = out["MaxNumber_RB"].astype(int)
+
+    # compute suggestions (rounded to whole numbers)
+    out["Suggested_Rain_Gardens"] = np.rint(out["Max_RG_DEM_Considered"] * (pct_rg / 100.0)).astype(int)
+    out["Suggested_Rain_Barrels"] = np.rint(out["MaxNumber_RB"] * (pct_rb / 100.0)).astype(int)
+
+    # clip to [0, max]
+    out["Suggested_Rain_Gardens"] = out["Suggested_Rain_Gardens"].clip(lower=0, upper=out["Max_RG_DEM_Considered"])
+    out["Suggested_Rain_Barrels"]  = out["Suggested_Rain_Barrels"].clip(lower=0, upper=out["MaxNumber_RB"])
+    return out
+
+def _lid_table_with_costs(base_df: pd.DataFrame, unit_cost_rg: float, unit_cost_rb: float) -> pd.DataFrame:
+    df = base_df.copy()
+    df.rename(columns={
+        "Max_RG_DEM_Considered": "RG Max",
+        "MaxNumber_RB":          "RB Max",
+        "Suggested_Rain_Gardens":"Rain Gardens",
+        "Suggested_Rain_Barrels":"Rain Barrels",
+    }, inplace=True)
+
+    # cost calc; keep cost as final column
+    df["Cost ($)"] = (df["Rain Gardens"].astype(int) * float(unit_cost_rg)) + \
+                     (df["Rain Barrels"].astype(int)  * float(unit_cost_rb))
+
+    # reorder columns — cost last
+    df = df[["NAME", "RG Max", "RB Max", "Rain Gardens", "Rain Barrels", "Cost ($)"]]
+    return df
 
 def render_side_by_side_total_runoff_maps(
     left_df_in_inches, left_title, left_nodes_post5h_dict,
@@ -868,7 +899,7 @@ def app_ui():
             moon_phase=moon_phase,
             unit=unit,
             align=align_mode,
-            method="Normal",
+            method="SCS_TypeIII",
             start_ts=None,
             prominence=None,
             navd88_to_sea_level_offset_ft=MSL_OFFSET_NAVD88_FT
@@ -884,7 +915,7 @@ def app_ui():
             duration_minutes=duration_minutes,
             tide_curve_15min=tide_curve_ui,
             align=align_mode,
-            method="Normal",
+            method="SCS_TypeIII",
             target_index=None,
             prominence=None
         )
@@ -950,7 +981,7 @@ def app_ui():
         "Current": st.session_state["display_rain_curve_current"],
         "Future (+20%)": st.session_state["display_rain_curve_future"],
     }).set_index("Hour")
-    st.line_chart(rain_df, height=220, use_container_width=True)
+    st.line_chart(rain_df, height=320, use_container_width=True)
     st.markdown(f"Rainfall units: {rain_disp_unit}")
 
     # Tide
@@ -1069,96 +1100,222 @@ def app_ui():
         st.error(f"raster_df is missing required columns: {sorted(missing)}")
         st.stop()
 
-    # ---------- Baseline Map + LID selection UI ----------
+    # ---------- Baseline Map + LID selection UI (percent-uptake only) ----------
     if st.session_state.get(f"{prefix}baseline_map_html"):
         st.subheader("Watershed Baseline Runoff Map")
         components.v1.html(st.session_state[f"{prefix}baseline_map_html"], height=600, scrolling=False)
         st.markdown(st.session_state[f"{prefix}baseline_legend_html"], unsafe_allow_html=True)
-        st.subheader("Add LID Features")
+
+        st.subheader("Add LID Features (by % of community application)")
         if f"{prefix}user_lid_config" not in st.session_state:
             st.session_state[f"{prefix}user_lid_config"] = {}
-        available_subs = raster_df["NAME"].tolist()
-        selected_subs = st.multiselect("Select subcatchments", options=available_subs)
 
-        if selected_subs:
-            for _, row in raster_df[raster_df["NAME"].isin(selected_subs)].iterrows():
-                sub = row["NAME"]
-                rg_max = int(row["Max_RG_DEM_Considered"])
-                rb_max = int(row["MaxNumber_RB"])
-                c1, c2, c3 = st.columns([2,2,2])
-                with c1: st.write(f"**{sub}**")
-                with c2: rg_val = st.number_input(
-                    f"Rain Gardens ({rg_max} max) — {sub}", 0, rg_max, 0, step=5, key=f"rg_{sub}"
+        # ---- Inputs: percent uptake + unit costs ----
+        c1, c2, c3, c4 = st.columns([2,2,2,2])
+        with c1:
+            pct_rg = st.slider("Rain Gardens uptake (%)", 0, 100, 10, step=1,
+                            help="Applied to each subcatchment’s RG max")
+        with c2:
+            pct_rb = st.slider("Rain Barrels uptake (%)", 0, 100, 10, step=1,
+                            help="Applied to each subcatchment’s RB max")
+        with c3:
+            unit_cost_rg = st.number_input("Rain Garden ($/ea)", min_value=0.0, value=500.0, step=100.0)
+        with c4:
+            unit_cost_rb = st.number_input("Rain Barrel ($/ea)", min_value=0.0, value=150.0, step=10.0)
+
+        # ---- Build suggested table (force integer maxes; initial rounding & clipping) ----
+        df0 = raster_df[["NAME", "Max_RG_DEM_Considered", "MaxNumber_RB"]].copy()
+        df0["Max_RG_DEM_Considered"] = df0["Max_RG_DEM_Considered"].astype(int)
+        df0["MaxNumber_RB"]          = df0["MaxNumber_RB"].astype(int)
+
+        df0["Rain Gardens"] = np.rint(df0["Max_RG_DEM_Considered"] * (pct_rg / 100.0)).astype(int)
+        df0["Rain Barrels"] = np.rint(df0["MaxNumber_RB"]          * (pct_rb / 100.0)).astype(int)
+
+        df0["Rain Gardens"] = df0["Rain Gardens"].clip(lower=0, upper=df0["Max_RG_DEM_Considered"])
+        df0["Rain Barrels"] = df0["Rain Barrels"].clip(lower=0, upper=df0["MaxNumber_RB"])
+
+        # numeric cost (internal) + formatted string for UI display
+        df0["Cost ($)"]      = (df0["Rain Gardens"] * unit_cost_rg) + (df0["Rain Barrels"] * unit_cost_rb)
+        df0["Cost Display"]  = df0["Cost ($)"].apply(lambda x: f"${x:,.0f}")
+
+        # final column order for the editor
+        table_init = (
+            df0.rename(columns={"Max_RG_DEM_Considered": "RG Max", "MaxNumber_RB": "RB Max"})
+            [["NAME", "RG Max", "RB Max", "Rain Gardens", "Rain Barrels", "Cost Display", "Cost ($)"]]
+        )
+
+        # Show table sorted ASC by numeric cost (users edit counts only)
+        table_init = table_init.sort_values("Cost ($)", ascending=True).reset_index(drop=True)
+
+        st.markdown("Edit Rain Gardens and Rain Barrels numbers after % application if you want to change any subcatchments individually. Do not exceed the RG Max or RB Max, respectfully.")
+        edited_display = st.data_editor(
+            table_init.drop(columns=["Cost ($)"]),  # keep numeric cost internal; show formatted
+            use_container_width=True,
+            num_rows="fixed",
+            column_config={
+                "NAME": st.column_config.TextColumn("Subcatchment", disabled=True),
+                "RG Max": st.column_config.NumberColumn("RG Max", disabled=True, format="%d"),
+                "RB Max": st.column_config.NumberColumn("RB Max", disabled=True, format="%d"),
+                "Rain Gardens": st.column_config.NumberColumn(min_value=0, step=1, format="%d"),
+                "Rain Barrels": st.column_config.NumberColumn(min_value=0, step=1, format="%d"),
+                "Cost Display": st.column_config.TextColumn("Cost ($)", disabled=True),
+            },
+            key=f"{prefix}lid_percent_editor",
+        )
+
+        # ---- Recover numeric frame, enforce integer clipping, recompute numeric + display cost ----
+        edited = edited_display.copy()
+        edited["RG Max"] = edited["RG Max"].astype(int)
+        edited["RB Max"] = edited["RB Max"].astype(int)
+
+        rg_before = edited["Rain Gardens"].copy()
+        rb_before = edited["Rain Barrels"].copy()
+
+        edited["Rain Gardens"] = (
+            pd.to_numeric(edited["Rain Gardens"], errors="coerce").fillna(0)
+            .round().astype(int).clip(lower=0, upper=edited["RG Max"])
+        )
+        edited["Rain Barrels"] = (
+            pd.to_numeric(edited["Rain Barrels"], errors="coerce").fillna(0)
+            .round().astype(int).clip(lower=0, upper=edited["RB Max"])
+        )
+
+        clipped = ((rg_before != edited["Rain Gardens"]) | (rb_before != edited["Rain Barrels"])).sum()
+        if clipped > 0:
+            st.warning(f"{clipped} row(s) exceeded the max and were clipped.")
+
+        # recompute costs
+        edited["Cost ($)"]     = (edited["Rain Gardens"] * unit_cost_rg) + (edited["Rain Barrels"] * unit_cost_rb)
+        edited["Cost Display"] = edited["Cost ($)"].apply(lambda x: f"${x:,.0f}")
+
+        # keep canonical column order; sort table ASC by numeric cost for display continuity
+        edited = edited[["NAME", "RG Max", "RB Max", "Rain Gardens", "Rain Barrels", "Cost Display", "Cost ($)"]]
+        edited = edited.sort_values("Cost ($)", ascending=True).reset_index(drop=True)
+
+        # ---- Budget input + live progress ----
+        c_budget1, c_budget2, c_budget3 = st.columns([2,2,2])
+        with c_budget1:
+            budget_total = st.number_input("Total budget ($)", min_value=0.0, value=500000.0, step=1000.0)
+        with c_budget2:
+            total_cost = float(edited["Cost ($)"].sum())
+            st.metric("Total cost (current plan)", f"${total_cost:,.0f}")
+        with c_budget3:
+            remaining = max(budget_total - total_cost, 0.0)
+            st.metric("Remaining", f"${remaining:,.0f}")
+
+        if budget_total > 0:
+            pct = total_cost / budget_total
+            pct_clamped = min(pct, 1.0)
+            if pct <= 1.0:
+                prog_text = f"{pct*100:.1f}% of ${budget_total:,.0f} budget"
+            else:
+                prog_text = f"100%+  (over by ${total_cost - budget_total:,.0f})"
+            st.progress(pct_clamped, text=prog_text)
+
+        if budget_total > 0 and total_cost > budget_total:
+            st.error(f"Over budget by ${total_cost - budget_total:,.0f}. Reduce counts or increase the budget.")
+
+        # ---- Cost bar chart: ALL subs, most expensive at the top ----
+        try:
+            import altair as alt
+            chart_df = edited.sort_values("Cost ($)", ascending=False)  # descending
+            if not chart_df.empty:
+                chart = (
+                    alt.Chart(chart_df)
+                    .mark_bar()
+                    .encode(
+                        x=alt.X("Cost ($):Q", title="Cost ($)"),
+                        y=alt.Y("NAME:N", sort='-x', title="Subcatchment"),
+                        tooltip=[
+                            alt.Tooltip("NAME:N", title="Subcatchment"),
+                            alt.Tooltip("Cost ($):Q", title="Cost ($)", format="$.0f"),
+                            alt.Tooltip("Rain Gardens:Q", title="Rain Gardens"),
+                            alt.Tooltip("Rain Barrels:Q", title="Rain Barrels"),
+                            alt.Tooltip("RG Max:Q", title="RG Max"),
+                            alt.Tooltip("RB Max:Q", title="RB Max"),
+                        ],
+                    )
+                    .configure_axisY(labelFontSize=15, labelOverlap=False, labelSeparation=8)
+                    .properties(height=max(320, 20 * len(chart_df)))
                 )
-                with c3: rb_val = st.number_input(
-                    f"Rain Barrels ({rb_max} max) — {sub}", 0, rb_max, 0, step=5, key=f"rb_{sub}"
-                )
-                st.session_state[f"{prefix}user_lid_config"][sub] = {
-                    "rain_gardens": rg_val, "rain_barrels": rb_val
+                st.altair_chart(chart, use_container_width=True)
+        except Exception as e:
+            st.error(f"Chart rendering failed: {e}")
+
+        # ---- Commit to session for simulation ----
+        if st.button("Apply table to LID selections"):
+            st.session_state[f"{prefix}user_lid_config"] = {
+                row["NAME"]: {
+                    "rain_gardens": int(row["Rain Gardens"]),
+                    "rain_barrels": int(row["Rain Barrels"]),
                 }
+                for _, row in edited.iterrows()
+                if int(row["Rain Gardens"]) > 0 or int(row["Rain Barrels"]) > 0
+            }
+            st.success("Applied. Use **Run Custom LID Scenario** to simulate.")
 
-    # ---------- Run Custom LID ----------
-    if st.button("Run Custom LID Scenario"):
-        lid_cfg = st.session_state.get(f"{prefix}user_lid_config", {})
-        if not lid_cfg or all((v.get("rain_gardens",0)==0 and v.get("rain_barrels",0)==0) for v in lid_cfg.values()):
-            st.warning("No LIDs selected.")
-        else:
-            try:
-                lid_lines = generate_lid_usage_lines(lid_cfg, raster_df)
-                fill_lid_cur, ts, rpt1 = run_swmm_scenario(
-                    f"{prefix}lid_nogate_current", st.session_state["rain_lines_cur"],
-                    st.session_state["tide_lines"], lid_lines, "NO",
-                    template_path=template_inp,
-                    event_window_mode="rain+2h",
-                    event_buffer_hours=2.0,
-                    rain_minutes=minutes_15,
-                    rain_curve_in=st.session_state["rain_sim_curve_current_in"],
-                    sim_start_str=simulation_date,
-                )
-                fill_lid_gate_cur,_, rpt2 = run_swmm_scenario(
-                    f"{prefix}lid_gate_current",   st.session_state["rain_lines_cur"],
-                    st.session_state["tide_lines"], lid_lines, "YES",
-                    template_path=template_inp,
-                    event_window_mode="rain+2h",
-                    event_buffer_hours=2.0,
-                    rain_minutes=minutes_15,
-                    rain_curve_in=st.session_state["rain_sim_curve_current_in"],
-                    sim_start_str=simulation_date,
-                )
-                fill_lid_fut,_,      rpt3 = run_swmm_scenario(
-                    f"{prefix}lid_nogate_future",  st.session_state["rain_lines_fut"],
-                    st.session_state["tide_lines"], lid_lines, "NO",
-                    template_path=template_inp,
-                    event_window_mode="rain+2h",
-                    event_buffer_hours=2.0,
-                    rain_minutes=minutes_15,
-                    rain_curve_in=st.session_state["rain_sim_curve_future_in"],
-                    sim_start_str=simulation_date,
-                )
-                fill_lid_gate_fut,_, rpt4 = run_swmm_scenario(
-                    f"{prefix}lid_gate_future",    st.session_state["rain_lines_fut"],
-                    st.session_state["tide_lines"], lid_lines, "YES",
-                    template_path=template_inp,
-                    event_window_mode="rain+2h",
-                    event_buffer_hours=2.0,
-                    rain_minutes=minutes_15,
-                    rain_curve_in=st.session_state["rain_sim_curve_future_in"],
-                    sim_start_str=simulation_date,
-                )
-                st.session_state.update({
-                    f"{prefix}lid_timestamps": ts,
-                    f"{prefix}lid_fill_current": fill_lid_cur,
-                    f"{prefix}lid_gate_fill_current": fill_lid_gate_cur,
-                    f"{prefix}lid_fill_future": fill_lid_fut,
-                    f"{prefix}lid_gate_fill_future": fill_lid_gate_fut,
-                    f"{prefix}df_lid_nogate_current": extract_total_runoff(rpt1),
-                    f"{prefix}df_lid_gate_current":   extract_total_runoff(rpt2),
-                    f"{prefix}df_lid_nogate_future":  extract_total_runoff(rpt3),
-                    f"{prefix}df_lid_gate_future":    extract_total_runoff(rpt4),
-                })
-                st.success("Custom LID scenarios complete.")
-            except Exception as e:
-                st.error(f"LID simulation failed: {e}")
+        # ---------- Run Custom LID ----------
+        if st.button("Run Custom LID Scenario"):
+            lid_cfg = st.session_state.get(f"{prefix}user_lid_config", {})
+            if not lid_cfg or all((v.get("rain_gardens",0)==0 and v.get("rain_barrels",0)==0) for v in lid_cfg.values()):
+                st.warning("No LIDs selected.")
+            else:
+                try:
+                    lid_lines = generate_lid_usage_lines(lid_cfg, raster_df)
+                    fill_lid_cur, ts, rpt1 = run_swmm_scenario(
+                        f"{prefix}lid_nogate_current", st.session_state["rain_lines_cur"],
+                        st.session_state["tide_lines"], lid_lines, "NO",
+                        template_path=template_inp,
+                        event_window_mode="rain+2h",
+                        event_buffer_hours=2.0,
+                        rain_minutes=minutes_15,
+                        rain_curve_in=st.session_state["rain_sim_curve_current_in"],
+                        sim_start_str=simulation_date,
+                    )
+                    fill_lid_gate_cur,_, rpt2 = run_swmm_scenario(
+                        f"{prefix}lid_gate_current",   st.session_state["rain_lines_cur"],
+                        st.session_state["tide_lines"], lid_lines, "YES",
+                        template_path=template_inp,
+                        event_window_mode="rain+2h",
+                        event_buffer_hours=2.0,
+                        rain_minutes=minutes_15,
+                        rain_curve_in=st.session_state["rain_sim_curve_current_in"],
+                        sim_start_str=simulation_date,
+                    )
+                    fill_lid_fut,_,      rpt3 = run_swmm_scenario(
+                        f"{prefix}lid_nogate_future",  st.session_state["rain_lines_fut"],
+                        st.session_state["tide_lines"], lid_lines, "NO",
+                        template_path=template_inp,
+                        event_window_mode="rain+2h",
+                        event_buffer_hours=2.0,
+                        rain_minutes=minutes_15,
+                        rain_curve_in=st.session_state["rain_sim_curve_future_in"],
+                        sim_start_str=simulation_date,
+                    )
+                    fill_lid_gate_fut,_, rpt4 = run_swmm_scenario(
+                        f"{prefix}lid_gate_future",    st.session_state["rain_lines_fut"],
+                        st.session_state["tide_lines"], lid_lines, "YES",
+                        template_path=template_inp,
+                        event_window_mode="rain+2h",
+                        event_buffer_hours=2.0,
+                        rain_minutes=minutes_15,
+                        rain_curve_in=st.session_state["rain_sim_curve_future_in"],
+                        sim_start_str=simulation_date,
+                    )
+                    st.session_state.update({
+                        f"{prefix}lid_timestamps": ts,
+                        f"{prefix}lid_fill_current": fill_lid_cur,
+                        f"{prefix}lid_gate_fill_current": fill_lid_gate_cur,
+                        f"{prefix}lid_fill_future": fill_lid_fut,
+                        f"{prefix}lid_gate_fill_future": fill_lid_gate_fut,
+                        f"{prefix}df_lid_nogate_current": extract_total_runoff(rpt1),
+                        f"{prefix}df_lid_gate_current":   extract_total_runoff(rpt2),
+                        f"{prefix}df_lid_nogate_future":  extract_total_runoff(rpt3),
+                        f"{prefix}df_lid_gate_future":    extract_total_runoff(rpt4),
+                    })
+                    st.success("Custom LID scenarios complete.")
+                except Exception as e:
+                    st.error(f"LID simulation failed: {e}")
 
 
     # ---------- Run Max LID ----------
@@ -1220,7 +1377,7 @@ def app_ui():
             st.error(f"Max LID simulation failed: {e}")
 
     # ---------- Comparison Maps ----------
-    st.subheader("Scenario Comparison Maps (Total Runoff + Flooded Nodes)")
+    st.subheader("Scenario Comparison Maps (Total Runoff + Flooded Stormwater Inlets)")
     left_df_key   = f"{prefix}df_lid_nogate_future"   # LID (+20%)
     right_df_key  = f"{prefix}df_base_nogate_future"  # Baseline (+20%)
     gate_cur_key  = f"{prefix}df_lid_max_gate_current"

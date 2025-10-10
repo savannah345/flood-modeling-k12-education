@@ -46,29 +46,59 @@ def convert_units(value_in_inches: float, unit: str) -> float:
 def feet_to_meters(series_or_array):
     return series_or_array * 0.3048
 
+# Your Type III cumulative dimensionless curve (0..1). Assumed sampled at equal
+# time-fraction steps from 0 to 1. Replace with your own list if needed.
+SCS_TYPE_III_CUM = np.array([
+    0.0000, 0.0050, 0.0110, 0.0150, 0.0200, 0.0232, 0.0308, 0.0367, 0.0430, 0.0497,
+    0.0568, 0.0642, 0.0720, 0.0806, 0.0905, 0.1016, 0.1140, 0.1284, 0.1458, 0.1659,
+    0.1899, 0.2165, 0.2500, 0.2980, 0.5000, 0.7020, 0.7500, 0.7835, 0.8110, 0.8341,
+    0.8542, 0.8716, 0.8860, 0.8984, 0.9095, 0.9194, 0.9280, 0.9358, 0.9432, 0.9503,
+    0.9570, 0.9634, 0.9694, 0.9752, 0.9808, 0.9860, 0.9900, 0.9956, 1.0000
+], dtype=float)
+
 def generate_rainfall(total_inches: float,
                       duration_minutes: int,
-                      method: str = "Normal") -> np.ndarray:
+                      curve: np.ndarray = SCS_TYPE_III_CUM) -> np.ndarray:
     """
-    Returns a 1D array with 15-min bins summing to 'total_inches' across duration_minutes.
-    duration_minutes must be a multiple of 15.
+    SCS Type III hyetograph generator.
+    Returns INCREMENTAL 15-min depths that sum to `total_inches` over `duration_minutes`.
+    `duration_minutes` must be divisible by 15.
+    `curve` is the dimensionless cumulative P/Ptotal vs. time-fraction (0..1), monotone 0->1.
     """
     if duration_minutes % 15 != 0:
         raise ValueError("duration_minutes must be divisible by 15.")
+    if curve.ndim != 1 or len(curve) < 2:
+        raise ValueError("curve must be a 1D array with at least 2 points.")
+    if not (np.isclose(curve[0], 0.0) and np.isclose(curve[-1], 1.0)):
+        raise ValueError("curve must start at 0.0 and end at 1.0 (dimensionless cumulative).")
+    if np.any(np.diff(curve) < -1e-12):
+        raise ValueError("curve must be nondecreasing.")
+
     intervals = duration_minutes // 15
 
-    if method == "Normal":
-        x = np.linspace(-3, 3, intervals)
-        y = np.exp(-0.5 * x**2)
-        y /= y.sum()
-    elif method == "Randomized":
-        rng = np.random.default_rng()
-        y = rng.random(intervals)
-        y /= y.sum()
-    else:
-        raise ValueError("Invalid rainfall distribution method.")
+    # Time fractions at the provided curve points (assumed uniform from 0..1)
+    x_src = np.linspace(0.0, 1.0, len(curve))
 
-    return total_inches * y  # inches by design
+    # We need cumulative at BIN EDGES (0..1 with intervals+1 points)
+    edges = np.linspace(0.0, 1.0, intervals + 1)
+
+    # Interpolate cumulative curve at bin edges
+    cum_edges = np.interp(edges, x_src, curve)
+
+    # Incremental (per 15-min) dimensionless depths
+    inc_dimless = np.diff(cum_edges)
+    # Numerical safety: clip tiny negatives to zero
+    inc_dimless = np.clip(inc_dimless, 0.0, None)
+
+    # Scale to total_inches
+    y = total_inches * inc_dimless
+
+    # Force exact sum by putting any tiny rounding error into the last bin
+    err = total_inches - y.sum()
+    if abs(err) > 1e-10:
+        y[-1] += err
+
+    return y  # inches per 15-min interval
 
 moon_tide_ranges = {
     "🌓 First Quarter: Neap": (-0.8, 1.2),   # feet
@@ -122,65 +152,66 @@ def align_rainfall_to_tide(total_inches: float,
                            duration_minutes: int,
                            tide_curve_15min: np.ndarray,
                            align: str = "peak",
-                           method: str = "Normal",
+                           method: str = "SCS_TypeIII",
                            target_index: Optional[int] = None,
-                           prominence: Optional[float] = None
+                           prominence: Optional[float] = None  # kept for API compatibility; unused here
                            ) -> Tuple[np.ndarray, np.ndarray, int]:
     """
-    Aligns a generated rainfall hyetograph to a 15-min tide curve of ANY length.
-    - total_inches: storm depth (inches)
+    Build an SCS Type III hyetograph (incremental, 15-min bins) and align it to a tide series.
+    - total_inches: storm depth [in]
     - duration_minutes: storm duration (multiple of 15)
-    - tide_curve_15min: N-length tide values at 15-min
-    - align: "peak" (center rain at a high tide) or "low" (center at a low tide)
-    - target_index: if provided, align exactly at this index (overrides 'align')
-    - prominence: passed to peak finder if 'target_index' not provided
+    - tide_curve_15min: array of tide elevations at 15-min steps (length N)
+    - align: "peak" or "low" (align to nearest peak/low near the series mid), or use target_index
+    - method: only "SCS_TypeIII" is supported (kept to avoid breaking callers)
+    - target_index: if set, center the storm at this index (overrides 'align')
     Returns (minutes_15, rain_15, center_index_used)
     """
+    if method != "SCS_TypeIII":
+        raise ValueError("Only 'SCS_TypeIII' is supported. Remove 'Normal' and 'Randomized' uses.")
+
     if duration_minutes % 15 != 0:
         raise ValueError("duration_minutes must be divisible by 15.")
-    n = len(tide_curve_15min)
+    n = int(len(tide_curve_15min))
     if n == 0:
         raise ValueError("Empty tide curve.")
-
     intervals = duration_minutes // 15
+    if intervals > n:
+        raise ValueError(f"Storm of {intervals} bins does not fit into tide series of length {n}.")
 
-    # Build rainfall shape
-    if method == "Normal":
-        x = np.linspace(-3, 3, intervals)
-        rain_profile = np.exp(-0.5 * x**2)
-        rain_profile /= rain_profile.sum()
-    elif method == "Randomized":
-        rng = np.random.default_rng()
-        rain_profile = rng.random(intervals)
-        rain_profile /= rain_profile.sum()
-    else:
-        raise ValueError("Unsupported method for alignment.")
-    rain_profile *= total_inches
+    # 1) Build incremental 15-min rainfall profile using SCS Type III.
+    rain_profile = generate_rainfall(total_inches, duration_minutes)
 
-    # Choose center index
-    if target_index is None:
-        peaks, troughs = find_tide_extrema(tide_curve_15min, prominence=prominence)
-        candidates = peaks if align == "peak" else troughs
-        if candidates.size == 0:
-            # fallback: center of series
-            center_index = n // 2
-        else:
-            mid = n // 2
-            center_index = candidates[np.argmin(np.abs(candidates - mid))]
-    else:
+    # 2) Choose center index on the tide series.
+    if target_index is not None:
         center_index = int(target_index)
         if not (0 <= center_index < n):
             raise ValueError("target_index out of range.")
+    else:
+        # Try project-provided extrema finder if it exists; otherwise use the fallback above.
+        try:
+            # if your module defines find_tide_extrema(peaks, troughs), use it; otherwise the fallback:
+            from rainfall_and_tide_generator import find_tide_extrema  # noqa
+            peaks, troughs = find_tide_extrema(tide_curve_15min, prominence=prominence)
+            candidates = peaks if align == "peak" else troughs
+            candidates = np.asarray(candidates, dtype=int)
+        except Exception:
+            candidates = generate_rainfall(tide_curve_15min, "peak" if align == "peak" else "trough")
 
-    # Place rainfall, clipping to series bounds
+        if candidates.size == 0:
+            center_index = n // 2
+        else:
+            mid = n // 2
+            center_index = int(candidates[np.argmin(np.abs(candidates - mid))])
+
+    # 3) Place the storm fully within bounds (shift if needed so no depth is lost).
+    start = center_index - (intervals // 2)
+    start = max(0, min(start, n - intervals))  # clamp so [start, start+intervals) fits inside [0, n)
+    end = start + intervals
+
     rain = np.zeros(n, dtype=float)
-    start = center_index - intervals // 2
-    for i in range(intervals):
-        idx = start + i
-        if 0 <= idx < n:
-            rain[idx] = rain_profile[i]
+    rain[start:end] = rain_profile  # fits exactly by construction
 
-    minutes_15 = np.arange(n) * 15  # minutes from start (0,15,30,...)
+    minutes_15 = np.arange(n, dtype=int) * 15
     return minutes_15, rain, center_index
 
 GREENSTREAM_URL = "https://dashboard.greenstream.cloud/detail?id=SITE#d935fec2-7a0b-4df0-986c-76f25d773070"
