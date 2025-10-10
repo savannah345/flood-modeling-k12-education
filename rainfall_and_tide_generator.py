@@ -101,10 +101,10 @@ def generate_rainfall(total_inches: float,
     return y  # inches per 15-min interval
 
 moon_tide_ranges = {
-    "🌓 First Quarter: Neap": (-0.8, 1.2),   # feet
-    "🌕 Full Moon: Spring":   (-1.2, 1.8),   # feet
-    "🌗 Last Quarter: Neap":  (-0.9, 1.3),   # feet
-    "🌑 New Moon: Spring":    (-1.1, 1.7),   # feet
+    "🌓 First Quarter: Neap": (-0.4, 3.58),   # feet
+    "🌕 Full Moon: Spring":   (0, 3.9),   # feet
+    "🌗 Last Quarter: Neap":  (1.5, 3.5),   # feet
+    "🌑 New Moon: Spring":    (1.73, 3.83),   # feet
 }
 
 def generate_tide_curve(moon_phase: str, unit: str) -> Tuple[np.ndarray, np.ndarray]:
@@ -426,7 +426,7 @@ def build_timestep_and_resample_15min(df_raw: pd.DataFrame,
 def get_tide_real_or_synthetic(moon_phase: str,
                                unit: str,
                                start_ts: Optional[pd.Timestamp] = None,
-                               navd88_to_sea_level_offset_ft: float = 1.36
+                               navd88_to_sea_level_offset_ft: float = 0
                                ) -> Tuple[np.ndarray, np.ndarray, bool]:
     """
     Try live tide (Greenstream). If it fails, return synthetic tide.
@@ -463,7 +463,7 @@ def get_aligned_rainfall(
     method: str = "Normal",
     start_ts: Optional[pd.Timestamp] = None,
     prominence: Optional[float] = None,
-    navd88_to_sea_level_offset_ft: float = 1.36       # << add this
+    navd88_to_sea_level_offset_ft: float = 0       # << add this
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, bool, int]:
     """
     Returns (minutes_15, tide_15, rain_15, used_live, center_idx).
