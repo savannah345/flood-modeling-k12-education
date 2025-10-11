@@ -154,6 +154,116 @@ def prep_total_runoff_gdf(rpt_df: pd.DataFrame, unit_ui: str, ws_gdf: gpd.GeoDat
 
     return merged, unit
 
+# --- NEW: parse the "Node Flooding Summary" table from a SWMM .rpt ---
+
+def parse_node_flooding_summary(rpt_file: str) -> pd.DataFrame:
+    """
+    Parse 'Node Flooding Summary' -> DataFrame with:
+      Node, Gallons   (Gallons = (10^6 gal) * 1e6)
+    """
+    import re
+    cols = ["Node", "Gallons"]
+    if not os.path.exists(rpt_file):
+        return pd.DataFrame(columns=cols)
+
+    with open(rpt_file, "r", errors="ignore") as f:
+        lines = f.readlines()
+
+    # find section header (case-insensitive)
+    hdr = next((i for i, l in enumerate(lines)
+                if l.strip().lower().startswith("node flooding summary")), None)
+    if hdr is None:
+        return pd.DataFrame(columns=cols)
+
+    def _is_dashes(s: str) -> bool:
+        s = s.strip()
+        return bool(s) and set(s) <= {"-"}  # line of only hyphens
+
+    # advance to the *second* dashed rule (there's a ruler of pipes | in between)
+    i = hdr + 1
+    dash_count = 0
+    while i < len(lines) and dash_count < 2:
+        if _is_dashes(lines[i]):
+            dash_count += 1
+        i += 1
+    if dash_count < 2 or i >= len(lines):
+        return pd.DataFrame(columns=cols)
+
+    out = []
+    num_re = re.compile(r"[-+]?\d+(?:\.\d+)?")
+    while i < len(lines):
+        raw = lines[i].rstrip("\n")
+        i += 1
+
+        # stop on blank, dashed rule, or next section
+        if not raw.strip() or _is_dashes(raw) or raw.lstrip().startswith("*"):
+            break
+
+        # first token is the node id
+        parts = raw.split()
+        if not parts:
+            continue
+        node = parts[0]
+
+        # get all numeric tokens; for a typical row we get:
+        # [hours, maxcfs, day, hr, min, mgal, pond_ft]
+        nums = [float(m.group(0)) for m in num_re.finditer(raw)]
+        if len(nums) < 2:
+            continue
+
+        mgal = nums[-2]                 # second-to-last number is 10^6 gal
+        gallons = mgal * 1_000_000.0
+
+        out.append({"Node": node, "Gallons": gallons})
+
+    return pd.DataFrame(out, columns=cols)
+
+
+
+
+
+# --- NEW: compute the event window (reuse your existing function) ---
+# You already have rain_window_with_buffer(sim_start_str, minutes_15, rain_curve_in, buffer_hours)
+# We'll use that directly.
+
+# --- NEW: filter by event window and sum/convert ---
+
+_GAL_TO_FT3 = 7.48051948     # gallons per cubic foot
+_GAL_TO_M3  = 0.003785411784 # cubic meters per gallon
+
+def summarize_node_flooding_in_window(
+    df_nodes: pd.DataFrame,
+    to_metric: bool
+) -> tuple[float, dict[str, float]]:
+    """
+    Returns:
+      total_volume (m³ if to_metric else ft³),
+      per_node_ft3 (dict) — always ft³ for mapping/flagging
+    """
+    if df_nodes is None or df_nodes.empty:
+        return 0.0, {}
+
+    # Make sure Gallons column exists
+    sub = df_nodes.copy()
+    if "Gallons" not in sub.columns and "TotalFlood_Mgal" in sub.columns:
+        sub["Gallons"] = pd.to_numeric(sub["TotalFlood_Mgal"], errors="coerce").fillna(0.0) * 1_000_000.0
+    else:
+        sub["Gallons"] = pd.to_numeric(sub["Gallons"], errors="coerce").fillna(0.0)
+
+    # Per-node values (for flood overlay)
+    per_node_ft3 = {r["Node"]: float(r["Gallons"]) / _GAL_TO_FT3 for _, r in sub.iterrows()}
+
+    # Convert totals based on unit choice
+    total_gal = float(sub["Gallons"].sum())
+    if to_metric:
+        total = total_gal * _GAL_TO_M3      # → m³
+    else:
+        total = total_gal / _GAL_TO_FT3     # → ft³
+
+    return total, per_node_ft3
+
+
+
 def _global_runoff_range_across(
     dfs: List[pd.DataFrame], unit_ui: str, ws_path: str
 ) -> Tuple[float,float]:
@@ -489,7 +599,7 @@ def run_swmm_scenario(
     lid_lines: List[str],
     gate_flag: str,
     report_interval=timedelta(minutes=5),
-    template_path="swmm_project.inp",
+    template_path="SWMM_Project.inp",
     warmup_hours=5,                        # kept for the all-time curve if you still want it
     event_window_mode: str = "rain+2h",    # "rain+2h" or "none"
     event_buffer_hours: float = 2.0,       # hours after last rain
@@ -513,61 +623,39 @@ def run_swmm_scenario(
     with open(inp_path, "w") as f:
         f.write(text)
 
-    cumulative_flooding_acft, timestamps = [], []
-    cum_cuft_all = 0.0
-    # event-window (system + per-node)
-    cum_cuft_event = 0.0
-    node_cuft_event: Dict[str, float] = {}
-
     step_s = int(report_interval.total_seconds())
 
-    # Build event window if requested
+    # 1) RUN SWMM (even if you don't accumulate per-timestep metrics anymore)
+    with Simulation(inp_path) as sim:
+        sim.step_advance(step_s)
+        for _ in sim:
+            pass  # just advance; no per-step bookkeeping needed
+
+    # 2) MOVE generated outputs to your scenario-specific paths
+    for src, dst in [("updated_model.rpt", rpt_path), ("updated_model.out", out_path)]:
+        p = os.path.join(temp_dir, src)
+        if os.path.exists(p):
+            shutil.move(p, dst)
+
+
+    # 3) BUILD event window
     event_window = None
     if event_window_mode == "rain+2h" and sim_start_str:
         event_window = rain_window_with_buffer(
             sim_start_str, rain_minutes, rain_curve_in, buffer_hours=event_buffer_hours
         )
 
-    with Simulation(inp_path) as sim:
-        sim.step_advance(step_s)
-        nodes = list(Nodes(sim))
-        t0 = None
-        for _ in sim:
-            now = sim.current_time
-            if t0 is None:
-                t0 = now
-            # elapsed_s = int((now - t0).total_seconds())  # keep if you still use warmup elsewhere
+    # 4) PARSE the *moved* report
+    df_nf = parse_node_flooding_summary(rpt_path)
+    to_metric = (st.session_state.get("unit_ui") == "Metric (SI)")
+    total_event_vol, node_cuft_event = summarize_node_flooding_in_window(
+        df_nf, to_metric=to_metric
+    )
 
-            in_window = True
-            if event_window_mode == "rain+2h" and event_window is not None:
-                in_window = (event_window[0] <= now <= event_window[1])
-
-            total_cfs = 0.0
-            for n in nodes:
-                q = float(n.flooding)  # cfs
-                total_cfs += q
-                if in_window and q > 0.0:
-                    nid = getattr(n, "nodeid", None) or getattr(n, "id", None) or str(n)
-                    vol = q * step_s  # ft^3
-                    node_cuft_event[nid] = node_cuft_event.get(nid, 0.0) + vol
-
-            cum_cuft_all += total_cfs * step_s
-            if in_window:
-                cum_cuft_event += total_cfs * step_s
-
-            cumulative_flooding_acft.append(cum_cuft_all / 43560.0)
-            timestamps.append(now.strftime("%m-%d %H:%M"))
-
-    # move SWMM outputs if needed
-    for src, dst in [("updated_model.rpt", rpt_path), ("updated_model.out", out_path)]:
-        p = os.path.join(temp_dir, src)
-        if os.path.exists(p):
-            shutil.move(p, dst)
-
-    st.session_state[f"{scenario_name}_total_flood"] = (cumulative_flooding_acft[-1] if cumulative_flooding_acft else 0.0)
-    st.session_state[f"{scenario_name}_event_total_flood"] = (cum_cuft_event / 43560.0) if cum_cuft_event > 0 else 0.0
+    st.session_state[f"{scenario_name}_event_total_flood"] = total_event_vol
     st.session_state[f"{scenario_name}_node_flood_event_cuft"] = node_cuft_event
-    return cumulative_flooding_acft, timestamps, rpt_path
+
+    return [], [], rpt_path
 
 
 def extract_infiltration_and_runoff(rpt_file: str) -> pd.DataFrame:
@@ -803,7 +891,7 @@ def app_ui():
 
     # Defaults / resources
     simulation_date = "05/31/2025 12:00"
-    template_inp    = "swmm_project.inp"
+    template_inp    = "SWMM_Project.inp"
     WS_SHP_PATH     = st.session_state.get("WS_SHP_PATH", "map_files/Subcatchments.shp")
     NODE_SHP_PATH   = st.session_state.get("NODE_SHP_PATH", "map_files/Nodes.shp")
     PIPE_SHP_PATH   = st.session_state.get("PIPE_SHP_PATH", "map_files/Conduits.shp")
@@ -1447,14 +1535,12 @@ def app_ui():
     }
 
     def _gather_scenario_volumes() -> tuple[pd.DataFrame, str]:
-
         ACF_TO_FT3 = 43560.0
         FT3_TO_M3  = 0.0283168
         to_m3 = (st.session_state.get("unit_ui") == "Metric (SI)")
         unit_label = "m³" if to_m3 else "ft³"
 
         rows = []
-        # Map friendly -> session keys (already defined above)
         friendly_map = {
             "Baseline (No Tide Gate) – Current":  "baseline_nogate_current",
             "Baseline + Tide Gate – Current":     "baseline_gate_current",
@@ -1470,39 +1556,41 @@ def app_ui():
             "Max LID + Tide Gate – +20%":         "lid_max_gate_future",
         }
 
+        # helper ONLY for continuity-table acre-feet values
+        def acft_to_display(v_acft: float) -> float:
+            v_ft3 = v_acft * ACF_TO_FT3
+            return v_ft3 * FT3_TO_M3 if to_m3 else v_ft3
+
         for disp, path in rpt_scenarios.items():
             if not os.path.exists(path):
                 continue
 
             key = friendly_map[disp]
 
-            # Flooding (ac-ft) already tracked in session
-            flood_acft = st.session_state.get(
-                f"{prefix}{key}_event_total_flood",
-                st.session_state.get(f"{prefix}{key}_total_flood", 0.0)
-            ) or 0.0
+            # ✅ Flooding is ALREADY in display units (ft³ or m³)
+            flood_display = float(
+                st.session_state.get(f"{prefix}{key}_event_total_flood",
+                                    st.session_state.get(f"{prefix}{key}_total_flood", 0.0)) or 0.0
+            )
 
-            # Infiltration/Surface Runoff (ac-ft) from RPT
+            # Infiltration/Runoff come from continuity table (acre-feet)
             df_ir = extract_infiltration_and_runoff(path)
-            infil_acft  = df_ir.loc[df_ir["label"]=="infiltration_loss", "volume_acft"].squeeze()
-            runoff_acft = df_ir.loc[df_ir["label"]=="surface_runoff",   "volume_acft"].squeeze()
-            infil_acft  = float(infil_acft)  if pd.notna(infil_acft)  else 0.0
-            runoff_acft = float(runoff_acft) if pd.notna(runoff_acft) else 0.0
-
-            # Convert to display units
-            def conv(v_acft: float) -> float:
-                v_ft3 = v_acft * ACF_TO_FT3
-                return v_ft3 * FT3_TO_M3 if to_m3 else v_ft3
+            infil_acft  = float(df_ir.loc[df_ir["label"]=="infiltration_loss", "volume_acft"].squeeze() or 0.0)
+            runoff_acft = float(df_ir.loc[df_ir["label"]=="surface_runoff",   "volume_acft"].squeeze() or 0.0)
 
             rows.append({
                 "Scenario": disp,
-                "Flooding":        conv(float(flood_acft)),
-                "Infiltration":    conv(infil_acft),
-                "Surface Runoff":  conv(runoff_acft),
+                "Flooding":        flood_display,                 # ← no conversion
+                "Infiltration":    acft_to_display(infil_acft),
+                "Surface Runoff":  acft_to_display(runoff_acft),
             })
 
         if not rows:
             return pd.DataFrame(), unit_label
+
+        df = pd.DataFrame(rows).set_index("Scenario").round(0).astype(int)
+        return df, unit_label
+
 
         df = pd.DataFrame(rows).set_index("Scenario")
 
