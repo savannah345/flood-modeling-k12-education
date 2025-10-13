@@ -336,8 +336,8 @@ def node_layer_from_shp(node_shp_path: str, node_vol_dict: Dict, name_field_hint
             stroked=False,
             filled=True,
             get_fill_color="properties._color_rgba",
-            get_point_radius=6,
-            pointRadiusMinPixels=6,
+            get_point_radius=4,
+            pointRadiusMinPixels=4,
         )
     except Exception:
         return None
@@ -375,7 +375,7 @@ def render_total_runoff_map_single(
     gdf["_label"] = gdf["NAME"]
 
     centroid = gdf.geometry.union_all().centroid
-    view_state = pdk.ViewState(latitude=centroid.y, longitude=centroid.x, zoom=13.5)
+    view_state = pdk.ViewState(latitude=centroid.y, longitude=centroid.x, zoom=13.75)
 
     poly_layer = pdk.Layer(
         "GeoJsonLayer",
@@ -409,7 +409,7 @@ def render_total_runoff_map_single(
     labels = pd.DataFrame({"lon": reps.x, "lat": reps.y, "text": gdf["_label"]})
     text_layer = pdk.Layer("TextLayer", data=labels,
                            get_position='[lon, lat]', get_text="text",
-                           get_size=12, get_color=[0,0,0], get_alignment_baseline="'center'")
+                           get_size=10, get_color=[0,0,0], get_alignment_baseline="'center'")
 
     layers = [poly_layer]
     if pipe_layer is not None: layers.append(pipe_layer)
@@ -652,13 +652,13 @@ def _build_baseline_map_html(df_swmm_local: pd.DataFrame, unit_ui: str, ws_shp_p
     text_layer = pdk.Layer(
         "TextLayer", data=labels_df,
         get_position='[lon, lat]', get_text="text",
-        get_size=12, get_color=[0, 0, 0], get_alignment_baseline="'center'"
+        get_size=10, get_color=[0, 0, 0], get_alignment_baseline="'center'"
     )
 
     tooltip = {
         "html": "<b>{NAME}</b><br/>Total runoff: {Total_R} " + unit_r,
         "style": {"backgroundColor": "white", "color": "black",
-                  "fontFamily": "Inter, Arial, Helvetica, sans-serif", "fontSize": "12px"},
+                  "fontFamily": "Inter, Arial, Helvetica, sans-serif", "fontSize": "8px"},
     }
 
     deck_obj = pdk.Deck(
@@ -1657,14 +1657,18 @@ def app_ui():
                     .encode(
                         x=alt.X(f"{unit_lbl}:Q", sort='-x', title=unit_lbl),
                         y=alt.Y("Scenario:N", sort=order, title=None,
-                                axis=alt.Axis(labelFontSize=14, titleFontSize=20, labelLimit=1000)),
+                                axis=alt.Axis(labelFontSize=18, titleFontSize=22, labelLimit=1000)),
                         color=alt.Color("Group:N",
                                         scale=alt.Scale(domain=group_domain, range=group_colors),
                                         legend=alt.Legend(title="Scenario Group")),
                         tooltip=["Scenario", f"{unit_lbl}:Q", "Group:N"]
                     )
                     .properties(height=height_px)
-                    .configure_axis(labelFontSize=14, titleFontSize=20)
+                    .configure_axis(labelFontSize=18, titleFontSize=22)
+                    .configure_view(strokeWidth=0)
+                    .configure_axis(labelColor="black", titleColor="black")
+                    .configure_title(color="black", fontSize=20, fontWeight="bold")
+                    .configure_legend(labelColor="black", titleColor="black", titleFontSize=16, labelFontSize=14)
                     .configure_view(strokeWidth=0)
                 )
                 if isinstance(title_text, str) and title_text != "":
@@ -1690,12 +1694,16 @@ def app_ui():
                 .encode(
                     x=alt.X(f"{unit_lbl}:Q", sort='-x', title=unit_lbl),
                     y=alt.Y("Scenario:N", sort=order_i, title=None,
-                            axis=alt.Axis(labelFontSize=14, titleFontSize=20, labelLimit=1000)),
+                            axis=alt.Axis(labelFontSize=18, titleFontSize=22, labelLimit=1000)),
 
                     color=alt.Color("Scenario:N", legend=None)
                 )
                 .properties(height=height_i)
-                .configure_axis(labelFontSize=14, titleFontSize=16)
+                .configure_axis(labelFontSize=18, titleFontSize=22)
+                .configure_view(strokeWidth=0)
+                .configure_axis(labelColor="black", titleColor="black")
+                .configure_title(color="black", fontSize=20, fontWeight="bold")
+                .configure_legend(labelColor="black", titleColor="black", titleFontSize=16, labelFontSize=14)
                 .configure_view(strokeWidth=0)
             )
             st.altair_chart(chart_i, use_container_width=True, key=f"{prefix}_vol_infil_chart")
@@ -1713,12 +1721,16 @@ def app_ui():
                 .encode(
                     x=alt.X(f"{unit_lbl}:Q", sort='-x', title=unit_lbl),
                     y=alt.Y("Scenario:N", sort=order_r, title=None,
-                            axis=alt.Axis(labelFontSize=14, titleFontSize=16, labelLimit=1000)),
+                            axis=alt.Axis(labelFontSize=18, titleFontSize=22, labelLimit=1000)),
 
                     color=alt.Color("Scenario:N", legend=None)
                 )
                 .properties(height=height_r)
-                .configure_axis(labelFontSize=14, titleFontSize=16)
+                .configure_axis(labelFontSize=18, titleFontSize=22)
+                .configure_view(strokeWidth=0)
+                .configure_axis(labelColor="black", titleColor="black")
+                .configure_title(color="black", fontSize=20, fontWeight="bold")
+                .configure_legend(labelColor="black", titleColor="black", titleFontSize=16, labelFontSize=14)
                 .configure_view(strokeWidth=0)
             )
             st.altair_chart(chart_r, use_container_width=True, key=f"{prefix}_vol_runoff_chart")
