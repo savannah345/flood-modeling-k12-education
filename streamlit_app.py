@@ -1,4 +1,57 @@
-# app.py — optimized with side-by-side runoff maps + flooded Y/N nodes
+import threading
+import atexit
+from monitor import sample_tree, print_header
+import psutil, time, json
+
+def ensure_temp_dir():
+    if "temp_dir" not in st.session_state:
+        st.session_state.temp_dir = tempfile.mkdtemp()
+
+def delete_user_files(user_id):
+    patterns = [f"user_{user_id}_*.inp", f"user_{user_id}_*.rpt", f"user_{user_id}_*.out"]
+    for pattern in patterns:
+        for file in glob.glob(pattern):
+            try: os.remove(file)
+            except Exception: pass
+
+def start_self_monitor(interval=1.0, outfile="coastwise_perf.csv"):
+    """Background monitor that samples current process periodically."""
+    p = psutil.Process()
+    running = True
+
+    def sampler():
+        print_header()
+        t0 = time.perf_counter()
+        peak_rss = 0
+        samples = 0
+        with open(outfile, "w") as f:
+            f.write("ts,wall_s,cpu_percent,rss_bytes,proc_count\n")
+            while running:
+                m = sample_tree(p)
+                wall = time.perf_counter() - t0
+                peak_rss = max(peak_rss, m["rss_bytes"])
+                line = f"{time.time()},{wall:.3f},{m['cpu_percent']:.1f},{m['rss_bytes']},{m['proc_count']}\n"
+                f.write(line)
+                f.flush()
+                samples += 1
+                time.sleep(interval)
+        summary = {
+            "wall_s": round(time.perf_counter() - t0, 3),
+            "peak_rss_bytes": int(peak_rss),
+            "samples": samples,
+        }
+        print("MON_SUMMARY_JSON," + json.dumps(summary, separators=(",", ":")), flush=True)
+
+    th = threading.Thread(target=sampler, daemon=True)
+    th.start()
+
+    def stop():
+        nonlocal running
+        running = False
+
+    atexit.register(stop)
+
+start_self_monitor(interval=1.0, outfile="coastwise_perf.csv")
 
 # --- stdlib
 import os, io, re, glob, sys, shutil, tempfile, subprocess
@@ -834,18 +887,6 @@ def generate_lid_usage_lines(lid_config: Dict[str, Dict[str, int]], excel_df: pd
             )
 
     return lines
-
-
-def ensure_temp_dir():
-    if "temp_dir" not in st.session_state:
-        st.session_state.temp_dir = tempfile.mkdtemp()
-
-def delete_user_files(user_id):
-    patterns = [f"user_{user_id}_*.inp", f"user_{user_id}_*.rpt", f"user_{user_id}_*.out"]
-    for pattern in patterns:
-        for file in glob.glob(pattern):
-            try: os.remove(file)
-            except Exception: pass
 
 def login_ui():
     st.title("🌊 CoastWise Login")
