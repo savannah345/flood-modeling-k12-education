@@ -25,14 +25,6 @@ from rainfall_and_tide_generator import (
 
 st.set_page_config(page_title="CoastWise", layout="centered")
 
-@contextmanager
-def pushd(path):
-    cwd = os.getcwd()
-    os.chdir(path)
-    try:
-        yield
-    finally:
-        os.chdir(cwd)
 
 def _read_text_keep(path: str) -> str:
     """Read file contents and keep artifacts in temp for later use."""
