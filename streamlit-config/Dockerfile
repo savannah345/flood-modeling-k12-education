@@ -1,4 +1,4 @@
-FROM ubuntu:latest
+FROM docker.io/library/ubuntu:latest
 
 ENV DEBIAN_FRONTEND=noninteractive
 
