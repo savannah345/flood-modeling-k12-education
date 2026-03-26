@@ -101,10 +101,10 @@ def generate_rainfall(total_inches: float,
     return y  # inches per 15-min interval
 
 moon_tide_ranges = {
-    "🌓 First Quarter: Neap": (-0.4, 3.58),   # feet
-    "🌕 Full Moon: Spring":   (0, 3.9),   # feet
-    "🌗 Last Quarter: Neap":  (1.5, 3.5),   # feet
-    "🌑 New Moon: Spring":    (1.73, 3.83),   # feet
+    "🌓 First Quarter": (-0.4, 3.58),   # feet
+    "🌕 Full Moon":   (0, 3.9),   # feet
+    "🌗 Last Quarter":  (1.5, 3.5),   # feet
+    "🌑 New Moon":    (1.73, 3.83),   # feet
 }
 
 def generate_tide_curve(moon_phase: str, unit: str) -> Tuple[np.ndarray, np.ndarray]:
