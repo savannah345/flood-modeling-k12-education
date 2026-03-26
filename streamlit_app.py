@@ -636,9 +636,10 @@ def _build_baseline_map_html(df_swmm_local: pd.DataFrame, unit_ui: str, ws_shp_p
 
     gdf["_fill"] = make_color(gdf["Total_R"], vmin, vmax)
     gdf["_label"] = gdf["NAME"]
+    gdf["Total_R_disp"] = gdf["Total_R"].apply(lambda v: f"{float(v):,.2f}")
 
     centroid = gdf.geometry.union_all().centroid
-    view_state = pdk.ViewState(latitude=centroid.y, longitude=centroid.x, zoom=14.75)
+    view_state = pdk.ViewState(latitude=centroid.y, longitude=centroid.x, zoom=14.5)
 
     poly_layer = pdk.Layer(
         "GeoJsonLayer", data=gdf.__geo_interface__,
@@ -647,18 +648,31 @@ def _build_baseline_map_html(df_swmm_local: pd.DataFrame, unit_ui: str, ws_shp_p
         get_line_color=[255, 255, 255, 255],
         line_width_min_pixels=1,
     )
+
     reps = gdf.geometry.representative_point()
     labels_df = pd.DataFrame({"lon": reps.x, "lat": reps.y, "text": gdf["_label"]})
     text_layer = pdk.Layer(
         "TextLayer", data=labels_df,
         get_position='[lon, lat]', get_text="text",
-        get_size=10, get_color=[0, 0, 0], get_alignment_baseline="'center'"
+        get_size=14, get_color=[0, 0, 0], get_alignment_baseline="'center'"
     )
 
     tooltip = {
-        "html": "<b>{NAME}</b><br/>Total runoff: {Total_R} " + unit_r,
-        "style": {"backgroundColor": "white", "color": "black",
-                  "fontFamily": "Inter, Arial, Helvetica, sans-serif", "fontSize": "8px"},
+        "html": (
+            "<div style='font-size:16px; line-height:1.5;'>"
+            "<div style='font-weight:600;'>{NAME}</div>"
+            f"<div>Runoff: {{Total_R_disp}} {unit_r}</div>"
+            "</div>"
+        ),
+        "style": {
+            "backgroundColor": "white",
+            "color": "black",
+            "fontFamily": "Inter, Arial, Helvetica, sans-serif",
+            "fontSize": "16px",
+            "padding": "8px 10px",
+            "borderRadius": "8px",
+            "boxShadow": "0 2px 8px rgba(0,0,0,0.20)",
+        },
     }
 
     deck_obj = pdk.Deck(
@@ -670,14 +684,22 @@ def _build_baseline_map_html(df_swmm_local: pd.DataFrame, unit_ui: str, ws_shp_p
     )
     map_html = deck_obj.to_html(as_string=True)
 
+    map_html = map_html.replace(
+        "</head>",
+        "<style>.deck-tooltip{font-size:16px !important; line-height:1.5 !important;"
+        "padding:8px 10px !important; border-radius:8px !important;}</style></head>"
+    )
+
+    # Legend (optional: bump text size a bit)
     cmap = mpl.colormaps.get_cmap("Blues")
     norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax, clip=True)
     c0 = [int(v * 255) for v in cmap(norm(vmin))[:3]]
     c1 = [int(v * 255) for v in cmap(norm(vmax))[:3]]
+
     legend_html = f"""
     <div style="display:flex; justify-content:center; margin-top:6px;">
       <div style="min-width:260px; max-width:640px; width:60%;">
-        <div style="text-align:center; font-size:13px;"><b>Runoff Legend ({unit_r})</b></div>
+        <div style="text-align:center; font-size:14px;"><b>Runoff Legend ({unit_r})</b></div>
         <div style="display:flex; align-items:center; gap:10px;">
           <span>{vmin:.2f}</span>
           <div style="flex:1; height:12px;
@@ -828,6 +850,33 @@ def app_ui():
     st.title("CoastWise: Watershed Design Toolkit")
     st.markdown('<a href="https://github.com/savannah345/flood-modeling-k12-education/blob/main/CoastWise_Tutorial.docx" target="_blank">Tutorial</a>', unsafe_allow_html=True)
 
+    
+    st.markdown("""
+    <style>
+    /* Make all help (?) tooltips larger and easier to read */
+    [data-testid="stTooltipContent"] {
+        font-size: 10.5rem !important;
+        line-height: 1.55 !important;
+        max-width: 360px !important;
+        white-space: normal !important;  /* allow wrapping */
+    }
+
+    /* Fallback for older Streamlit builds using BaseWeb tooltip container */
+    div[data-baseweb="tooltip"] {
+        font-size: 10rem !important;
+        line-height: 1.55 !important;
+        max-width: 360px !important;
+    }
+
+    /* Optional: slightly increase tooltip padding */
+    div[data-baseweb="tooltip"] .content,
+    [data-testid="stTooltipContent"] {
+        padding: 0.5rem 0.75rem !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+
     if "cfg" not in st.session_state:
         st.session_state.cfg = {
             "unit": "U.S. Customary",
@@ -839,68 +888,135 @@ def app_ui():
         }
         st.session_state.pop(f"{prefix}grid_ready", None)
     cfg = st.session_state.cfg
-    st.success("Settings applied.")
+    st.success(
+        "Use the controls below to configure your storm scenario. "
+        "These settings determine the rainfall event, tide conditions, and alignment "
+        "that will be used to generate boundary inputs for the SWMM simulation."
+    )
 
     with st.form("scenario_settings"):
-        unit = st.selectbox(
+        # ---------------- Units ----------------
+        unit = st.radio(
             "Preferred Units",
             ["U.S. Customary", "Metric (SI)"],
-            index=0 if cfg["unit"] == "U.S. Customary" else 1
+            index=(0 if cfg["unit"] == "U.S. Customary" else 1),
+            horizontal=True,
+            help=(
+                "Choose how rainfall and tide inputs should be displayed. "
+                "U.S. Customary = rainfall in inches, tides in feet. "
+                "Metric (SI) = rainfall in centimeters, tides in meters."
+            )
         )
-        moon_phase = st.selectbox(
+
+        # ---------------- Tide Source ----------------
+        moon_phase_keys = list(moon_tide_ranges.keys())
+        moon_phase = st.radio(
             "Synthetic Tide (fallback)",
-            list(moon_tide_ranges.keys()),
-            index=(list(moon_tide_ranges.keys()).index(cfg["moon_phase"])
-                   if cfg["moon_phase"] in moon_tide_ranges else 0)
+            moon_phase_keys,
+            index=(moon_phase_keys.index(cfg["moon_phase"]) if cfg["moon_phase"] in moon_phase_keys else 0),
+            horizontal=True,
+            help=(
+                "If real-time tide data from the Norfolk gauge is unavailable, "
+                "CoastWise generates a fallback tide curve. The moon phase determines "
+                "the approximate high/low tide range used to build the synthetic series."
+            )
         )
-        duration_minutes = st.selectbox(
+
+        # ---------------- Storm Duration Slider ----------------
+        duration_options = sorted(
+            map(int, pd.Series(pf_df['Duration_Minutes']).dropna().unique().tolist())
+        )
+        duration_default = cfg["duration_minutes"] if cfg["duration_minutes"] in duration_options else duration_options[0]
+
+        duration_minutes = st.select_slider(
             "Storm Duration",
-            options=pf_df["Duration_Minutes"],
-            index=int(np.where(pf_df["Duration_Minutes"].values == cfg["duration_minutes"])[0][0])
-                  if cfg["duration_minutes"] in pf_df["Duration_Minutes"].values else 0,
-            format_func=lambda x: f"{int(x)//60} hr"
+            options=duration_options,
+            value=duration_default,
+            format_func=lambda x: f"{int(x)//60} hr",
+            help=(
+                "Controls the total rainfall event length used to scale the NOAA Atlas 14 depth. "
+                "Shorter storms (2–3 hr) generally produce more intense peaks, while longer durations "
+                "spread the rain over a wider window."
+            )
         )
 
-        rp_opts = return_period_labels(int(duration_minutes), unit)
-        rp_keys = list(rp_opts.keys())
-        rp_idx  = rp_keys.index(cfg["return_period"]) if cfg["return_period"] in rp_keys else 0
-        rp_label = st.selectbox("Return Year", list(rp_opts.values()), index=rp_idx)
-        return_period = [k for k, v in rp_opts.items() if v == rp_label][0]
+        d_low, d_high = st.columns([1, 3])
+        with d_low:
+            st.caption("Short storm")
+        with d_high:
+            st.caption("<div style='text-align:right;'>Long storm</div>", unsafe_allow_html=True)
 
+
+        # ---------------- Return Period Slider ----------------
+        rp_cols = [c for c in pf_df.columns if c != "Duration_Minutes" and str(c).isdigit()]
+        rp_years = sorted(map(int, rp_cols)) if rp_cols else [1]
+        rp_default = cfg.get("return_period")
+        rp_default = str(rp_default) if rp_default in map(str, rp_years) else str(rp_years[0])
+
+        return_period = st.select_slider(
+            "Return Period (years)",
+            options=list(map(str, rp_years)),
+            value=str(rp_default),
+            format_func=lambda k: f"{k}-year",
+            help=(
+                "Selects the rainfall intensity based on NOAA Atlas 14. "
+                "Higher return periods represent rarer, more severe storms. "
+                "For example, a 10-year storm is more intense than a 2-year storm."
+            )
+        )
+        r_low, r_high = st.columns([1, 3])
+        with r_low:
+            st.caption("Less intense")
+        with r_high:
+            st.caption("<div style='text-align:right;'>More intense</div>", unsafe_allow_html=True)
+
+        # ---------------- Tide Alignment ----------------
         align_choice = st.radio(
             "Tide Alignment",
             ["Peak aligned with High Tide", "Peak aligned with Low Tide"],
-            index=0 if cfg["align_mode"] == "peak" else 1
+            index=(0 if cfg["align_mode"] == "peak" else 1),
+            horizontal=True,
+            help=(
+                "Controls how the rainfall peak is aligned with the tidal cycle. "
+                "High-tide alignment typically creates more adverse compound flooding. "
+                "Low-tide alignment represents a more favorable drainage condition."
+            )
         )
+
         submitted = st.form_submit_button("Apply Settings")
+    # -------------------- END FORM; DEDENT BELOW THIS LINE --------------------
 
     if submitted:
         st.session_state.cfg = {
             "unit": unit,
             "moon_phase": moon_phase,
             "duration_minutes": int(duration_minutes),
-            "return_period": str(return_period),
-            "align_mode": ("peak" if "High" in align_choice else "low"),
+            "return_period": str(return_period),  # keep as string; downstream expects str
+             "align_mode": ("peak" if "High" in align_choice else "low"),
             "settings_ready": True,
-        }
+            }
         cfg = st.session_state.cfg
         st.success("Settings applied.")
 
     if not cfg.get("settings_ready", False):
         st.info("Apply settings to generate rainfall and tide series.")
         if st.button("🚪 Logout"):
-            try: shutil.rmtree(st.session_state.temp_dir)
-            except Exception: pass
+            try:
+                shutil.rmtree(st.session_state.temp_dir)
+            except Exception:
+                pass
             st.session_state.clear()
             st.success("Logged out and cleaned up all files.")
             st.experimental_rerun()
-        return
+        st.stop()  # cleanly halt Streamlit
 
+        # Safe to read cfg from here onward
     align_mode       = cfg["align_mode"]
     unit             = cfg["unit"]
     moon_phase       = cfg["moon_phase"]
     duration_minutes = int(cfg["duration_minutes"])
     return_period    = cfg["return_period"]
+
 
     total_inches = float(
         pf_df.loc[pf_df["Duration_Minutes"] == duration_minutes, return_period].values[0]
@@ -986,25 +1102,83 @@ def app_ui():
 
 
     time_hours = np.array(minutes_15, dtype=float) / 60.0
-    st.subheader("Rainfall Distribution")
-    rain_df = pd.DataFrame({
-        "Hour": time_hours,
-        "Current": st.session_state["display_rain_curve_current"],
-        "Future (+20%)": st.session_state["display_rain_curve_future"],
-    }).set_index("Hour")
-    st.line_chart(rain_df, height=320, use_container_width=True)
-    st.markdown(f"Rainfall units: {rain_disp_unit}")
 
-    st.subheader("Tide Profile")
-    tide_df = pd.DataFrame({
+    # Build tidy dataframe for the chart
+    df_rt = pd.DataFrame({
         "Hour": time_hours,
-        "Tide": st.session_state["display_tide_curve"],
-    }).set_index("Hour")
-    st.line_chart(tide_df, height=220, use_container_width=True)
-    st.markdown(
-        f"Source: Real-time tide (last 48 h) {tide_disp_unit}"
-        if tide_source == "live"
-        else f"Source: Synthetic tide    Units: {tide_disp_unit}    Phase: ({moon_phase})"
+        "Rain_Current": st.session_state["display_rain_curve_current"],
+        "Rain_Future":  st.session_state["display_rain_curve_future"],  # always show +20%
+        "Tide":         st.session_state["display_tide_curve"],
+    })
+
+    # Optional quick metrics row (keep or remove as you prefer)
+    c_m1, c_m2, c_m3 = st.columns(3)
+    with c_m1:
+        st.metric(f"Total Rainfall ({rain_disp_unit})", f"{np.nansum(df_rt['Rain_Current']):.2f}")
+    with c_m2:
+        st.metric(f"Future (+20%) Total ({rain_disp_unit})", f"{np.nansum(df_rt['Rain_Future']):.2f}")
+    with c_m3:
+        st.metric(f"Tide Range ({tide_disp_unit})", f"{(np.nanmax(df_rt['Tide'])-np.nanmin(df_rt['Tide'])):.2f}")
+
+    # ----- Altair combined chart (left y-axis = rainfall, right y-axis = tide) -----
+    import altair as alt
+    alt.data_transformers.disable_max_rows()
+
+    base = alt.Chart(df_rt).encode(
+        x=alt.X("Hour:Q", title="Hour", scale=alt.Scale(nice=False))
+    )
+
+    # Rainfall (Current) — darker area, left axis
+    rain_current = base.mark_area(color="steelblue", opacity=0.50).encode(
+        y=alt.Y("Rain_Current:Q",
+                title=f"Rainfall ({rain_disp_unit})",
+                axis=alt.Axis(titleColor="steelblue")),
+        tooltip=[
+            alt.Tooltip("Hour:Q", format=".1f"),
+            alt.Tooltip("Rain_Current:Q", title=f"Current ({rain_disp_unit})", format=".3f"),
+        ],
+    )
+
+    # Rainfall (Future +20%) — lighter area, left axis
+    rain_future = base.mark_area(color="#f74f4f", opacity=0.20).encode(
+        y=alt.Y("Rain_Future:Q",
+                axis=alt.Axis(title=None, labels=False, ticks=False)),  # share left axis visually
+        tooltip=[
+            alt.Tooltip("Hour:Q", format=".1f"),
+            alt.Tooltip("Rain_Future:Q", title=f"Future (+20%) ({rain_disp_unit})", format=".3f"),
+        ],
+    )
+
+    # Tide — line on right axis
+    tide_line = base.mark_line(color="#2e9144", strokeWidth=3).encode(
+        y=alt.Y("Tide:Q",
+                title=f"Tide ({tide_disp_unit})",
+                axis=alt.Axis(titleColor="#2e9144", orient="right")),
+        tooltip=[
+            alt.Tooltip("Hour:Q", format=".1f"),
+            alt.Tooltip("Tide:Q", title=f"Tide ({tide_disp_unit})", format=".2f"),
+        ],
+    )
+
+    combo_chart = alt.layer(tide_line, rain_future, rain_current).resolve_scale(
+        y="independent"  # let rainfall and tide use separate axes/scales
+    ).properties(
+        title="Rainfall (Current & +20%) and Tide Combined",
+        height=380,
+    ).configure_title(
+        fontSize=18
+    ).configure_axis(
+        labelFontSize=13,
+        titleFontSize=14,
+        grid=False  # remove gridlines
+    ).interactive()  # zoom + pan
+
+    st.altair_chart(combo_chart, use_container_width=True)
+
+    # Clear, short explanation under the chart (optional)
+    st.caption(
+        f"Rainfall shown as areas (left axis: {rain_disp_unit}); Tide shown as line (right axis: {tide_disp_unit}). "
+        "Zoom/pan to inspect alignment and peaks."
     )
 
     if st.button("Run Baseline Scenario" , key=f"{prefix}btn_run_baseline"):
@@ -1074,9 +1248,26 @@ def app_ui():
             st.error(f"Baseline simulation failed: {e}")
 
     if f"{prefix}baseline_map_html" in st.session_state:
-        st.subheader("Watershed Baseline Runoff Map")
-        components.v1.html(st.session_state[f"{prefix}baseline_map_html"], height=600, scrolling=False)
-        st.markdown(st.session_state[f"{prefix}baseline_legend_html"], unsafe_allow_html=True)
+        st.subheader("Runoff and Land Cover Context")
+
+        st.markdown("""
+        Higher runoff values typically occur in areas with more **impervious surfaces** such as 
+        roads, parking lots, rooftops, and other paved or compacted areas. These surfaces prevent 
+        rainfall from soaking into the soil, increasing the amount of direct surface runoff. This 
+        is why developed or urbanized areas often show darker (higher) runoff values. 
+        The land cover map to the right helps show where these impervious areas are located.
+        """)
+
+        # --- two columns side-by-side ---
+        c1, c2 = st.columns([1, 1])
+
+        with c1:
+            st.markdown("### Modeled Runoff")
+            components.v1.html(st.session_state[f"{prefix}baseline_map_html"], height=600, scrolling=False)
+
+        with c2:
+            st.markdown("### Land Use / Land Cover")
+            st.image("lulc_image.png", use_container_width=True)
 
     REQUIRED_RASTER_COLS = {
         "NAME", "Max_RG_DEM_Considered", "MaxNumber_RB",
