@@ -847,7 +847,7 @@ def app_ui():
     NODE_SHP_PATH   = st.session_state.get("NODE_SHP_PATH", "map_files/Nodes.shp")
     PIPE_SHP_PATH   = st.session_state.get("PIPE_SHP_PATH", "map_files/Conduits.shp")
 
-    st.title("CoastWise: Watershed Design Toolkit")
+    st.title("CoastWise")
     st.markdown('<a href="https://github.com/savannah345/flood-modeling-k12-education/blob/main/CoastWise_Tutorial.docx" target="_blank">Tutorial</a>', unsafe_allow_html=True)
 
     
@@ -1263,7 +1263,7 @@ def app_ui():
 
         with c1:
             st.markdown("### Modeled Runoff")
-            components.v1.html(st.session_state[f"{prefix}baseline_map_html"], height=600, scrolling=False)
+            components.v1.html(st.session_state[f"{prefix}baseline_map_html"], height=500, scrolling=False)
 
         with c2:
             st.markdown("### Land Use / Land Cover")
