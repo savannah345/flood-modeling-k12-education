@@ -119,46 +119,6 @@ def make_color(values, vmin, vmax, a=0.9):
             out.append([int(r*255), int(g*255), int(b*255), int(a*255)])
     return out
 
-
-def _ensure_scenario_loaded(name: str, prefix: str):
-    """Guarantee a scenario exists in the in-memory store by rehydrating from DF or RPT."""
-    store = _sc_store(prefix)
-    if name in store:
-        return
-
-    # Map scenario -> DF session key
-    df_keys = {
-        "baseline_nogate_current": f"{prefix}df_base_nogate_current",
-        "baseline_gate_current":   f"{prefix}df_base_gate_current",
-        "baseline_nogate_future":  f"{prefix}df_base_nogate_future",
-        "baseline_gate_future":    f"{prefix}df_base_gate_future",
-        "lid_nogate_current":      f"{prefix}df_lid_nogate_current",
-        "lid_gate_current":        f"{prefix}df_lid_gate_current",
-        "lid_nogate_future":       f"{prefix}df_lid_nogate_future",
-        "lid_gate_future":         f"{prefix}df_lid_gate_future",
-        "lid_max_nogate_current":  f"{prefix}df_lid_max_nogate_current",
-        "lid_max_gate_current":    f"{prefix}df_lid_max_gate_current",
-        "lid_max_nogate_future":   f"{prefix}df_lid_max_nogate_future",
-        "lid_max_gate_future":     f"{prefix}df_lid_max_gate_future",
-    }
-
-    # 1) Try DF in session_state
-    df = st.session_state.get(df_keys.get(name, ""), None)
-    nodes = st.session_state.get(f"{prefix}{name}_node_flood_event_cuft", {}) or {}
-
-    if isinstance(df, pd.DataFrame) and not df.empty:
-        remember_scenario(name, df, nodes, prefix)
-        return
-
-    # 2) Fall back to RPT text in memory
-    rpts = st.session_state.get("rpts", {})
-    rpt_text = rpts.get(f"{prefix}{name}", "")
-    if rpt_text:
-        df2 = extract_total_runoff_from_text(rpt_text)
-        if isinstance(df2, pd.DataFrame) and not df2.empty:
-            remember_scenario(name, df2, nodes, prefix)
-
-
 def prep_total_runoff_gdf(rpt_df: pd.DataFrame, unit_ui: str, ws_gdf: gpd.GeoDataFrame):
 
     g = ws_gdf.copy()
@@ -256,8 +216,6 @@ def summarize_node_flooding_in_window(
 
     return total, per_node_ft3
 
-
-
 def _global_runoff_range_across(
     dfs: List[pd.DataFrame], unit_ui: str, ws_path: str
 ) -> Tuple[float,float]:
@@ -342,7 +300,15 @@ def node_layer_from_shp(node_shp_path: str, node_vol_dict: Dict, name_field_hint
     except Exception:
         return None
 
+future_mult = 1.2
 
+def _rain_lines_pair(sim_minutes, rain_curve_in, sim_start_str, future_mult=future_mult):
+    # rain_curve_in can be list/array; multiply with a list comp to avoid np scope
+    cur = format_timeseries("rain_gage_timeseries", sim_minutes, rain_curve_in, sim_start_str)
+    fut_vals = [float(v) * float(future_mult) for v in rain_curve_in]
+    fut = format_timeseries("rain_gage_timeseries", sim_minutes, fut_vals, sim_start_str)
+    return cur, fut
+    
 def render_total_runoff_map_single(
     df_in_inches,
     title,
@@ -375,7 +341,7 @@ def render_total_runoff_map_single(
     gdf["_label"] = gdf["NAME"]
 
     centroid = gdf.geometry.union_all().centroid
-    view_state = pdk.ViewState(latitude=centroid.y, longitude=centroid.x, zoom=13.75)
+    view_state = pdk.ViewState(latitude=centroid.y, longitude=centroid.x, zoom=13.45)
 
     poly_layer = pdk.Layer(
         "GeoJsonLayer",
@@ -473,6 +439,152 @@ def compute_percent_pair_for_budget(B: float, cRG: float, cRB: float,
         return round(pRG, 1), round(pRB, 1)
     else:
         raise ValueError("pin_type must be 'RG' or 'RB'")
+
+# --- Budget & Mix Matching Helpers ---
+
+def group_cap_totals(caps_RG: dict, caps_RB: dict, group_names: set[str]) -> tuple[int,int]:
+    g = set(group_names or set())
+    CapRG_group = sum(caps_RG.get(s, 0) for s in g)
+    CapRB_group = sum(caps_RB.get(s, 0) for s in g)
+    return int(CapRG_group), int(CapRB_group)
+
+def realize_percent_uptake_for_group(pRG_percent: float, pRB_percent: float,
+                                     caps_RG: dict, caps_RB: dict,
+                                     group_names: set[str]) -> dict:
+    pRG = max(0.0, min(100.0, float(pRG_percent)))
+    pRB = max(0.0, min(100.0, float(pRB_percent)))
+    out = {}
+    g = set(group_names or set())
+    for s in g:
+        rg = int(np.floor((pRG/100.0) * (caps_RG.get(s, 0) or 0)))
+        rb = int(np.floor((pRB/100.0) * (caps_RB.get(s, 0) or 0)))
+        out[s] = {"rain_gardens": rg, "rain_barrels": rb}
+    return out
+
+def plan_cost(plan: dict, cRG: float, cRB: float) -> float:
+    return cRG * sum(v["rain_gardens"] for v in plan.values()) + cRB * sum(v["rain_barrels"] for v in plan.values())
+
+def largest_remainder_toward_budget(plan: dict, caps_RG: dict, caps_RB: dict,
+                                    cRG: float, cRB: float, target_budget: float) -> dict:
+    """
+    Greedy add units (respecting caps) until you reach or slightly pass the target budget.
+    Adds lower-cost units first to reduce jumps. Change ordering if you prefer RG-first.
+    """
+    spend = plan_cost(plan, cRG, cRB)
+    if spend >= target_budget:
+        return plan
+
+    # Build remaining capacity slots
+    candidates = []
+    for s, v in plan.items():
+        rem_rg = (caps_RG.get(s, 0) or 0) - v["rain_gardens"]
+        rem_rb = (caps_RB.get(s, 0) or 0) - v["rain_barrels"]
+        if rem_rg > 0:
+            candidates += [("RG", s, cRG)] * rem_rg
+        if rem_rb > 0:
+            candidates += [("RB", s, cRB)] * rem_rb
+
+    # Add cheapest first to approach budget smoothly
+    candidates.sort(key=lambda x: x[2])
+
+    for t, s, cost in candidates:
+        if spend + cost > target_budget:
+            break
+        if t == "RG":
+            plan[s]["rain_gardens"] += 1
+        else:
+            plan[s]["rain_barrels"] += 1
+        spend += cost
+
+    return plan
+
+def solve_group_percents_to_budget(pRG_global: float, pRB_global: float,
+                                   caps_RG: dict, caps_RB: dict,
+                                   group_names: set[str],
+                                   cRG: float, cRB: float, target_budget: float) -> tuple[float, float, dict]:
+    """
+    Scale both percents together by α so the group's continuous spend ≈ target_budget,
+    then realize as integers and nudge toward budget. Keeps your selected RG/RB 'style'.
+    """
+    CapRG_g, CapRB_g = group_cap_totals(caps_RG, caps_RB, group_names)
+    denom = cRG * (pRG_global/100.0) * CapRG_g + cRB * (pRB_global/100.0) * CapRB_g
+    if denom <= 0:
+        # No capacity → zero plan
+        return 0.0, 0.0, {s: {"rain_gardens": 0, "rain_barrels": 0} for s in group_names}
+
+    alpha = target_budget / denom
+    pRG_g = max(0.0, min(100.0, pRG_global * alpha))
+    pRB_g = max(0.0, min(100.0, pRB_global * alpha))
+
+    # Realize integers, then nudge spend
+    plan_g = realize_percent_uptake_for_group(pRG_g, pRB_g, caps_RG, caps_RB, group_names)
+    plan_g = largest_remainder_toward_budget(plan_g, caps_RG, caps_RB, cRG, cRB, target_budget)
+    return pRG_g, pRB_g, plan_g
+
+def harmonize_mix_to_target_share(plan: dict, caps_RG: dict, caps_RB: dict,
+                                  cRG: float, cRB: float,
+                                  target_budget: float,
+                                  target_rg_cost_share: float,
+                                  tolerance: float = 0.01) -> dict:
+    """
+    Softly adjust RG/RB mix to be near target_rg_cost_share (± tolerance) while staying near budget
+    and respecting caps. Tries small local moves (swap RB→RG or RG→RB) to reduce share deviation.
+    """
+    def cost_share_rg(p: dict) -> float:
+        total_rg_cost = cRG * sum(v["rain_gardens"] for v in p.values())
+        total_cost    = total_rg_cost + cRB * sum(v["rain_barrels"] for v in p.values())
+        return (total_rg_cost / total_cost) if total_cost > 0 else 0.0
+
+    # Quick iterations to reduce share deviation
+    max_iters = 200
+    for _ in range(max_iters):
+        share = cost_share_rg(plan)
+        dev   = share - target_rg_cost_share
+
+        if abs(dev) <= tolerance:
+            break  # within band
+
+        spent = plan_cost(plan, cRG, cRB)
+
+        if dev < 0:
+            # RG share too low → try increasing RG or decreasing RB
+            # Prefer move that keeps budget closer: add RG if budget room, else replace RB with RG
+            # Add RG where capacity remains
+            added = False
+            for s, v in plan.items():
+                if (caps_RG.get(s, 0) or 0) > v["rain_gardens"] and (spent + cRG) <= target_budget:
+                    plan[s]["rain_gardens"] += 1
+                    added = True
+                    break
+            if not added:
+                # Try RB→RG swap at same subcatch if possible (reduce RB then add RG)
+                for s, v in plan.items():
+                    if v["rain_barrels"] > 0 and (caps_RG.get(s, 0) or 0) > v["rain_gardens"]:
+                        # Budget change = cRG - cRB; allow small overshoot within one unit
+                        if (spent + (cRG - cRB)) <= (target_budget + min(cRG, cRB)):
+                            plan[s]["rain_barrels"] -= 1
+                            plan[s]["rain_gardens"] += 1
+                            break
+        else:
+            # RG share too high → try increasing RB or decreasing RG
+            added = False
+            for s, v in plan.items():
+                if (caps_RB.get(s, 0) or 0) > v["rain_barrels"] and (spent + cRB) <= target_budget:
+                    plan[s]["rain_barrels"] += 1
+                    added = True
+                    break
+            if not added:
+                for s, v in plan.items():
+                    if v["rain_gardens"] > 0:
+                        # Budget change = cRB - cRG (negative); allow small undershoot
+                        if (spent + (cRB - cRG)) >= (target_budget - min(cRG, cRB)):
+                            plan[s]["rain_gardens"] -= 1
+                            plan[s]["rain_barrels"]  += 1
+                            break
+
+    # Final minor nudge toward budget if we drifted
+    plan = largest_remainder_toward_budget(plan, caps_RG, caps_RB, cRG, cRB, target_budget)
+    return plan
 
 def restrict_plan_to_group(plan: Dict[str, Dict[str,int]], group_names: Set[str]) -> Dict[str, Dict[str,int]]:
     group = set(group_names or set())
@@ -1232,10 +1344,6 @@ def app_ui():
         tide_to_feet_for_swmm(st.session_state["display_tide_curve"], unit),
         simulation_date
     )
-    def _rain_lines_pair(sim_minutes, rain_curve_in, sim_start_str, future_mult=future_mult):
-        cur = format_timeseries("rain_gage_timeseries", sim_minutes, rain_curve_in, sim_start_str)
-        fut = format_timeseries("rain_gage_timeseries", sim_minutes, (np.array(rain_curve_in) * future_mult), sim_start_str)
-        return cur, fut
 
     rain_lines_cur, rain_lines_fut = _rain_lines_pair(minutes_15, st.session_state["rain_sim_curve_current_in"], simulation_date, future_mult=future_mult)
 
@@ -1518,6 +1626,70 @@ def app_ui():
             f"   Estimated Cost: ${summary['spent']:,.0f}"
         )
 
+        # --- Make all four focus areas use the same budget as 'All' ---
+        B_target = summary['spent']  # use the 'All' plan spend as the common budget
+
+        # Solve per group to match B_target (keeps your RG/RB style via α scaling)
+        pRG_all_adj, pRB_all_adj, plan_all      = solve_group_percents_to_budget(pct_rg, pct_rb, caps_RG, caps_RB, set(caps_RG.keys()),
+                                                                                unit_cost_rg, unit_cost_rb, B_target)
+        pRG_up_adj,  pRB_up_adj,  plan_upstream = solve_group_percents_to_budget(pct_rg, pct_rb, caps_RG, caps_RB, UPSTREAM_LIST,
+                                                                                unit_cost_rg, unit_cost_rb, B_target)
+        pRG_dn_adj,  pRB_dn_adj,  plan_downstr  = solve_group_percents_to_budget(pct_rg, pct_rb, caps_RG, caps_RB, DOWNSTREAM_LIST,
+                                                                                unit_cost_rg, unit_cost_rb, B_target)
+        pRG_hi_adj,  pRB_hi_adj,  plan_highro   = solve_group_percents_to_budget(pct_rg, pct_rb, caps_RG, caps_RB, HIGHRUNOFF_LIST,
+                                                                                unit_cost_rg, unit_cost_rb, B_target)
+
+        # Compute target RG cost share from the 'All' plan
+        rg_cost_all  = unit_cost_rg * sum(v["rain_gardens"] for v in plan_all.values())
+        tot_cost_all = rg_cost_all + unit_cost_rb * sum(v["rain_barrels"] for v in plan_all.values())
+        target_rg_share = (rg_cost_all / tot_cost_all) if tot_cost_all > 0 else 0.0
+
+        # Softly harmonize each group’s mix toward the 'All' cost share (±5%)
+        plan_all      = harmonize_mix_to_target_share(plan_all,      caps_RG, caps_RB, unit_cost_rg, unit_cost_rb, B_target, target_rg_share, 0.05)
+        plan_upstream = harmonize_mix_to_target_share(plan_upstream, caps_RG, caps_RB, unit_cost_rg, unit_cost_rb, B_target, target_rg_share, 0.05)
+        plan_downstr  = harmonize_mix_to_target_share(plan_downstr,  caps_RG, caps_RB, unit_cost_rg, unit_cost_rb, B_target, target_rg_share, 0.05)
+        plan_highro   = harmonize_mix_to_target_share(plan_highro,   caps_RG, caps_RB, unit_cost_rg, unit_cost_rb, B_target, target_rg_share, 0.05)
+
+        # (Optional) Display achieved spend and RG/RB counts per group for transparency
+        for tag, p in [("All", plan_all), ("Upstream", plan_upstream), ("Downstream", plan_downstr), ("High‑runoff", plan_highro)]:
+            rg_cnt = sum(v["rain_gardens"] for v in p.values())
+            rb_cnt = sum(v["rain_barrels"]  for v in p.values())
+            spend  = unit_cost_rg * rg_cnt + unit_cost_rb * rb_cnt
+
+        st.markdown("### LID Placement — Compare Different Focus Areas")
+        row1 = st.columns(2, gap="large")
+        with row1[0]:
+            render_focus_placement_map_log(
+                plan_all,
+                "All subcatchments",
+                WS_SHP_PATH,
+                "fa_place_all"
+            )
+        with row1[1]:
+            render_focus_placement_map_log(
+                plan_upstream,
+                "Upstream",
+                WS_SHP_PATH,
+                "fa_place_up"
+            )
+
+        row2 = st.columns(2, gap="large")
+        with row2[0]:
+            render_focus_placement_map_log(
+                plan_downstr,
+                "Downstream/outlet",
+                WS_SHP_PATH,
+                "fa_place_dn"
+            )
+        with row2[1]:
+            render_focus_placement_map_log(
+                plan_highro,
+                "Highest runoff",
+                WS_SHP_PATH,
+                "fa_place_hi"
+            )
+
+
     elif "Path B" in path_choice:
         st.markdown("### Path B — Known Budget → Feasible Uptake")
 
@@ -1574,6 +1746,36 @@ def app_ui():
         est_cost_rb = unit_cost_rb * total_rb
         est_cost_total = est_cost_rg + est_cost_rb
 
+        B_target = float(budget_total)  # common budget for all four focus areas
+
+        # Solve per group to match B_target (keeps solved RG/RB style via α scaling)
+        pRG_all_adj, pRB_all_adj, plan_all      = solve_group_percents_to_budget(pRG_solved, pRB_solved, caps_RG, caps_RB, set(caps_RG.keys()),
+                                                                                unit_cost_rg, unit_cost_rb, B_target)
+        pRG_up_adj,  pRB_up_adj,  plan_upstream = solve_group_percents_to_budget(pRG_solved, pRB_solved, caps_RG, caps_RB, UPSTREAM_LIST,
+                                                                                unit_cost_rg, unit_cost_rb, B_target)
+        pRG_dn_adj,  pRB_dn_adj,  plan_downstr  = solve_group_percents_to_budget(pRG_solved, pRB_solved, caps_RG, caps_RB, DOWNSTREAM_LIST,
+                                                                                unit_cost_rg, unit_cost_rb, B_target)
+        pRG_hi_adj,  pRB_hi_adj,  plan_highro   = solve_group_percents_to_budget(pRG_solved, pRB_solved, caps_RG, caps_RB, HIGHRUNOFF_LIST,
+                                                                                unit_cost_rg, unit_cost_rb, B_target)
+
+        # Target RG cost share from 'All' (after group solve with B_target)
+        rg_cost_all  = unit_cost_rg * sum(v["rain_gardens"] for v in plan_all.values())
+        tot_cost_all = rg_cost_all + unit_cost_rb * sum(v["rain_barrels"] for v in plan_all.values())
+        target_rg_share = (rg_cost_all / tot_cost_all) if tot_cost_all > 0 else 0.0
+
+        # Harmonize mix per group (±5%)
+        plan_all      = harmonize_mix_to_target_share(plan_all,      caps_RG, caps_RB, unit_cost_rg, unit_cost_rb, B_target, target_rg_share, 0.05)
+        plan_upstream = harmonize_mix_to_target_share(plan_upstream, caps_RG, caps_RB, unit_cost_rg, unit_cost_rb, B_target, target_rg_share, 0.05)
+        plan_downstr  = harmonize_mix_to_target_share(plan_downstr,  caps_RG, caps_RB, unit_cost_rg, unit_cost_rb, B_target, target_rg_share, 0.05)
+        plan_highro   = harmonize_mix_to_target_share(plan_highro,   caps_RG, caps_RB, unit_cost_rg, unit_cost_rb, B_target, target_rg_share, 0.05)
+
+        # Transparency
+        for tag, p in [("All", plan_all), ("Upstream", plan_upstream), ("Downstream", plan_downstr), ("High‑runoff", plan_highro)]:
+            rg_cnt = sum(v["rain_gardens"] for v in p.values())
+            rb_cnt = sum(v["rain_barrels"]  for v in p.values())
+            spend  = unit_cost_rg * rg_cnt + unit_cost_rb * rb_cnt
+
+
         # Treated area (using your constants: 400 ft² per RG; 300 ft² per RB)
         treated_ft2 = 400.0 * total_rg + 300.0 * total_rb
 
@@ -1598,12 +1800,6 @@ def app_ui():
             st.metric(f"Solved {solved_label}", f"{solved_value:.1f}%")
         with s2c3:
             st.metric("Counts (RG | RB)", f"{int(total_rg)} | {int(total_rb)}")
-
-    if plan_base is not None:
-        plan_all      = plan_base
-        plan_upstream = restrict_plan_to_group(plan_base, UPSTREAM_LIST)
-        plan_downstr  = restrict_plan_to_group(plan_base, DOWNSTREAM_LIST)
-        plan_highro   = restrict_plan_to_group(plan_base, HIGHRUNOFF_LIST)
 
         st.markdown("### LID Placement — Compare Different Focus Areas")
         row1 = st.columns(2, gap="large")
@@ -1638,6 +1834,144 @@ def app_ui():
                 "fa_place_hi"
             )
 
+    RG_STORAGE_FT3 = 140.58
+    RB_STORAGE_FT3 = 7.34
+
+    def build_focus_summary_df(plans_dict: dict, unit_cost_rg: float, unit_cost_rb: float) -> pd.DataFrame:
+        """
+        Build one row per focus area with:
+        - RG_count, RB_count
+        - TotalCost_K  (in $ thousands)
+        - Storage_ft3  (RG*140.6 + RB*7.35)
+        """
+        rows = []
+        for label, plan in plans_dict.items():
+            # Counts
+            rg_cnt = int(sum(v.get("rain_gardens", 0) for v in plan.values()))
+            rb_cnt = int(sum(v.get("rain_barrels", 0)  for v in plan.values()))
+            # Cost
+            total_cost = unit_cost_rg * rg_cnt + unit_cost_rb * rb_cnt
+            # Storage (ft³)
+            storage_ft3 = rg_cnt * RG_STORAGE_FT3 + rb_cnt * RB_STORAGE_FT3 
+
+            rows.append({
+                "Focus Area": label,
+                "RG_count": rg_cnt,
+                "RB_count": rb_cnt,
+                "TotalCost_K": total_cost / 1_000.0,   # dollars → $K for display
+                "Storage_ft3": storage_ft3
+            })
+        return pd.DataFrame(rows)
+
+
+    if plan_base is not None:
+        # Prepare inputs
+        plans_dict = {
+            "All":        plan_all,
+            "Upstream":   plan_upstream,
+            "Downstream": plan_downstr,
+            "High runoff": plan_highro,
+        }
+        df_sum = build_focus_summary_df(plans_dict, unit_cost_rg, unit_cost_rb)  # uses Storage_yd3, TotalCost_K, counts
+
+        # Focus area ordering: sort by Total Cost ($K) descending
+        focus_order = df_sum.sort_values("TotalCost_K", ascending=False)["Focus Area"].tolist()
+
+        # Focus area colors (keep your palette)
+        focus_colors = {
+            "All":        "#046d64",  # dark teal
+            "Upstream":   "#1316AC",  # indigo
+            "Downstream": "#3e95d3",  # steel blue
+            "High runoff":"#9555d1",  # purple
+        }
+
+        # Helper: robust axis domain (always start at zero, pad by 10%)
+        def _domain_zero_to_max(values: pd.Series, pad_ratio: float = 0.10) -> list[float]:
+            arr = pd.to_numeric(values, errors="coerce").fillna(0.0).to_numpy(dtype=float)
+            if arr.size == 0:
+                return [0.0, 1.0]
+            mx = float(np.max(arr))
+            if not np.isfinite(mx) or mx <= 0:
+                return [0.0, 1.0]
+            return [0.0, mx * (1.0 + pad_ratio)]
+
+        # Build one metric chart with shared styling & labels
+        def _metric_chart(df: pd.DataFrame,
+                        value_col: str,
+                        title_text: str,
+                        color_map: dict,
+                        order: list[str],
+                        height_px: int = 280):
+            import altair as alt
+            try:
+                alt.data_transformers.disable_max_rows()
+            except Exception:
+                pass
+
+            # Prepare data
+            df_plot = df[["Focus Area", value_col]].copy()
+            df_plot.rename(columns={value_col: "Value"}, inplace=True)
+            df_plot["Color"] = df_plot["Focus Area"].map(color_map).fillna("#777777")
+
+            x_dom = _domain_zero_to_max(df_plot["Value"], pad_ratio=0.10)
+
+            base = alt.Chart(df_plot)
+
+            bars = (
+                base.mark_bar()
+                .encode(
+                    y=alt.Y("Focus Area:N", sort=order, title=None,
+                            axis=alt.Axis(labelFontSize=13)),
+                    x=alt.X("Value:Q",
+                            title=title_text,
+                            scale=alt.Scale(domain=x_dom, nice=False, zero=True),
+                            axis=alt.Axis(format=",.0f", titleFontSize=13, labelFontSize=12)),
+                    color=alt.Color("Color:N", scale=None, legend=None),
+                    tooltip=[
+                        alt.Tooltip("Focus Area:N"),
+                        alt.Tooltip("Value:Q", title=title_text, format=",.0f")
+                    ]
+                )
+                .properties(height=height_px)
+            )
+
+            labels = (
+                base.mark_text(align="left", baseline="middle", dx=6, color="#333", fontSize=12)
+                .encode(
+                    y=alt.Y("Focus Area:N", sort=order, title=None),
+                    x=alt.X("Value:Q"),
+                    text=alt.Text("Value:Q", format=",.0f")
+                )
+            )
+
+            chart = (bars + labels).configure_view(strokeWidth=0)
+            return chart
+
+        st.markdown("### Summary")
+
+        # --- Row 1: RG count | RB count ---
+        row1 = st.columns(2, gap="large")
+        with row1[0]:
+            st.markdown("**RG count**")
+            ch_rg = _metric_chart(df_sum, "RG_count", "Count", focus_colors, focus_order)
+            st.altair_chart(ch_rg, use_container_width=True)
+        with row1[1]:
+            st.markdown("**RB count**")
+            ch_rb = _metric_chart(df_sum, "RB_count", "Count", focus_colors, focus_order)
+            st.altair_chart(ch_rb, use_container_width=True)
+
+        # --- Row 2: Total cost ($K) | Storage (yd³) ---
+        row2 = st.columns(2, gap="large")
+        with row2[0]:
+            st.markdown("**Total cost ($K)**")
+            ch_cost = _metric_chart(df_sum, "TotalCost_K", "Total cost ($K)", focus_colors, focus_order)
+            st.altair_chart(ch_cost, use_container_width=True)
+        with row2[1]:
+            st.markdown("**Storage (ft³)**")
+            ch_storage = _metric_chart(df_sum, "Storage_ft3", "Storage (ft³)", focus_colors, focus_order)
+            st.altair_chart(ch_storage, use_container_width=True)
+
+
     if plan_base is not None:
         st.markdown("### Run Focus Area Scenarios")
 
@@ -1660,20 +1994,11 @@ def app_ui():
         rain_curve = st.session_state["rain_sim_curve_current_in"] if use_cur else st.session_state["rain_sim_curve_future_in"]
 
         tag = "current" if use_cur else "future"
-        c_run1, c_run2 = st.columns(2)
-        with c_run1:
-            if st.button("Run ALL subcatchments (Gate OFF/ON)"):
-                run_focus_pair(f"focus_all_{tag}",      plan_all,      rain_lines, tide_lines, template_inp, minutes_15, simulation_date, rain_curve)
-                st.success("All subcatchments scenarios complete.")
-            if st.button("Run UPSTREAM (Gate OFF/ON)"):
-                run_focus_pair(f"focus_upstream_{tag}", plan_upstream, rain_lines, tide_lines, template_inp, minutes_15, simulation_date, rain_curve)
-                st.success("Upstream scenarios complete.")
-        with c_run2:
-            if st.button("Run DOWNSTREAM/OUTLET (Gate OFF/ON)"):
-                run_focus_pair(f"focus_downstream_{tag}", plan_downstr,  rain_lines, tide_lines, template_inp, minutes_15, simulation_date, rain_curve)
-                st.success("Downstream/outlet scenarios complete.")
-            if st.button("Run HIGHEST RUNOFF (Gate OFF/ON)"):
-                run_focus_pair(f"focus_highrunoff_{tag}", plan_highro,   rain_lines, tide_lines, template_inp, minutes_15, simulation_date, rain_curve)
+        if st.button("Run All Scenarios"):
+            run_focus_pair(f"focus_all_{tag}",      plan_all,      rain_lines, tide_lines, template_inp, minutes_15, simulation_date, rain_curve)
+            run_focus_pair(f"focus_upstream_{tag}", plan_upstream, rain_lines, tide_lines, template_inp, minutes_15, simulation_date, rain_curve)
+            run_focus_pair(f"focus_downstream_{tag}", plan_downstr,  rain_lines, tide_lines, template_inp, minutes_15, simulation_date, rain_curve)
+            run_focus_pair(f"focus_highrunoff_{tag}", plan_highro,   rain_lines, tide_lines, template_inp, minutes_15, simulation_date, rain_curve)
 
     st.subheader("Focus Area Comparison Maps")
 
@@ -1724,127 +2049,58 @@ def app_ui():
     st.markdown(_legend_html("in" if st.session_state["unit_ui"] == "U.S. Customary" else "cm",
                             legend_range[0], legend_range[1]), unsafe_allow_html=True)
 
-    # --- Summary grouped bar chart across the four focus areas ---
-    def build_focus_summary_df(plans_dict, unit_cost_rg, unit_cost_rb):
-        rows = []
-        for label, plan in plans_dict.items():
-            s = summarize_plan(plan, unit_cost_rg, unit_cost_rb)
-            rows.append({
-                "Focus Area": label,
-                "RG_count": s["rg"],
-                "RB_count": s["rb"],
-                "TotalCost_K": s["spent"] / 1_000.0,      # $ thousands
-                "Treated_kft2": s["treated_ft2"] / 1_000.0  # thousand ft²
-            })
-        return pd.DataFrame(rows)
-
-    if plan_base is not None:
-        plans_dict = {
-            "All":       plan_all,
-            "Upstream":  plan_upstream,
-            "Downstream":plan_downstr,
-            "High runoff": plan_highro,
-        }
-        df_sum = build_focus_summary_df(plans_dict, unit_cost_rg, unit_cost_rb)
-
-        # long format for Altair
-        df_long_counts = df_sum.melt(id_vars=["Focus Area"], value_vars=["RG_count","RB_count"],
-                                    var_name="Metric", value_name="Value")
-        df_long_other  = df_sum.melt(id_vars=["Focus Area"], value_vars=["TotalCost_K","Treated_kft2"],
-                                    var_name="Metric", value_name="Value")
-        df_long = pd.concat([df_long_counts, df_long_other], ignore_index=True)
-
-        # Nice labels
-        metric_labels = {
-            "RG_count": "RG count",
-            "RB_count": "RB count",
-            "TotalCost_K": "Total cost ($K)",
-            "Treated_kft2": "Treated area (kft²)"
-        }
-        df_long["Metric"] = df_long["Metric"].map(metric_labels)
-
-        # Color palette (metrics legend)
-        metric_colors = {"RG count": "#228B22", "RB count": "#1f77b4", "Total cost ($K)": "#ff7f0e", "Treated area (kft²)": "#9467bd"}
-
-        st.markdown("### Summary — Counts, Cost, and Treated Area by Focus Area")
-        try:
-            import altair as alt
-            chart = (
-                alt.Chart(df_long)
-                .mark_bar()
-                .encode(
-                    x=alt.X("Focus Area:N", title=None),
-                    y=alt.Y("Value:Q", title="Value (counts · $K · kft²)", axis=alt.Axis(grid=True)),
-                    color=alt.Color("Metric:N", scale=alt.Scale(domain=list(metric_colors.keys()), range=list(metric_colors.values())),
-                                    legend=alt.Legend(title="Metrics")),
-                    column=alt.Column("Focus Area:N", title=None, header=alt.Header(labelFontSize=14)),  # optional small multiples
-                    tooltip=[
-                        alt.Tooltip("Focus Area:N"),
-                        alt.Tooltip("Metric:N"),
-                        alt.Tooltip("Value:Q", format=",.2f")
-                    ],
-                )
-                .properties(height=280)
-            )
-            # Alternative: grouped bars without small multiples (comment line above and use a single x with order)
-            chart = chart.configure_axis(labelFontSize=12, titleFontSize=13).configure_legend(titleFontSize=13, labelFontSize=12)
-            st.altair_chart(chart, use_container_width=True)
-        except Exception as e:
-            st.error(f"Summary chart failed: {e}")
-
-
-
     def _gather_scenario_volumes() -> tuple[pd.DataFrame, str]:
         ACF_TO_FT3 = 43560.0
         FT3_TO_M3  = 0.0283168
         to_m3 = (st.session_state.get("unit_ui") == "Metric (SI)")
         unit_label = "m³" if to_m3 else "ft³"
 
-        friendly_map = {
-            # --- Baseline entries (keep) ---
-            "Baseline (No Tide Gate) – Current":  "baseline_nogate_current",
-            "Baseline + Tide Gate – Current":     "baseline_gate_current",
-            "Baseline (No Tide Gate) – +20%":     "baseline_nogate_future",
-            "Baseline + Tide Gate – +20%":        "baseline_gate_future",
-
-            # --- NEW: pattern scenarios — Current rainfall ---
-            "Even Pattern (No Tide Gate) – Current":       "pattern_even_current_nogate",
-            "Even Pattern + Tide Gate – Current":          "pattern_even_current_gate",
-            "Upstream Pattern (No Tide Gate) – Current":   "pattern_upstream_current_nogate",
-            "Upstream Pattern + Tide Gate – Current":      "pattern_upstream_current_gate",
-            "Downstream Pattern (No Tide Gate) – Current": "pattern_downstream_current_nogate",
-            "Downstream Pattern + Tide Gate – Current":    "pattern_downstream_current_gate",
-            "High‑Runoff Pattern (No Tide Gate) – Current": "pattern_highrunoff_current_nogate",
-            "High‑Runoff Pattern + Tide Gate – Current":    "pattern_highrunoff_current_gate",
-
-            # --- NEW: pattern scenarios — +20% rainfall ---
-            "Even Pattern (No Tide Gate) – +20%":       "pattern_even_future_nogate",
-            "Even Pattern + Tide Gate – +20%":          "pattern_even_future_gate",
-            "Upstream Pattern (No Tide Gate) – +20%":   "pattern_upstream_future_nogate",
-            "Upstream Pattern + Tide Gate – +20%":      "pattern_upstream_future_gate",
-            "Downstream Pattern (No Tide Gate) – +20%": "pattern_downstream_future_nogate",
-            "Downstream Pattern + Tide Gate – +20%":    "pattern_downstream_future_gate",
-            "High‑Runoff Pattern (No Tide Gate) – +20%": "pattern_highrunoff_future_nogate",
-            "High‑Runoff Pattern + Tide Gate – +20%":    "pattern_highrunoff_future_gate",
-        }
-
-        rows = []
+        # Only include scenarios the user has actually run (exist in rpts)
         rpts = st.session_state.get("rpts", {})
         prefix = st.session_state["scenario_prefix"]
+        use_future = (st.session_state.get("rain_variant", "current") == "future")
+        tag = "future" if use_future else "current"
+
+        candidates = [
+            # Baseline
+            (f"Baseline (No Tide Gate) – {'+20%' if use_future else 'Current'}", f"baseline_nogate_{tag}"),
+            (f"Baseline + Tide Gate – {'+20%' if use_future else 'Current'}",    f"baseline_gate_{tag}"),
+            # Focus areas
+            (f"All Subcatchments (No Tide Gate) – {'+20%' if use_future else 'Current'}",  f"focus_all_{tag}_nogate"),
+            (f"All Subcatchments + Tide Gate – {'+20%' if use_future else 'Current'}",     f"focus_all_{tag}_gate"),
+            (f"Upstream (No Tide Gate) – {'+20%' if use_future else 'Current'}",           f"focus_upstream_{tag}_nogate"),
+            (f"Upstream + Tide Gate – {'+20%' if use_future else 'Current'}",              f"focus_upstream_{tag}_gate"),
+            (f"Downstream/Outlet (No Tide Gate) – {'+20%' if use_future else 'Current'}",  f"focus_downstream_{tag}_nogate"),
+            (f"Downstream/Outlet + Tide Gate – {'+20%' if use_future else 'Current'}",     f"focus_downstream_{tag}_gate"),
+            (f"Highest Runoff (No Tide Gate) – {'+20%' if use_future else 'Current'}",     f"focus_highrunoff_{tag}_nogate"),
+            (f"Highest Runoff + Tide Gate – {'+20%' if use_future else 'Current'}",        f"focus_highrunoff_{tag}_gate"),
+        ]
+
+        rows = []
 
         def acft_to_display(v_acft: float) -> float:
             v_ft3 = v_acft * ACF_TO_FT3
             return v_ft3 * FT3_TO_M3 if to_m3 else v_ft3
 
-        for disp, canon in friendly_map.items():
+        # Safe extractor (fixes the ambiguous Series bug)
+        def _safe_continuity(df_ir: pd.DataFrame, key: str) -> float:
+            if df_ir is None or df_ir.empty or "label" not in df_ir.columns or "volume_acft" not in df_ir.columns:
+                return 0.0
+            s = pd.to_numeric(df_ir.loc[df_ir["label"] == key, "volume_acft"], errors="coerce")
+            return float(s.fillna(0.0).sum())  # sum if multiple lines, else 0
+
+        for disp, canon in candidates:
             key = f"{prefix}{canon}"
+            rpt_text = rpts.get(key, "")
+            if not rpt_text:
+                # Skip scenarios not run
+                continue
 
             flood_display = float(st.session_state.get(f"{key}_event_total_flood", 0.0))
-
-            rpt_text = rpts.get(key, "")
             df_ir = extract_infiltration_and_runoff_from_text(rpt_text) if rpt_text else pd.DataFrame(columns=["label","volume_acft"])
-            infil_acft  = float(df_ir.loc[df_ir["label"]=="infiltration_loss", "volume_acft"].squeeze() or 0.0)
-            runoff_acft = float(df_ir.loc[df_ir["label"]=="surface_runoff",   "volume_acft"].squeeze() or 0.0)
+            infil_acft  = _safe_continuity(df_ir, "infiltration_loss")
+            runoff_acft = _safe_continuity(df_ir, "surface_runoff")
+
             rows.append({
                 "Scenario": disp,
                 "Flooding":       flood_display,
@@ -1852,199 +2108,230 @@ def app_ui():
                 "Surface Runoff": acft_to_display(runoff_acft),
             })
 
-        df = pd.DataFrame(rows).set_index("Scenario").round(0).astype(int)
+        df = pd.DataFrame(rows).set_index("Scenario")
+        # integer display is fine (round at render), but keep as float for charts if needed
         return df, unit_label
 
+    if st.button("Watershed Volumes: Flooding / Infiltration / Surface Runoff", key=f"{prefix}btn_volumes_per_metric"):
+        # --- Make Altair safe in this block ---
+        import altair as alt
+        try:
+            alt.data_transformers.disable_max_rows()
+        except Exception:
+            pass  # fine if already disabled elsewhere
 
-    if st.button("Watershed Volumes: Flooding / Infiltration / Surface Runoff" , key=f"{prefix}btn_volumes"):
         df_vol, unit_lbl = _gather_scenario_volumes()
+
         if df_vol.empty:
             st.info("Run scenarios first.")
-        else:
-            st.subheader(f"Scenario Volumes ({unit_lbl})")
+            st.stop()
 
-            def scenario_group(name: str) -> str:
-                prefix = name.split("–", 1)[0].strip()
-                prefix_to_group = {
-                    "Baseline (No Tide Gate)":  "Baseline (No Gate)",
-                    "Baseline + Tide Gate":     "Baseline (With Gate)",
-                    "LID (No Tide Gate)":       "LID (No Gate)",
-                    "LID + Tide Gate":          "LID (With Gate)",
-                    "Max LID (No Tide Gate)":   "Max LID (No Gate)",
-                    "Max LID + Tide Gate":      "Max LID (With Gate)",
-                }
-                return prefix_to_group.get(prefix, "Other")
+        st.subheader(f"Scenario Volumes ({unit_lbl})")
 
-            group_domain = [
-                "Baseline (No Gate)", "Baseline (With Gate)",
-                "LID (No Gate)", "LID (With Gate)",
-                "Max LID (No Gate)", "Max LID (With Gate)"
-            ]
-            group_colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
+        # --- Robust domain helper: ensures finite, ascending, and with ±5000 padding ---
+        def _domain_minmax_pad(series: pd.Series, pad: float = 5000.0) -> list[float]:
+            vals = pd.to_numeric(series, errors="coerce").dropna().to_numpy(dtype=float)
+            if vals.size == 0:
+                # No data → small positive domain to show an axis
+                return [0.0, 1.0]
+            mn, mx = float(np.min(vals)), float(np.max(vals))
+            if not np.isfinite(mn) or not np.isfinite(mx):
+                return [0.0, 1.0]
+            if np.isclose(mx, mn):
+                # Single value → symmetric pad around it
+                mn_pad = mn - pad
+                mx_pad = mx + pad
+            else:
+                mn_pad = mn - pad
+                mx_pad = mx + pad
 
-            def bar_chart(df_vals: pd.DataFrame, value_col: str, title_text: str | None):
-                df = df_vals.reset_index().rename(columns={"index": "Scenario", value_col: unit_lbl})
-                df["Group"] = df["Scenario"].map(scenario_group)
-                order = df.sort_values(unit_lbl, ascending=False)["Scenario"].tolist()
-                height_px = max(44 * len(order), 400)
-                chart = (
-                    alt.Chart(df)
-                    .mark_bar(size=25)
-                    .encode(
-                        x=alt.X(f"{unit_lbl}:Q", sort='-x', title=unit_lbl),
-                        y=alt.Y("Scenario:N", sort=order, title=None,
-                                axis=alt.Axis(labelFontSize=18, titleFontSize=22, labelLimit=1000)),
-                        color=alt.Color("Group:N",
-                                        scale=alt.Scale(domain=group_domain, range=group_colors),
-                                        legend=alt.Legend(title="Scenario Group")),
-                        tooltip=["Scenario", f"{unit_lbl}:Q", "Group:N"]
-                    )
-                    .properties(height=height_px)
-                    .configure_axis(labelFontSize=18, titleFontSize=22)
-                    .configure_view(strokeWidth=0)
-                    .configure_axis(labelColor="black", titleColor="black")
-                    .configure_title(color="black", fontSize=20, fontWeight="bold")
-                    .configure_legend(labelColor="black", titleColor="black", titleFontSize=16, labelFontSize=14)
-                    .configure_view(strokeWidth=0)
-                )
-                if isinstance(title_text, str) and title_text != "":
-                    chart = chart.properties(title=title_text)
-                st.altair_chart(chart, use_container_width=True, key=f"{prefix}_vol_flood_chart")
+            # Final guards: fix reversed or non-finite
+            if not np.isfinite(mn_pad) or not np.isfinite(mx_pad) or (mx_pad <= mn_pad):
+                return [max(0.0, mn), max(1.0, mn + 1.0)]
+            return [mn_pad, mx_pad]
 
-            st.markdown("**Flooding**")
-            s_flood  = df_vol["Flooding"].sort_values(ascending=False)
-            bar_chart(s_flood.to_frame(), "Flooding", None)
+        # Compute domains before plotting
+        flood_dom  = _domain_minmax_pad(df_vol["Flooding"], pad=5000.0)
+        infil_dom  = _domain_minmax_pad(df_vol["Infiltration"], pad=5000.0)
+        runoff_dom = _domain_minmax_pad(df_vol["Surface Runoff"], pad=5000.0)
 
+        # --- Chart builder: accepts explicit domain; includes a fallback when all zeros ---
+        def _bar_metric(
+            series: pd.Series,
+            unit_lbl: str,
+            key_suffix: str,
+            title_text: str = "",
+            color: str = "#3e95d3",
+            x_domain: list[float] | None = None,
+        ):
+            s = pd.to_numeric(series, errors="coerce").fillna(0.0)
 
-            st.markdown("**Infiltration**")
-            gate_mask = df_vol.index.str.contains(r"\+ Tide Gate")
-            s_infil_gate = df_vol.loc[gate_mask, "Infiltration"].sort_values(ascending=False)
+            # Build plotting frame
+            df = (
+                s.sort_values(ascending=False)
+                .to_frame(name="Value")
+                .reset_index()
+                .rename(columns={"index": "Scenario"})
+            )
 
-            df_i = s_infil_gate.to_frame().reset_index().rename(columns={"index":"Scenario","Infiltration":unit_lbl})
-            order_i = df_i.sort_values(unit_lbl, ascending=False)["Scenario"].tolist()
-            height_i = max(44 * len(order_i), 400)
+            order = df["Scenario"].tolist()
+            height_px = max(44 * max(1, len(order)), 360)
 
-            chart_i = (
-                alt.Chart(df_i)
-                .mark_bar(size=25)
+            # Use provided domain or derive a safe default
+            if x_domain is None or len(x_domain) != 2:
+                # Fallback to ±5000 around min/max
+                vals = s.to_numpy(dtype=float)
+                if vals.size == 0:
+                    x_domain = [0.0, 1.0]
+                else:
+                    mn, mx = float(np.min(vals)), float(np.max(vals))
+                    x_domain = [mn - 5000.0, mx + 5000.0]
+
+            # If everything is 0, force a visible axis and baseline inside domain
+            if np.allclose(df["Value"].to_numpy(dtype=float), 0.0):
+                x_domain = [-10000.0, 10000.0]
+
+            # --- NEW: baseline inside domain via x2 ---
+            domain_min = float(x_domain[0])
+            df["DomainMin"] = domain_min
+
+            bars = (
+                alt.Chart(df)
+                .mark_bar(size=25, color=color)
                 .encode(
-                    x=alt.X(f"{unit_lbl}:Q", sort='-x', title=unit_lbl),
-                    y=alt.Y("Scenario:N", sort=order_i, title=None,
-                            axis=alt.Axis(labelFontSize=18, titleFontSize=22, labelLimit=1000)),
-
-                    color=alt.Color("Scenario:N", legend=None)
+                    # End of the bar (the measured value)
+                    x=alt.X(
+                        "Value:Q",
+                        title=unit_lbl,
+                        scale=alt.Scale(domain=x_domain, nice=False, zero=False),
+                        axis=alt.Axis(format=",.0f")
+                    ),
+                    # Start of the bar (baseline at domain minimum)
+                    x2=alt.X2("DomainMin:Q"),
+                    y=alt.Y(
+                        "Scenario:N",
+                        sort=order,
+                        title=None,
+                        axis=alt.Axis(labelFontSize=16, titleFontSize=18, labelLimit=1000)
+                    ),
+                    tooltip=[
+                        alt.Tooltip("Scenario:N"),
+                        alt.Tooltip("Value:Q", title=unit_lbl, format=",.0f")
+                    ]
                 )
-                .properties(height=height_i)
-                .configure_axis(labelFontSize=18, titleFontSize=22)
-                .configure_view(strokeWidth=0)
-                .configure_axis(labelColor="black", titleColor="black")
-                .configure_title(color="black", fontSize=20, fontWeight="bold")
-                .configure_legend(labelColor="black", titleColor="black", titleFontSize=16, labelFontSize=14)
-                .configure_view(strokeWidth=0)
             )
-            st.altair_chart(chart_i, use_container_width=True, key=f"{prefix}_vol_infil_chart")
 
-            st.markdown("**Surface Runoff**")
-            s_runoff_gate = df_vol.loc[gate_mask, "Surface Runoff"].sort_values(ascending=False)
-
-            df_r = s_runoff_gate.to_frame().reset_index().rename(columns={"index":"Scenario","Surface Runoff":unit_lbl})
-            order_r = df_r.sort_values(unit_lbl, ascending=False)["Scenario"].tolist()
-            height_r = max(44 * len(order_r), 400)
-
-            chart_r = (
-                alt.Chart(df_r)
-                .mark_bar(size=25)
+            # Value labels (positioned at the end of the bar)
+            labels = (
+                alt.Chart(df)
+                .mark_text(align="left", baseline="middle", dx=6, color="#333", fontSize=13)
                 .encode(
-                    x=alt.X(f"{unit_lbl}:Q", sort='-x', title=unit_lbl),
-                    y=alt.Y("Scenario:N", sort=order_r, title=None,
-                            axis=alt.Axis(labelFontSize=18, titleFontSize=22, labelLimit=1000)),
-
-                    color=alt.Color("Scenario:N", legend=None)
+                    x=alt.X("Value:Q", scale=alt.Scale(domain=x_domain, nice=False, zero=False)),
+                    y=alt.Y("Scenario:N", sort=order),
+                    text=alt.Text("Value:Q", format=",.0f")
                 )
-                .properties(height=height_r)
-                .configure_axis(labelFontSize=18, titleFontSize=22)
-                .configure_view(strokeWidth=0)
-                .configure_axis(labelColor="black", titleColor="black")
-                .configure_title(color="black", fontSize=20, fontWeight="bold")
-                .configure_legend(labelColor="black", titleColor="black", titleFontSize=16, labelFontSize=14)
-                .configure_view(strokeWidth=0)
-            )
-            st.altair_chart(chart_r, use_container_width=True, key=f"{prefix}_vol_runoff_chart")
-
-
-            excel_output = io.BytesIO()
-            with pd.ExcelWriter(excel_output, engine="openpyxl") as writer:
-
-                scenario_summary = pd.DataFrame([{
-                    "Storm Duration (hr)": duration_minutes // 60,
-                    "Return Period (yr)": return_period,
-                    "Tide": ("Real-time" if st.session_state["tide_source"]=="live" else st.session_state["moon_phase"]),
-                    "Tide Alignment": "High Tide Peak" if st.session_state["align_mode"] == "peak" else "Low Tide Dip",
-                    "Units": st.session_state["unit_ui"]
-                }])
-                scenario_summary.to_excel(writer, sheet_name="Scenario Settings", index=False)
-
-
-                sim_start = datetime.strptime(simulation_date, "%m/%d/%Y %H:%M")
-                rain_minutes = st.session_state.get("rain_minutes", [])
-                tide_minutes = st.session_state.get("tide_minutes", [])
-                rain_disp_unit = st.session_state.get("rain_disp_unit", "inches")
-                tide_disp_unit = st.session_state.get("tide_disp_unit", "ft")
-                rain_ts = st.session_state.get("display_rain_curve_current", [])
-                rain_ts_f = st.session_state.get("display_rain_curve_future", [])
-                tide_ts = st.session_state.get("display_tide_curve", [])
-
-                if len(rain_ts) > 0:
-                    r_t = [(sim_start + timedelta(minutes=int(m))).strftime("%m/%d/%Y %H:%M")
-                        for m in rain_minutes[:len(rain_ts)]]
-                    df_rain = pd.DataFrame({
-                        "Timestamp": r_t,
-                        f"Rainfall – Current ({rain_disp_unit})": rain_ts[:len(r_t)],
-                        f"Rainfall – +20% ({rain_disp_unit})":    rain_ts_f[:len(r_t)]
-                    })
-                else:
-                    df_rain = pd.DataFrame(columns=[
-                        "Timestamp",
-                        f"Rainfall – Current ({rain_disp_unit})",
-                        f"Rainfall – +20% ({rain_disp_unit})"
-                    ])
-                df_rain.to_excel(writer, sheet_name="Rainfall Event", index=False)
-
-                if len(tide_ts) > 0:
-                    t_t = [(sim_start + timedelta(minutes=int(m))).strftime("%m/%d/%Y %H:%M")
-                        for m in tide_minutes[:len(tide_ts)]]
-                    df_tide = pd.DataFrame({"Timestamp": t_t, f"Tide ({tide_disp_unit})": tide_ts[:len(t_t)]})
-                else:
-                    df_tide = pd.DataFrame(columns=["Timestamp", f"Tide ({tide_disp_unit})"])
-                df_tide.to_excel(writer, sheet_name="Tide Event", index=False)
-
-                lid_cfg = st.session_state.get(f"{prefix}user_lid_config", {})
-                if lid_cfg:
-                    rows = [{"Subcatchment": sub,
-                            "Selected Rain Gardens": cfg.get("rain_gardens", 0),
-                            "Selected Rain Barrels":  cfg.get("rain_barrels", 0)}
-                            for sub, cfg in lid_cfg.items()]
-                    df_user_lid = pd.DataFrame(rows)
-                else:
-                    df_user_lid = pd.DataFrame(columns=["Subcatchment","Selected Rain Gardens","Selected Rain Barrels"])
-                df_user_lid.to_excel(writer, sheet_name="User LID Selections", index=False)
-
-
-                out = df_vol.reset_index()
-                out.columns = ["Scenario",
-                            f"Flooding ({unit_lbl})",
-                            f"Infiltration ({unit_lbl})",
-                            f"Surface Runoff ({unit_lbl})"]
-                out.to_excel(writer, sheet_name="Scenario Volumes", index=False)
-
-            st.download_button(
-                label=f"Download Results",
-                data=excel_output.getvalue(),
-                file_name="CoastWise_Results.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
             )
 
+            chart = (bars + labels).properties(height=height_px)
+            if isinstance(title_text, str) and title_text.strip():
+                chart = chart.properties(title=title_text)
+
+            chart = (
+                chart
+                .configure_axis(labelFontSize=16, titleFontSize=18, grid=False)
+                .configure_view(strokeWidth=0)
+                .configure_title(fontSize=18)
+            )
+
+            st.altair_chart(chart, use_container_width=True, key=f"{prefix}_vol_metric_{key_suffix}")
+
+        # Render the three figures
+        st.markdown("**Flooding**")
+        _bar_metric(
+            df_vol["Flooding"], unit_lbl,
+            key_suffix="flood",
+            title_text="",
+            color="#3e95d3",
+            x_domain=flood_dom
+        )
+
+        st.markdown("**Infiltration**")
+        _bar_metric(
+            df_vol["Infiltration"], unit_lbl,
+            key_suffix="infil",
+            title_text="",
+            color="#2ca02c",
+            x_domain=infil_dom
+        )
+
+        st.markdown("**Surface Runoff**")
+        _bar_metric(
+            df_vol["Surface Runoff"], unit_lbl,
+            key_suffix="runoff",
+            title_text="",
+            color="#ff7f0e",
+            x_domain=runoff_dom
+        )
+
+        # Excel export (unchanged)
+        excel_output = io.BytesIO()
+        with pd.ExcelWriter(excel_output, engine="openpyxl") as writer:
+            scenario_summary = pd.DataFrame([{
+                "Storm Duration (hr)": duration_minutes // 60,
+                "Return Period (yr)": return_period,
+                "Tide": ("Real-time" if st.session_state["tide_source"]=="live" else st.session_state["moon_phase"]),
+                "Tide Alignment": "High Tide Peak" if st.session_state["align_mode"] == "peak" else "Low Tide Dip",
+                "Units": st.session_state["unit_ui"]
+            }])
+            scenario_summary.to_excel(writer, sheet_name="Scenario Settings", index=False)
+
+            sim_start = datetime.strptime(simulation_date, "%m/%d/%Y %H:%M")
+            rain_minutes = st.session_state.get("rain_minutes", [])
+            tide_minutes = st.session_state.get("tide_minutes", [])
+            rain_disp_unit = st.session_state.get("rain_disp_unit", "inches")
+            tide_disp_unit = st.session_state.get("tide_disp_unit", "ft")
+            rain_ts = st.session_state.get("display_rain_curve_current", [])
+            rain_ts_f = st.session_state.get("display_rain_curve_future", [])
+            tide_ts = st.session_state.get("display_tide_curve", [])
+
+            if len(rain_ts) > 0:
+                r_t = [(sim_start + timedelta(minutes=int(m))).strftime("%m/%d/%Y %H:%M")
+                    for m in rain_minutes[:len(rain_ts)]]
+                df_rain = pd.DataFrame({
+                    "Timestamp": r_t,
+                    f"Rainfall – Current ({rain_disp_unit})": rain_ts[:len(r_t)],
+                    f"Rainfall – +20% ({rain_disp_unit})":    rain_ts_f[:len(r_t)]
+                })
+            else:
+                df_rain = pd.DataFrame(columns=[
+                    "Timestamp",
+                    f"Rainfall – Current ({rain_disp_unit})",
+                    f"Rainfall – +20% ({rain_disp_unit})"
+                ])
+            df_rain.to_excel(writer, sheet_name="Rainfall Event", index=False)
+
+            if len(tide_ts) > 0:
+                t_t = [(sim_start + timedelta(minutes=int(m))).strftime("%m/%d/%Y %H:%M")
+                    for m in tide_minutes[:len(tide_ts)]]
+                df_tide = pd.DataFrame({"Timestamp": t_t, f"Tide ({tide_disp_unit})": tide_ts[:len(t_t)]})
+            else:
+                df_tide = pd.DataFrame(columns=["Timestamp", f"Tide ({tide_disp_unit})"])
+            df_tide.to_excel(writer, sheet_name="Tide Event", index=False)
+
+            out = df_vol.reset_index()
+            out.columns = ["Scenario",
+                        f"Flooding ({unit_lbl})",
+                        f"Infiltration ({unit_lbl})",
+                        f"Surface Runoff ({unit_lbl})"]
+            out.to_excel(writer, sheet_name="Scenario Volumes", index=False)
+
+        st.download_button(
+            label=f"Download Results",
+            data=excel_output.getvalue(),
+            file_name="CoastWise_Results.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
     st.markdown("---")
     if st.button("🚪 Logout"):
         try: shutil.rmtree(st.session_state.temp_dir)
