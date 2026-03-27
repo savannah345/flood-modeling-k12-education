@@ -434,6 +434,138 @@ def render_total_runoff_map_single(
 
     return runoff_unit, (vmin, vmax)
 
+from typing import Dict, Tuple, Set
+
+def load_caps_from_df(df: pd.DataFrame) -> Tuple[Dict[str,int], Dict[str,int]]:
+    if "NAME" not in df.columns or "Max_RG_DEM_Considered" not in df.columns or "MaxNumber_RB" not in df.columns:
+        raise ValueError("raster_df must have NAME, Max_RG_DEM_Considered, MaxNumber_RB")
+    name = df["NAME"].astype(str)
+    caps_RG = dict(zip(name, pd.to_numeric(df["Max_RG_DEM_Considered"], errors="coerce").fillna(0).astype(int)))
+    caps_RB = dict(zip(name, pd.to_numeric(df["MaxNumber_RB"], errors="coerce").fillna(0).astype(int)))
+    return caps_RG, caps_RB
+
+def realize_percent_uptake(pRG_percent: float, pRB_percent: float,
+                           caps_RG: Dict[str,int], caps_RB: Dict[str,int]) -> Dict[str, Dict[str,int]]:
+    pRG = max(0.0, min(100.0, float(pRG_percent)))
+    pRB = max(0.0, min(100.0, float(pRB_percent)))
+    out = {}
+    all_names = set(caps_RG) | set(caps_RB)
+    for s in all_names:
+        rg = int(np.floor((pRG/100.0) * (caps_RG.get(s, 0) or 0)))
+        rb = int(np.floor((pRB/100.0) * (caps_RB.get(s, 0) or 0)))
+        out[s] = {"rain_gardens": rg, "rain_barrels": rb}
+    return out
+
+def compute_percent_pair_for_budget(B: float, cRG: float, cRB: float,
+                                    CapRG_total: int, CapRB_total: int,
+                                    pin_type: str, pin_value_percent: float) -> Tuple[float, float]:
+    pin_type = pin_type.upper().strip()
+    pin_value = max(0.0, min(100.0, float(pin_value_percent)))
+    if pin_type == "RG":
+        pRG = pin_value
+        pRB_star = (B - cRG * (pRG/100.0) * CapRG_total) / (cRB * CapRB_total) if CapRB_total > 0 else 0.0
+        pRB = max(0.0, min(100.0, pRB_star * 100.0))
+        return round(pRG, 1), round(pRB, 1)
+    elif pin_type == "RB":
+        pRB = pin_value
+        pRG_star = (B - cRB * (pRB/100.0) * CapRB_total) / (cRG * CapRG_total) if CapRG_total > 0 else 0.0
+        pRG = max(0.0, min(100.0, pRG_star * 100.0))
+        return round(pRG, 1), round(pRB, 1)
+    else:
+        raise ValueError("pin_type must be 'RG' or 'RB'")
+
+def restrict_plan_to_group(plan: Dict[str, Dict[str,int]], group_names: Set[str]) -> Dict[str, Dict[str,int]]:
+    group = set(group_names or set())
+    return {s: v for s, v in plan.items() if s in group}
+
+def summarize_plan(plan: Dict[str, Dict[str,int]], cRG: float, cRB: float) -> dict:
+    total_rg = sum(v["rain_gardens"] for v in plan.values())
+    total_rb = sum(v["rain_barrels"] for v in plan.values())
+    spent = cRG * total_rg + cRB * total_rb
+    treated_ft2 = 400.0 * total_rg + 300.0 * total_rb
+    return {"rg": int(total_rg), "rb": int(total_rb), "spent": float(spent), "treated_ft2": float(treated_ft2)}
+
+# --- LID placement map (logarithmic green shading; zero-LID transparent; Deck-level tooltip) ---
+def render_focus_placement_map_log(plan: Dict[str, Dict[str,int]],
+                                   title: str,
+                                   ws_shp_path: str,
+                                   widget_key: str):
+    # Load subcatchments
+    gdf = load_ws(ws_shp_path).copy()
+
+    # Attach counts to each subcatchment
+    gdf["_RG"] = gdf["NAME"].map(lambda s: plan.get(s, {}).get("rain_gardens", 0))
+    gdf["_RB"] = gdf["NAME"].map(lambda s: plan.get(s, {}).get("rain_barrels", 0))
+    gdf["_TOTAL_LID"] = gdf["_RG"] + gdf["_RB"]
+
+    # Log-scale green fill; zero-LID is transparent
+    vmax = max(1, int(gdf["_TOTAL_LID"].max()))
+    def fill_color(n):
+        if n <= 0:
+            return [0, 0, 0, 0]  # transparent
+        alpha = int(80 + 175 * (np.log1p(n) / np.log1p(vmax)))  # 80..255 (log scale)
+        return [34, 139, 34, alpha]  # ForestGreen
+    gdf["_fill"] = gdf["_TOTAL_LID"].map(fill_color)
+
+    # Labels for map (keep simple; details in tooltip)
+    reps = gdf.geometry.representative_point()
+    labels = pd.DataFrame({
+        "lon": reps.x, "lat": reps.y,
+        "text": gdf["NAME"].astype(str)
+    })
+    text_layer = pdk.Layer(
+        "TextLayer",
+        data=labels,
+        get_position='[lon, lat]',
+        get_text="text",
+        get_size=10,
+        get_color=[0,0,0],
+        get_alignment_baseline="'center'"
+    )
+
+    # GeoJson layer (no tooltip here; Streamlit reads it from Deck)
+    poly_layer = pdk.Layer(
+        "GeoJsonLayer",
+        data=gdf.__geo_interface__,
+        pickable=True,
+        autoHighlight=True,
+        highlightColor=[0, 0, 0, 160],
+        stroked=True,
+        filled=True,
+        get_fill_color="properties._fill",
+        get_line_color=[0,0,0,255],  # black outlines
+        line_width_min_pixels=1,
+    )
+
+    # View
+    centroid = gdf.geometry.union_all().centroid
+    view_state = pdk.ViewState(latitude=centroid.y, longitude=centroid.x, zoom=13.45)
+
+    deck_tooltip = {
+        "html": (
+            "<b>{NAME}</b><br/>"
+            "RG (rain gardens): {_RG}<br/>"
+            "RB (rain barrels): {_RB}<br/>"
+            "Total LIDs: {_TOTAL_LID}"
+        ),
+        "style": {"backgroundColor": "white", "color": "black"}
+    }
+
+    # Render
+    st.markdown(f"**{title}**")
+    st.pydeck_chart(
+        pdk.Deck(
+            layers=[poly_layer, text_layer],
+            initial_view_state=view_state,
+            map_provider="carto",
+            map_style="light",
+            tooltip=deck_tooltip,  # <-- move tooltip here
+        ),
+        use_container_width=True,
+        height=260,
+        key=widget_key
+    )
+
 def _legend_html(unit: str, vmin: float, vmax: float) -> str:
     cmap = mpl.colormaps.get_cmap("Blues")
     norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax, clip=True)
@@ -453,7 +585,7 @@ def _legend_html(unit: str, vmin: float, vmax: float) -> str:
           <span>{vmax:.2f}</span>
         </div>
         <div style="color:#555; font-size:12px; text-align:center; margin-top:6px;">
-          Same scale for all 12 maps
+          Same scale for all 8 comparison.
         </div>
       </div>
     </div>
@@ -847,9 +979,15 @@ def app_ui():
     NODE_SHP_PATH   = st.session_state.get("NODE_SHP_PATH", "map_files/Nodes.shp")
     PIPE_SHP_PATH   = st.session_state.get("PIPE_SHP_PATH", "map_files/Conduits.shp")
 
+    future_mult = 1.2
+
     st.title("CoastWise")
     st.markdown('<a href="https://github.com/savannah345/flood-modeling-k12-education/blob/main/CoastWise_Tutorial.docx" target="_blank">Tutorial</a>', unsafe_allow_html=True)
 
+    # --- Fixed subcatchment lists (must match shapefile NAME like "Sub_20") ---
+    UPSTREAM_LIST = {f"Sub_{n}" for n in [20,22,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39]}
+    DOWNSTREAM_LIST = {f"Sub_{n}" for n in [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,21,23]}
+    HIGHRUNOFF_LIST = {f"Sub_{n}" for n in [3,4,5,6,7,10,18,19,21,22,27,28,29,30,31,32,33,35,37,38]}
     
     st.markdown("""
     <style>
@@ -970,6 +1108,14 @@ def app_ui():
         with r_high:
             st.caption("<div style='text-align:right;'>More intense</div>", unsafe_allow_html=True)
 
+        rain_variant_choice = st.radio(
+            "Rainfall Scenario",
+            ["Current", "Future (+20%)"],
+            index=(0 if cfg.get("rain_variant", "current") == "current" else 1),
+            horizontal=True,
+            help="Choose whether to run simulations using current rainfall or a fixed +20% future rainfall."
+        )
+
         # ---------------- Tide Alignment ----------------
         align_choice = st.radio(
             "Tide Alignment",
@@ -984,7 +1130,6 @@ def app_ui():
         )
 
         submitted = st.form_submit_button("Apply Settings")
-    # -------------------- END FORM; DEDENT BELOW THIS LINE --------------------
 
     if submitted:
         st.session_state.cfg = {
@@ -994,7 +1139,9 @@ def app_ui():
             "return_period": str(return_period),  # keep as string; downstream expects str
              "align_mode": ("peak" if "High" in align_choice else "low"),
             "settings_ready": True,
+            "rain_variant": ("future" if "Future" in rain_variant_choice else "current")
             }
+        st.session_state["rain_variant"] = st.session_state.cfg["rain_variant"]
         cfg = st.session_state.cfg
         st.success("Settings applied.")
 
@@ -1065,10 +1212,10 @@ def app_ui():
         "rain_minutes": minutes_15,
         "tide_minutes": minutes_15,
         "display_rain_curve_current": display_rain_curve,
-        "display_rain_curve_future": display_rain_curve * 1.2,
+        "display_rain_curve_future": display_rain_curve * future_mult,
         "display_tide_curve": display_tide_curve,
         "rain_sim_curve_current_in": rain_curve_in,
-        "rain_sim_curve_future_in": rain_curve_in * 1.2,
+        "rain_sim_curve_future_in": rain_curve_in * future_mult,
         "rain_disp_unit": rain_disp_unit,
         "tide_disp_unit": tide_disp_unit,
         "unit_ui": unit,
@@ -1085,11 +1232,12 @@ def app_ui():
         tide_to_feet_for_swmm(st.session_state["display_tide_curve"], unit),
         simulation_date
     )
-    def _rain_lines_pair(sim_minutes, rain_curve_in, sim_start_str):
+    def _rain_lines_pair(sim_minutes, rain_curve_in, sim_start_str, future_mult=future_mult):
         cur = format_timeseries("rain_gage_timeseries", sim_minutes, rain_curve_in, sim_start_str)
-        fut = format_timeseries("rain_gage_timeseries", sim_minutes, (np.array(rain_curve_in) * 1.2), sim_start_str)
+        fut = format_timeseries("rain_gage_timeseries", sim_minutes, (np.array(rain_curve_in) * future_mult), sim_start_str)
         return cur, fut
-    rain_lines_cur, rain_lines_fut = _rain_lines_pair(minutes_15, st.session_state["rain_sim_curve_current_in"], simulation_date)
+
+    rain_lines_cur, rain_lines_fut = _rain_lines_pair(minutes_15, st.session_state["rain_sim_curve_current_in"], simulation_date, future_mult=future_mult)
 
     st.session_state.update({
         "tide_lines": tide_lines,
@@ -1107,16 +1255,21 @@ def app_ui():
     df_rt = pd.DataFrame({
         "Hour": time_hours,
         "Rain_Current": st.session_state["display_rain_curve_current"],
-        "Rain_Future":  st.session_state["display_rain_curve_future"],  # always show +20%
+        "Rain_Future":  st.session_state["display_rain_curve_future"],  
         "Tide":         st.session_state["display_tide_curve"],
     })
+
+
+    rain_variant = cfg.get("rain_variant", "current")
+    run_current = (rain_variant == "current")
+    run_future  = (rain_variant == "future")
 
     # Optional quick metrics row (keep or remove as you prefer)
     c_m1, c_m2, c_m3 = st.columns(3)
     with c_m1:
-        st.metric(f"Total Rainfall ({rain_disp_unit})", f"{np.nansum(df_rt['Rain_Current']):.2f}")
+        st.metric(f"Total Current Rainfall ({rain_disp_unit})", f"{np.nansum(df_rt['Rain_Current']):.2f}")
     with c_m2:
-        st.metric(f"Future (+20%) Total ({rain_disp_unit})", f"{np.nansum(df_rt['Rain_Future']):.2f}")
+        st.metric(f"Total Future Rainfall (+20%) ({rain_disp_unit})", f"{np.nansum(df_rt['Rain_Future']):.2f}")
     with c_m3:
         st.metric(f"Tide Range ({tide_disp_unit})", f"{(np.nanmax(df_rt['Tide'])-np.nanmin(df_rt['Tide'])):.2f}")
 
@@ -1183,55 +1336,67 @@ def app_ui():
 
     if st.button("Run Baseline Scenario" , key=f"{prefix}btn_run_baseline"):
         try:
-            lid_lines = [";"]  
+            lid_lines = [";"] 
+            if run_current:  
 
-            info1 = run_swmm_scenario(
-                f"{prefix}baseline_nogate_current", rain_lines_cur, tide_lines, [";"], "NO",
-                template_path=template_inp,
-                event_window_mode="rain+2h", event_buffer_hours=2.0,
-                rain_minutes=minutes_15,
-                rain_curve_in=st.session_state["rain_sim_curve_current_in"],
-                sim_start_str=simulation_date,
-            )
-            info2 = run_swmm_scenario(
-                f"{prefix}baseline_gate_current",   rain_lines_cur, tide_lines, [";"], "YES",
-                template_path=template_inp,
-                event_window_mode="rain+2h", event_buffer_hours=2.0,
-                rain_minutes=minutes_15,
-                rain_curve_in=st.session_state["rain_sim_curve_current_in"],
-                sim_start_str=simulation_date,
-            )
-            info3 = run_swmm_scenario(
-                f"{prefix}baseline_nogate_future",  rain_lines_fut, tide_lines, [";"], "NO",
-                template_path=template_inp,
-                event_window_mode="rain+2h", event_buffer_hours=2.0,
-                rain_minutes=minutes_15,
-                rain_curve_in=st.session_state["rain_sim_curve_future_in"],
-                sim_start_str=simulation_date,
-            )
-            info4 = run_swmm_scenario(
-                f"{prefix}baseline_gate_future",    rain_lines_fut, tide_lines, [";"], "YES",
-                template_path=template_inp,
-                event_window_mode="rain+2h", event_buffer_hours=2.0,
-                rain_minutes=minutes_15,
-                rain_curve_in=st.session_state["rain_sim_curve_future_in"],
-                sim_start_str=simulation_date,
-            )
+                info1 = run_swmm_scenario(
+                    f"{prefix}baseline_nogate_current", rain_lines_cur, tide_lines, lid_lines, "NO",
+                    template_path=template_inp,
+                    event_window_mode="rain+2h", event_buffer_hours=2.0,
+                    rain_minutes=minutes_15,
+                    rain_curve_in=st.session_state["rain_sim_curve_current_in"],
+                    sim_start_str=simulation_date,
+                )
+                info2 = run_swmm_scenario(
+                    f"{prefix}baseline_gate_current",   rain_lines_cur, tide_lines, lid_lines, "YES",
+                    template_path=template_inp,
+                    event_window_mode="rain+2h", event_buffer_hours=2.0,
+                    rain_minutes=minutes_15,
+                    rain_curve_in=st.session_state["rain_sim_curve_current_in"],
+                    sim_start_str=simulation_date,
+                )
+                st.session_state.update({
+                    f"{prefix}df_base_nogate_current": info1["df_runoff"],
+                    f"{prefix}df_base_gate_current":   info2["df_runoff"]
+                })
 
-            st.session_state.update({
-                f"{prefix}df_base_nogate_current": info1["df_runoff"],
-                f"{prefix}df_base_gate_current":   info2["df_runoff"],
-                f"{prefix}df_base_nogate_future":  info3["df_runoff"],
-                f"{prefix}df_base_gate_future":    info4["df_runoff"],
-            })
+                remember_scenario("baseline_nogate_current", info1["df_runoff"], info1["node_cuft_event"], prefix)
+                remember_scenario("baseline_gate_current",   info2["df_runoff"], info2["node_cuft_event"], prefix)
 
-            remember_scenario("baseline_nogate_current", info1["df_runoff"], info1["node_cuft_event"], prefix)
-            remember_scenario("baseline_gate_current",   info2["df_runoff"], info2["node_cuft_event"], prefix)
-            remember_scenario("baseline_nogate_future",  info3["df_runoff"], info3["node_cuft_event"], prefix)
-            remember_scenario("baseline_gate_future",    info4["df_runoff"], info4["node_cuft_event"], prefix)
+            if run_future: 
+                info3 = run_swmm_scenario(
+                    f"{prefix}baseline_nogate_future",  rain_lines_fut, tide_lines, lid_lines, "NO",
+                    template_path=template_inp,
+                    event_window_mode="rain+2h", event_buffer_hours=2.0,
+                    rain_minutes=minutes_15,
+                    rain_curve_in=st.session_state["rain_sim_curve_future_in"],
+                    sim_start_str=simulation_date,
+                )
+                info4 = run_swmm_scenario(
+                    f"{prefix}baseline_gate_future",    rain_lines_fut, tide_lines, lid_lines, "YES",
+                    template_path=template_inp,
+                    event_window_mode="rain+2h", event_buffer_hours=2.0,
+                    rain_minutes=minutes_15,
+                    rain_curve_in=st.session_state["rain_sim_curve_future_in"],
+                    sim_start_str=simulation_date,
+                )
 
-            df_swmm_now = st.session_state[f"{prefix}df_base_nogate_current"]
-            if len(df_swmm_now) == 0:
+                st.session_state.update({
+                    f"{prefix}df_base_nogate_future":  info3["df_runoff"],
+                    f"{prefix}df_base_gate_future":    info4["df_runoff"]
+                })
+ 
+                remember_scenario("baseline_nogate_future",  info3["df_runoff"], info3["node_cuft_event"], prefix)
+                remember_scenario("baseline_gate_future",    info4["df_runoff"], info4["node_cuft_event"], prefix)
+
+            # Replace your df_swmm_now block with:
+            df_swmm_now = None
+            if run_current:
+                df_swmm_now = st.session_state.get(f"{prefix}df_base_nogate_current")
+            elif run_future:
+                df_swmm_now = st.session_state.get(f"{prefix}df_base_nogate_future")
+
+            if df_swmm_now is None or len(df_swmm_now) == 0:
                 st.error("No rows parsed from 'Subcatchment Runoff Summary' in the .rpt")
             else:
                 st.success("Baseline scenarios complete.")
@@ -1241,7 +1406,7 @@ def app_ui():
                     unit_ui=st.session_state["unit_ui"],
                     ws_shp_path=WS_SHP_PATH
                 )
-                st.session_state[f"{prefix}baseline_map_html"] = map_html
+                st.session_state[f"{prefix}baseline_map_html"]    = map_html
                 st.session_state[f"{prefix}baseline_legend_html"] = legend_html
                 st.session_state[f"{prefix}grid_ready"] = True
         except Exception as e:
@@ -1294,473 +1459,330 @@ def app_ui():
         st.error(f"raster_df is missing required columns: {sorted(missing)}")
         st.stop()
 
-    st.subheader("Add LID Features (by % of community application)")
-    if f"{prefix}user_lid_config" not in st.session_state:
-        st.session_state[f"{prefix}user_lid_config"] = {}
+    st.subheader("Plan LIDs")
 
-    c1, c2, c3, c4 = st.columns([2,2,2,2])
+    # Explain the two paths *before* any controls
+    st.info(
+        "• **Path A – Percent Uptake (whole watershed):** Choose RG% and RB%. CoastWise applies these to each "
+        "subcatchment’s feasible maximum RG and RB, highlighting "
+        "collective action across the watershed.\n"
+    )
+
+    st.info(
+
+        "• **Path B – Known Budget → Feasible Uptake:** Enter a budget and unit costs. Pin RG% or RB%. CoastWise solves "
+        "the other percent so the plan fits the budget as closely as integer caps allow, then reports counts, spend, and treated area.\n\n"
+    )
+
+    path_choice = st.selectbox(
+        "Select a planning path:",
+        ["— Select a planning path —", "Path A — Percent Uptake", "Path B — Budget to Percent"],
+        index=0
+    )
+
+    if path_choice == "— Select a planning path —":
+        st.stop()  
+
+    # Load per-subcatchment maxima from raster_df
+    caps_RG, caps_RB = load_caps_from_df(raster_df)
+    CapRG_total = int(sum(caps_RG.values()))
+    CapRB_total = int(sum(caps_RB.values()))
+
+    # Unit costs (shared)
+    c1, c2 = st.columns(2)
     with c1:
-        pct_rg = st.slider("Rain Gardens uptake (%)", 0, 100, 10, step=1,
-                        help="Applied to each subcatchment’s RG max")
+        unit_cost_rg = st.number_input("Rain Garden cost ($/unit)", min_value=0.0, value=500.0, step=25.0)
     with c2:
-        pct_rb = st.slider("Rain Barrels uptake (%)", 0, 100, 10, step=1,
-                        help="Applied to each subcatchment’s RB max")
-    with c3:
-        unit_cost_rg = st.number_input("Rain Garden ($/ea)", min_value=0.0, value=500.0, step=100.0)
-    with c4:
-        unit_cost_rb = st.number_input("Rain Barrel ($/ea)", min_value=0.0, value=150.0, step=10.0)
+        unit_cost_rb = st.number_input("Rain Barrel cost ($/unit)", min_value=0.0, value=150.0, step=5.0)
 
-    df0 = raster_df[["NAME", "Max_RG_DEM_Considered", "MaxNumber_RB"]].copy()
-    df0["Max_RG_DEM_Considered"] = df0["Max_RG_DEM_Considered"].astype(int)
-    df0["MaxNumber_RB"]          = df0["MaxNumber_RB"].astype(int)
-    df0["Rain Gardens"] = np.rint(df0["Max_RG_DEM_Considered"] * (pct_rg / 100.0)).astype(int)
-    df0["Rain Barrels"] = np.rint(df0["MaxNumber_RB"]          * (pct_rb / 100.0)).astype(int)
-    df0["Rain Gardens"] = df0["Rain Gardens"].clip(lower=0, upper=df0["Max_RG_DEM_Considered"])
-    df0["Rain Barrels"] = df0["Rain Barrels"].clip(lower=0, upper=df0["MaxNumber_RB"])
-    df0["Cost ($)"]      = (df0["Rain Gardens"] * unit_cost_rg) + (df0["Rain Barrels"] * unit_cost_rb)
-    df0["Cost Display"]  = df0["Cost ($)"].apply(lambda x: f"${x:,.0f}")
+    # Build plan_base from the selected path
+    plan_base = None
 
-    table_init = (
-        df0.rename(columns={"Max_RG_DEM_Considered": "RG Max", "MaxNumber_RB": "RB Max"})
-        [["NAME", "RG Max", "RB Max", "Rain Gardens", "Rain Barrels", "Cost Display", "Cost ($)"]]
-    )
+    if "Path A" in path_choice:
+        st.markdown("### Path A — Percent Uptake (whole watershed)")
+        a1, a2 = st.columns(2)
+        with a1:
+            pct_rg = st.slider("RG uptake (%)", 0, 100, 20, step=1,
+                            help="Applied uniformly to each subcatchment’s RG cap")
+        with a2:
+            pct_rb = st.slider("RB uptake (%)", 0, 100, 30, step=1,
+                            help="Applied uniformly to each subcatchment’s RB cap")
 
- 
-    table_init = table_init.sort_values("Cost ($)", ascending=True).reset_index(drop=True)
-
-    st.markdown("Edit Rain Gardens and Rain Barrels numbers after % application if you want to change any subcatchments individually. Do not exceed the RG Max or RB Max, respectfully.")
-    edited_display = st.data_editor(
-        table_init.drop(columns=["Cost ($)"]), 
-        use_container_width=True,
-        num_rows="fixed",
-        column_config={
-            "NAME": st.column_config.TextColumn("Subcatchment", disabled=True),
-            "RG Max": st.column_config.NumberColumn("RG Max", disabled=True, format="%d"),
-            "RB Max": st.column_config.NumberColumn("RB Max", disabled=True, format="%d"),
-            "Rain Gardens": st.column_config.NumberColumn(min_value=0, step=1, format="%d"),
-            "Rain Barrels": st.column_config.NumberColumn(min_value=0, step=1, format="%d"),
-            "Cost Display": st.column_config.TextColumn("Cost ($)", disabled=True),
-        },
-        key=f"{prefix}lid_percent_editor",
-    )
-
-    edited = edited_display.copy()
-    edited["RG Max"] = edited["RG Max"].astype(int)
-    edited["RB Max"] = edited["RB Max"].astype(int)
-
-    rg_before = edited["Rain Gardens"].copy()
-    rb_before = edited["Rain Barrels"].copy()
-
-    edited["Rain Gardens"] = (
-        pd.to_numeric(edited["Rain Gardens"], errors="coerce").fillna(0)
-        .round().astype(int).clip(lower=0, upper=edited["RG Max"])
-    )
-    edited["Rain Barrels"] = (
-        pd.to_numeric(edited["Rain Barrels"], errors="coerce").fillna(0)
-        .round().astype(int).clip(lower=0, upper=edited["RB Max"])
-    )
-    clipped = ((rg_before != edited["Rain Gardens"]) | (rb_before != edited["Rain Barrels"])).sum()
-    if clipped > 0:
-        st.warning(f"{clipped} row(s) exceeded the max and were clipped.")
-
-    edited["Cost ($)"]     = (edited["Rain Gardens"] * unit_cost_rg) + (edited["Rain Barrels"] * unit_cost_rb)
-    edited["Cost Display"] = edited["Cost ($)"].apply(lambda x: f"${x:,.0f}")
-
-    edited = edited[["NAME", "RG Max", "RB Max", "Rain Gardens", "Rain Barrels", "Cost Display", "Cost ($)"]]
-    edited = edited.sort_values("Cost ($)", ascending=True).reset_index(drop=True)
-
-    c_budget1, c_budget2, c_budget3 = st.columns([2,2,2])
-    with c_budget1:
-        budget_total = st.number_input("Total budget ($)", min_value=0.0, value=500000.0, step=1000.0)
-    with c_budget2:
-        total_cost = float(edited["Cost ($)"].sum())
-        st.metric("Total cost (current plan)", f"${total_cost:,.0f}")
-    with c_budget3:
-        remaining = max(budget_total - total_cost, 0.0)
-        st.metric("Remaining", f"${remaining:,.0f}")
-
-    if budget_total > 0:
-        pct = total_cost / budget_total
-        pct_clamped = min(pct, 1.0)
-        if pct <= 1.0:
-            prog_text = f"{pct*100:.1f}% of ${budget_total:,.0f} budget"
-        else:
-            prog_text = f"100%+  (over by ${total_cost - budget_total:,.0f})"
-        st.progress(pct_clamped, text=prog_text)
-
-    if budget_total > 0 and total_cost > budget_total:
-        st.error(f"Over budget by ${total_cost - budget_total:,.0f}. Reduce counts or increase the budget.")
-
-    try:
-        import altair as alt
-        chart_df = edited.sort_values("Cost ($)", ascending=False)  
-        if not chart_df.empty:
-            chart = (
-                alt.Chart(chart_df)
-                .mark_bar()
-                .encode(
-                    x=alt.X("Cost ($):Q", title="Cost ($)"),
-                    y=alt.Y("NAME:N", sort='-x', title="Subcatchment"),
-                    tooltip=[
-                        alt.Tooltip("NAME:N", title="Subcatchment"),
-                        alt.Tooltip("Cost ($):Q", title="Cost ($)", format="$.0f"),
-                        alt.Tooltip("Rain Gardens:Q", title="Rain Gardens"),
-                        alt.Tooltip("Rain Barrels:Q", title="Rain Barrels"),
-                        alt.Tooltip("RG Max:Q", title="RG Max"),
-                        alt.Tooltip("RB Max:Q", title="RB Max"),
-                    ],
-                )
-                .configure_axisY(labelFontSize=15, labelOverlap=False, labelSeparation=8)
-                .properties(height=max(320, 20 * len(chart_df)))
-            )
-            st.altair_chart(chart, use_container_width=True, key=f"{prefix}_vol_flood_chart")
-    except Exception as e:
-        st.error(f"Chart rendering failed: {e}")
-
-
-    with st.container(key=f"{prefix}sec_apply"):
-        if st.button("Apply table to LID selections", key=f"{prefix}btn_apply_lid"):
-            st.session_state[f"{prefix}user_lid_config"] = {
-                row["NAME"]: {
-                    "rain_gardens": int(row["Rain Gardens"]),
-                    "rain_barrels": int(row["Rain Barrels"]),
-                }
-                for _, row in edited.iterrows()
-                if int(row["Rain Gardens"]) > 0 or int(row["Rain Barrels"]) > 0
-            }
-            st.success("Applied. Use **Run Custom LID Scenario** to simulate.")
-            # Keep baseline scenarios present after this button rerun
-            _rehydrate_baseline_into_store(prefix)
-            _ensure_baselines_visible(prefix)
-            for nm in ["baseline_nogate_current","baseline_gate_current",
-                    "baseline_nogate_future","baseline_gate_future"]:
-                _ensure_scenario_loaded(nm, prefix)
-            # harmless, but keeps other logic happy if it ever checks this
-            st.session_state[f"{prefix}grid_ready"] = True
-
-    with st.container(key=f"{prefix}sec_custom"):
-        if st.button("Run Custom LID Scenario", key=f"{prefix}btn_run_custom"):
-            existing_store = _sc_store(prefix).copy()
-            lid_cfg = st.session_state.get(f"{prefix}user_lid_config", {})
-            if not lid_cfg or all((v.get("rain_gardens",0)==0 and v.get("rain_barrels",0)==0) for v in lid_cfg.values()):
-                st.warning("No LIDs selected.")
-            else:
-                try:
-                    lid_lines = generate_lid_usage_lines(lid_cfg, raster_df)
-                    info1 = run_swmm_scenario(
-                        f"{prefix}lid_nogate_current",
-                        st.session_state["rain_lines_cur"],
-                        st.session_state["tide_lines"],
-                        lid_lines,
-                        "NO",
-                        template_path=template_inp,
-                        event_window_mode="rain+2h",
-                        event_buffer_hours=2.0,
-                        rain_minutes=minutes_15,
-                        rain_curve_in=st.session_state["rain_sim_curve_current_in"],
-                        sim_start_str=simulation_date,
-                    )
-                    info2 = run_swmm_scenario(
-                        f"{prefix}lid_gate_current",
-                        st.session_state["rain_lines_cur"],
-                        st.session_state["tide_lines"],
-                        lid_lines,
-                        "YES",
-                        template_path=template_inp,
-                        event_window_mode="rain+2h",
-                        event_buffer_hours=2.0,
-                        rain_minutes=minutes_15,
-                        rain_curve_in=st.session_state["rain_sim_curve_current_in"],
-                        sim_start_str=simulation_date,
-                    )
-                    info3 = run_swmm_scenario(
-                        f"{prefix}lid_nogate_future",
-                        st.session_state["rain_lines_fut"],
-                        st.session_state["tide_lines"],
-                        lid_lines,
-                        "NO",
-                        template_path=template_inp,
-                        event_window_mode="rain+2h",
-                        event_buffer_hours=2.0,
-                        rain_minutes=minutes_15,
-                        rain_curve_in=st.session_state["rain_sim_curve_future_in"],
-                        sim_start_str=simulation_date,
-                    )
-                    info4 = run_swmm_scenario(
-                        f"{prefix}lid_gate_future",
-                        st.session_state["rain_lines_fut"],
-                        st.session_state["tide_lines"],
-                        lid_lines,
-                        "YES",
-                        template_path=template_inp,
-                        event_window_mode="rain+2h",
-                        event_buffer_hours=2.0,
-                        rain_minutes=minutes_15,
-                        rain_curve_in=st.session_state["rain_sim_curve_future_in"],
-                        sim_start_str=simulation_date,
-                    )
-
-                    st.session_state.update({
-                        f"{prefix}df_lid_nogate_current": info1["df_runoff"],
-                        f"{prefix}df_lid_gate_current":   info2["df_runoff"],
-                        f"{prefix}df_lid_nogate_future":  info3["df_runoff"],
-                        f"{prefix}df_lid_gate_future":    info4["df_runoff"],
-                    })
-
-                    remember_scenario("lid_nogate_current", info1["df_runoff"], info1["node_cuft_event"], prefix)
-                    remember_scenario("lid_gate_current",   info2["df_runoff"], info2["node_cuft_event"], prefix)
-                    remember_scenario("lid_nogate_future",  info3["df_runoff"], info3["node_cuft_event"], prefix)
-                    remember_scenario("lid_gate_future",    info4["df_runoff"], info4["node_cuft_event"], prefix)
-
-                    st.success("Custom LID scenarios complete.")
-                    st.session_state[f"{prefix}ran_custom"] = True
-
-                    store = _sc_store(prefix)
-                    for k, v in existing_store.items():
-                        store.setdefault(k, v)
-
-                    _rehydrate_baseline_into_store(prefix)
-                    _ensure_baselines_visible(prefix)
-                    st.session_state[f"{prefix}grid_ready"] = True
-                except Exception as e:
-                    st.error(f"LID simulation failed: {e}")
-
-    with st.container(key=f"{prefix}sec_max"):
-        if st.button("Run Max LID Scenario", key=f"{prefix}btn_run_max"): 
-            existing_store = _sc_store(prefix).copy()
-            lid_cfg = {row["NAME"]: {"rain_gardens": int(row["Max_RG_DEM_Considered"]),
-                                    "rain_barrels": int(row["MaxNumber_RB"])}
-                    for _, row in raster_df.iterrows()}
-            try:
-                lid_lines = generate_lid_usage_lines(lid_cfg, raster_df)
-
-                info1 = run_swmm_scenario(
-                    f"{prefix}lid_max_nogate_current",
-                    st.session_state["rain_lines_cur"],
-                    st.session_state["tide_lines"],
-                    lid_lines,
-                    "NO",
-                    template_path=template_inp,
-                    event_window_mode="rain+2h",
-                    event_buffer_hours=2.0,
-                    rain_minutes=minutes_15,
-                    rain_curve_in=st.session_state["rain_sim_curve_current_in"],
-                    sim_start_str=simulation_date,
-                )
-                info2 = run_swmm_scenario(
-                    f"{prefix}lid_max_gate_current",
-                    st.session_state["rain_lines_cur"],
-                    st.session_state["tide_lines"],
-                    lid_lines,
-                    "YES",
-                    template_path=template_inp,
-                    event_window_mode="rain+2h",
-                    event_buffer_hours=2.0,
-                    rain_minutes=minutes_15,
-                    rain_curve_in=st.session_state["rain_sim_curve_current_in"],
-                    sim_start_str=simulation_date,
-                )
-                info3 = run_swmm_scenario(
-                    f"{prefix}lid_max_nogate_future",
-                    st.session_state["rain_lines_fut"],
-                    st.session_state["tide_lines"],
-                    lid_lines,
-                    "NO",
-                    template_path=template_inp,
-                    event_window_mode="rain+2h",
-                    event_buffer_hours=2.0,
-                    rain_minutes=minutes_15,
-                    rain_curve_in=st.session_state["rain_sim_curve_future_in"],
-                    sim_start_str=simulation_date,
-                )
-                info4 = run_swmm_scenario(
-                    f"{prefix}lid_max_gate_future",
-                    st.session_state["rain_lines_fut"],
-                    st.session_state["tide_lines"],
-                    lid_lines,
-                    "YES",
-                    template_path=template_inp,
-                    event_window_mode="rain+2h",
-                    event_buffer_hours=2.0,
-                    rain_minutes=minutes_15,
-                    rain_curve_in=st.session_state["rain_sim_curve_future_in"],
-                    sim_start_str=simulation_date,
-                )
-
-
-                st.session_state.update({
-                    f"{prefix}df_lid_max_nogate_current": info1["df_runoff"],
-                    f"{prefix}df_lid_max_gate_current":   info2["df_runoff"],
-                    f"{prefix}df_lid_max_nogate_future":  info3["df_runoff"],
-                    f"{prefix}df_lid_max_gate_future":    info4["df_runoff"],
-                })
-
-                existing_store = _sc_store(prefix).copy()
-                remember_scenario("lid_max_nogate_current", info1["df_runoff"], info1["node_cuft_event"], prefix)
-                remember_scenario("lid_max_gate_current",   info2["df_runoff"], info2["node_cuft_event"], prefix)
-                remember_scenario("lid_max_nogate_future",  info3["df_runoff"], info3["node_cuft_event"], prefix)
-                remember_scenario("lid_max_gate_future",    info4["df_runoff"], info4["node_cuft_event"], prefix)
-
-                store = _sc_store(prefix)
-                for k, v in existing_store.items():
-                    store.setdefault(k, v)
-
-                st.success("Max LID scenarios complete.")
-                st.session_state[f"{prefix}ran_max"] = True
-                _rehydrate_baseline_into_store(prefix)
-                _ensure_baselines_visible(prefix)
-                st.session_state[f"{prefix}grid_ready"] = True
-            except Exception as e:
-                st.error(f"Max LID simulation failed: {e}")
-
-    ran_baseline = bool(st.session_state.get(f"{prefix}ran_baseline"))
-    ran_custom   = bool(st.session_state.get(f"{prefix}ran_custom"))
-    ran_max      = bool(st.session_state.get(f"{prefix}ran_max"))
-
-    have_all_three = ran_baseline and ran_custom and ran_max
-    if have_all_three:
-        st.session_state[f"{prefix}show_comparison"] = True
-
-    show_comparison = bool(st.session_state.get(f"{prefix}show_comparison", False))
-
-    st.subheader("Scenario Comparison Maps")
-
-    ran_baseline = bool(st.session_state.get(f"{prefix}ran_baseline"))
-    ran_custom   = bool(st.session_state.get(f"{prefix}ran_custom"))
-    ran_max      = bool(st.session_state.get(f"{prefix}ran_max"))
-    have_all_three = ran_baseline and ran_custom and ran_max
-    if have_all_three:
-        st.session_state[f"{prefix}show_comparison"] = True
-
-    show_comparison = bool(st.session_state.get(f"{prefix}show_comparison", False))
-    if not show_comparison:
-        st.info("Run Baseline, Custom LID, and Max LID to display comparison maps.")
-    else:
-        # Keep all scenarios in memory
-        _rehydrate_baseline_into_store(prefix)
-        _ensure_baselines_visible(prefix)
-
-        # Two 6-map sets (CURRENT vs +20%)
-        CURRENT_SCENS = [
-            "baseline_nogate_current", "baseline_gate_current",
-            "lid_nogate_current",      "lid_gate_current",
-            "lid_max_nogate_current",  "lid_max_gate_current",
-        ]
-        CURRENT_TITLES = [
-            "Baseline-No Gate-Current",
-            "Baseline-Gate-Current",
-            "Custom LID-No Gate-Current",
-            "Custom LID-Gate-Current",
-            "Max LID-No Gate-Current",
-            "Max LID-Gate-Current",
-        ]
-
-        FUTURE_SCENS = [
-            "baseline_nogate_future", "baseline_gate_future",
-            "lid_nogate_future",      "lid_gate_future",
-            "lid_max_nogate_future",  "lid_max_gate_future",
-        ]
-        FUTURE_TITLES = [
-            "Baseline-No Gate-+20%",
-            "Baseline-Gate-+20%",
-            "Custom LID-No Gate-+20%",
-            "Custom LID-Gate-+20%",
-            "Max LID-No Gate-+20%",
-            "Max LID-Gate-+20%",
-        ]
-
-        # Ensure all needed scenarios are loaded so we can compute a shared legend range
-        for nm in CURRENT_SCENS + FUTURE_SCENS:
-            _ensure_scenario_loaded(nm, prefix)
-
-        # Build DF list for global legend range (across all 12 so scales stay consistent)
-        sc_records_all = [recall_scenario(nm, prefix) for nm in (CURRENT_SCENS + FUTURE_SCENS)]
-        dfs_available  = [rec["df"] for rec in sc_records_all if rec is not None]
-        global_range = (
-            _global_runoff_range_across(dfs_available, st.session_state["unit_ui"], WS_SHP_PATH)
-            if dfs_available else (0.0, 1.0)
+        plan_base = realize_percent_uptake(pct_rg, pct_rb, caps_RG, caps_RB)
+        summary = summarize_plan(plan_base, unit_cost_rg, unit_cost_rb)
+        st.success(
+            f"RG={summary['rg']} | RB={summary['rb']}               "
+            f"   Estimated Cost: ${summary['spent']:,.0f}"
         )
 
-        # --- UI: two buttons to switch set ---
-        if f"{prefix}cmp_set" not in st.session_state:
-            st.session_state[f"{prefix}cmp_set"] = "current"
+    elif "Path B" in path_choice:
+        st.markdown("### Path B — Known Budget → Feasible Uptake")
 
-        cbtn1, cbtn2 = st.columns([1,1])
-        with cbtn1:
-            if st.button("Show CURRENT rainfall maps", key=f"{prefix}btn_cmp_current"):
-                st.session_state[f"{prefix}cmp_set"] = "current"
-        with cbtn2:
-            if st.button("Show +20% rainfall maps", key=f"{prefix}btn_cmp_future"):
-                st.session_state[f"{prefix}cmp_set"] = "future"
+        st.info(
+            "Path B starts from your **budget** and **unit costs**. You pick **one percent to pin** (RG or RB), "
+            "which CoastWise applies across **every subcatchment’s maximum** for that LID type. Then CoastWise solves "
+            "the **other percent** so the **total cost fits your budget**.\n\n"
+            "**Example (Pin RG = 30%)**: CoastWise applies 30% of each subcatchment’s RG max, totals that cost, then finds the RB% "
+            "that best uses the remaining budget.\n"
+        )
 
-        # Pick which set to render (6 maps max)
-        if st.session_state[f"{prefix}cmp_set"] == "future":
-            SCENARIO_NAMES = FUTURE_SCENS
-            TITLES         = FUTURE_TITLES
-        else:
-            SCENARIO_NAMES = CURRENT_SCENS
-            TITLES         = CURRENT_TITLES
+        # ---- Budget + pinned percent controls ----
+        b1, b2, b3 = st.columns([1,1,2])
+        with b1:
+            budget_total = st.number_input(
+                "Total budget ($)",
+                min_value=0.0, value=500_000.0, step=1_000.0,
+                help="Target total spend for this plan."
+            )
+        with b2:
+            pin_type_choice = st.radio(
+                "Pin which percent?",
+                ["RG", "RB"], horizontal=True,
+                help="Apply this percent uniformly across all subcatchments for the selected LID type."
+            )
+        with b3:
+            pin_value = st.slider(
+                f"Pinned {pin_type_choice} uptake (%)",
+                0, 100, 30, step=1,
+                help=f"Percent of each subcatchment’s maximum {pin_type_choice} capacity."
+            )
 
-        # Recollect only the selected set
-        sc_records = [recall_scenario(nm, prefix) for nm in SCENARIO_NAMES]
+        # ---- Solve the other percent to match the budget (as closely as caps/integers allow) ----
+        pRG_solved, pRB_solved = compute_percent_pair_for_budget(
+            B=budget_total, cRG=unit_cost_rg, cRB=unit_cost_rb,
+            CapRG_total=CapRG_total, CapRB_total=CapRB_total,
+            pin_type=pin_type_choice, pin_value_percent=pin_value
+        )
 
-        unit_lbl_for_legend = None
-        any_rendered = False
+        # ---- Realize plan as discrete counts per subcatchment ----
+        plan_base = realize_percent_uptake(pRG_solved, pRB_solved, caps_RG, caps_RB)
 
-        # Stable 2x3 grid (6 canvases total)
-        tiles = []
-        for _row in range(2):
-            cols = st.columns(3, gap="medium")
-            tiles.extend([cols[0].container(), cols[1].container(), cols[2].container()])
+        # Per-type counts and costs
+        total_rg = sum(v["rain_gardens"] for v in plan_base.values())
+        total_rb = sum(v["rain_barrels"] for v in plan_base.values())
+        est_cost_rg = unit_cost_rg * total_rg
+        est_cost_rb = unit_cost_rb * total_rb
+        est_cost_total = est_cost_rg + est_cost_rb
 
-        # Fill the 6 tiles
-        for i, tile in enumerate(tiles):
-            title = TITLES[i]
-            name  = SCENARIO_NAMES[i]
-            rec   = sc_records[i]
+        # Treated area (using your constants: 400 ft² per RG; 300 ft² per RB)
+        treated_ft2 = 400.0 * total_rg + 300.0 * total_rb
 
-            with tile:
-                st.markdown(f"**{title}**")
-                body = st.empty()
-                if rec is None:
-                    body.info("Not run yet.")
-                else:
-                    df_i    = rec["df"]
-                    nodes_i = rec.get("nodes", {}) or {}
-                    with body:
-                        unit_lbl_for_legend, _ = render_total_runoff_map_single(
-                            df_in_inches=df_i,
-                            title=title,
-                            nodes_post5h_dict=nodes_i,
-                            unit_ui=st.session_state["unit_ui"],
-                            ws_shp_path=WS_SHP_PATH,
-                            pipe_shp_path=PIPE_SHP_PATH,
-                            node_shp_path=NODE_SHP_PATH,
-                            node_name_field_hint="NAME",
-                            legend_range=global_range,              # SAME SCALE across both pages
-                            widget_key=f"cmpmap_{st.session_state[f'{prefix}cmp_set']}_{i}_{name}",
-                            show_title=False,
-                        )
-                    any_rendered = True
+        # ---- Row 1: Budget + per-type estimated costs ----
+        s1c2, s1c3, s1c4 = st.columns([1,1,1])
+        with s1c2:
+            st.metric("Estimated RG Cost", f"${est_cost_rg:,.0f}")
+        with s1c3:
+            st.metric("Estimated RB Cost", f"${est_cost_rb:,.0f}")
+        with s1c4:
+            st.metric("Estimated Total Cost", f"${est_cost_total:,.0f}")
 
-        if any_rendered and unit_lbl_for_legend is not None:
-            st.markdown(_legend_html(unit_lbl_for_legend, global_range[0], global_range[1]), unsafe_allow_html=True)
+        # ---- Row 2: Pinned + Solved percents (plus optional counts/treated area) ----
+        s2c1, s2c2, s2c3 = st.columns([1,1,1])
+        with s2c1:
+            st.metric(f"Pinned {pin_type_choice} (%)",
+                    f"{pin_value:.1f}%")
+        with s2c2:
+            # Show the counterpart label properly
+            solved_label = "RB (%)" if pin_type_choice == "RG" else "RG (%)"
+            solved_value = pRB_solved if pin_type_choice == "RG" else pRG_solved
+            st.metric(f"Solved {solved_label}", f"{solved_value:.1f}%")
+        with s2c3:
+            st.metric("Counts (RG | RB)", f"{int(total_rg)} | {int(total_rb)}")
 
-    temp_dir = st.session_state.temp_dir
-    rpt_scenarios = {
-        "Baseline (No Tide Gate) – Current": os.path.join(temp_dir, f"{prefix}baseline_nogate_current.rpt"),
-        "Baseline + Tide Gate – Current":    os.path.join(temp_dir, f"{prefix}baseline_gate_current.rpt"),
-        "Baseline (No Tide Gate) – +20%":    os.path.join(temp_dir, f"{prefix}baseline_nogate_future.rpt"),
-        "Baseline + Tide Gate – +20%":       os.path.join(temp_dir, f"{prefix}baseline_gate_future.rpt"),
-        "LID (No Tide Gate) – Current":      os.path.join(temp_dir, f"{prefix}lid_nogate_current.rpt"),
-        "LID + Tide Gate – Current":         os.path.join(temp_dir, f"{prefix}lid_gate_current.rpt"),
-        "LID (No Tide Gate) – +20%":         os.path.join(temp_dir, f"{prefix}lid_nogate_future.rpt"),
-        "LID + Tide Gate – +20%":            os.path.join(temp_dir, f"{prefix}lid_gate_future.rpt"),
-        "Max LID (No Tide Gate) – Current":  os.path.join(temp_dir, f"{prefix}lid_max_nogate_current.rpt"),
-        "Max LID + Tide Gate – Current":     os.path.join(temp_dir, f"{prefix}lid_max_gate_current.rpt"),
-        "Max LID (No Tide Gate) – +20%":     os.path.join(temp_dir, f"{prefix}lid_max_nogate_future.rpt"),
-        "Max LID + Tide Gate – +20%":        os.path.join(temp_dir, f"{prefix}lid_max_gate_future.rpt"),
-    }
+    if plan_base is not None:
+        plan_all      = plan_base
+        plan_upstream = restrict_plan_to_group(plan_base, UPSTREAM_LIST)
+        plan_downstr  = restrict_plan_to_group(plan_base, DOWNSTREAM_LIST)
+        plan_highro   = restrict_plan_to_group(plan_base, HIGHRUNOFF_LIST)
+
+        st.markdown("### LID Placement — Compare Different Focus Areas")
+        row1 = st.columns(2, gap="large")
+        with row1[0]:
+            render_focus_placement_map_log(
+                plan_all,
+                "All subcatchments",
+                WS_SHP_PATH,
+                "fa_place_all"
+            )
+        with row1[1]:
+            render_focus_placement_map_log(
+                plan_upstream,
+                "Upstream",
+                WS_SHP_PATH,
+                "fa_place_up"
+            )
+
+        row2 = st.columns(2, gap="large")
+        with row2[0]:
+            render_focus_placement_map_log(
+                plan_downstr,
+                "Downstream/outlet",
+                WS_SHP_PATH,
+                "fa_place_dn"
+            )
+        with row2[1]:
+            render_focus_placement_map_log(
+                plan_highro,
+                "Highest runoff",
+                WS_SHP_PATH,
+                "fa_place_hi"
+            )
+
+    if plan_base is not None:
+        st.markdown("### Run Focus Area Scenarios")
+
+        def run_focus_pair(prefix_key: str, plan: Dict[str, Dict[str,int]],
+                        rain_lines, tide_lines, template_inp, minutes_15, sim_date, rain_curve):
+            lid_lines = generate_lid_usage_lines(plan, raster_df)  # your existing generator
+            info_off = run_swmm_scenario(f"{prefix}{prefix_key}_nogate", rain_lines, tide_lines, lid_lines, "NO",
+                                        template_path=template_inp, event_window_mode="rain+2h", event_buffer_hours=2.0,
+                                        rain_minutes=minutes_15, rain_curve_in=rain_curve, sim_start_str=sim_date)
+            info_on  = run_swmm_scenario(f"{prefix}{prefix_key}_gate",   rain_lines, tide_lines, lid_lines, "YES",
+                                        template_path=template_inp, event_window_mode="rain+2h", event_buffer_hours=2.0,
+                                        rain_minutes=minutes_15, rain_curve_in=rain_curve, sim_start_str=sim_date)
+            remember_scenario(f"{prefix_key}_nogate", info_off["df_runoff"], info_off["node_cuft_event"], prefix)
+            remember_scenario(f"{prefix_key}_gate",   info_on["df_runoff"],  info_on["node_cuft_event"],  prefix)
+            return info_off, info_on
+
+        rain_variant = st.session_state.get("rain_variant", "current")
+        use_cur = (rain_variant == "current")
+        rain_lines = st.session_state["rain_lines_cur"] if use_cur else st.session_state["rain_lines_fut"]
+        rain_curve = st.session_state["rain_sim_curve_current_in"] if use_cur else st.session_state["rain_sim_curve_future_in"]
+
+        tag = "current" if use_cur else "future"
+        c_run1, c_run2 = st.columns(2)
+        with c_run1:
+            if st.button("Run ALL subcatchments (Gate OFF/ON)"):
+                run_focus_pair(f"focus_all_{tag}",      plan_all,      rain_lines, tide_lines, template_inp, minutes_15, simulation_date, rain_curve)
+                st.success("All subcatchments scenarios complete.")
+            if st.button("Run UPSTREAM (Gate OFF/ON)"):
+                run_focus_pair(f"focus_upstream_{tag}", plan_upstream, rain_lines, tide_lines, template_inp, minutes_15, simulation_date, rain_curve)
+                st.success("Upstream scenarios complete.")
+        with c_run2:
+            if st.button("Run DOWNSTREAM/OUTLET (Gate OFF/ON)"):
+                run_focus_pair(f"focus_downstream_{tag}", plan_downstr,  rain_lines, tide_lines, template_inp, minutes_15, simulation_date, rain_curve)
+                st.success("Downstream/outlet scenarios complete.")
+            if st.button("Run HIGHEST RUNOFF (Gate OFF/ON)"):
+                run_focus_pair(f"focus_highrunoff_{tag}", plan_highro,   rain_lines, tide_lines, template_inp, minutes_15, simulation_date, rain_curve)
+
+    st.subheader("Focus Area Comparison Maps")
+
+    set_tag = "current" if st.session_state.get("rain_variant", "current") == "current" else "future"
+    FOCUS_ROWS = [
+        ("All subcatchments", f"focus_all_{set_tag}_nogate",      f"focus_all_{set_tag}_gate"),
+        ("Upstream",          f"focus_upstream_{set_tag}_nogate", f"focus_upstream_{set_tag}_gate"),
+        ("Downstream/outlet", f"focus_downstream_{set_tag}_nogate", f"focus_downstream_{set_tag}_gate"),
+        ("Highest runoff",    f"focus_highrunoff_{set_tag}_nogate", f"focus_highrunoff_{set_tag}_gate"),
+    ]
+
+    recs = [recall_scenario(name, prefix) for _, n_off, n_on in FOCUS_ROWS for name in (n_off, n_on)]
+    dfs_available = [r["df"] for r in recs if r and isinstance(r.get("df"), pd.DataFrame) and not r["df"].empty]
+    legend_range = _global_runoff_range_across(dfs_available, st.session_state["unit_ui"], WS_SHP_PATH) if dfs_available else (0.0, 1.0)
+
+    for (label, name_off, name_on) in FOCUS_ROWS:
+        st.markdown(f"#### {label}")
+        cols = st.columns(2, gap="medium")
+
+        with cols[0]:
+            rec_off = recall_scenario(name_off, prefix)
+            if not rec_off:
+                st.info("Not run yet.")
+            else:
+                render_total_runoff_map_single(
+                    df_in_inches=rec_off["df"], title=f"{label} – NO gate",
+                    nodes_post5h_dict=rec_off.get("nodes", {}) or {},
+                    unit_ui=st.session_state["unit_ui"],
+                    ws_shp_path=WS_SHP_PATH, pipe_shp_path=PIPE_SHP_PATH, node_shp_path=NODE_SHP_PATH,
+                    node_name_field_hint="NAME", legend_range=legend_range,
+                    widget_key=f"focus_cmp_{label}_{set_tag}_nogate", show_title=False
+                )
+
+        with cols[1]:
+            rec_on = recall_scenario(name_on, prefix)
+            if not rec_on:
+                st.info("Not run yet.")
+            else:
+                render_total_runoff_map_single(
+                    df_in_inches=rec_on["df"], title=f"{label} – gate ON",
+                    nodes_post5h_dict=rec_on.get("nodes", {}) or {},
+                    unit_ui=st.session_state["unit_ui"],
+                    ws_shp_path=WS_SHP_PATH, pipe_shp_path=PIPE_SHP_PATH, node_shp_path=NODE_SHP_PATH,
+                    node_name_field_hint="NAME", legend_range=legend_range,
+                    widget_key=f"focus_cmp_{label}_{set_tag}_gate", show_title=False
+                )
+
+    st.markdown(_legend_html("in" if st.session_state["unit_ui"] == "U.S. Customary" else "cm",
+                            legend_range[0], legend_range[1]), unsafe_allow_html=True)
+
+    # --- Summary grouped bar chart across the four focus areas ---
+    def build_focus_summary_df(plans_dict, unit_cost_rg, unit_cost_rb):
+        rows = []
+        for label, plan in plans_dict.items():
+            s = summarize_plan(plan, unit_cost_rg, unit_cost_rb)
+            rows.append({
+                "Focus Area": label,
+                "RG_count": s["rg"],
+                "RB_count": s["rb"],
+                "TotalCost_K": s["spent"] / 1_000.0,      # $ thousands
+                "Treated_kft2": s["treated_ft2"] / 1_000.0  # thousand ft²
+            })
+        return pd.DataFrame(rows)
+
+    if plan_base is not None:
+        plans_dict = {
+            "All":       plan_all,
+            "Upstream":  plan_upstream,
+            "Downstream":plan_downstr,
+            "High runoff": plan_highro,
+        }
+        df_sum = build_focus_summary_df(plans_dict, unit_cost_rg, unit_cost_rb)
+
+        # long format for Altair
+        df_long_counts = df_sum.melt(id_vars=["Focus Area"], value_vars=["RG_count","RB_count"],
+                                    var_name="Metric", value_name="Value")
+        df_long_other  = df_sum.melt(id_vars=["Focus Area"], value_vars=["TotalCost_K","Treated_kft2"],
+                                    var_name="Metric", value_name="Value")
+        df_long = pd.concat([df_long_counts, df_long_other], ignore_index=True)
+
+        # Nice labels
+        metric_labels = {
+            "RG_count": "RG count",
+            "RB_count": "RB count",
+            "TotalCost_K": "Total cost ($K)",
+            "Treated_kft2": "Treated area (kft²)"
+        }
+        df_long["Metric"] = df_long["Metric"].map(metric_labels)
+
+        # Color palette (metrics legend)
+        metric_colors = {"RG count": "#228B22", "RB count": "#1f77b4", "Total cost ($K)": "#ff7f0e", "Treated area (kft²)": "#9467bd"}
+
+        st.markdown("### Summary — Counts, Cost, and Treated Area by Focus Area")
+        try:
+            import altair as alt
+            chart = (
+                alt.Chart(df_long)
+                .mark_bar()
+                .encode(
+                    x=alt.X("Focus Area:N", title=None),
+                    y=alt.Y("Value:Q", title="Value (counts · $K · kft²)", axis=alt.Axis(grid=True)),
+                    color=alt.Color("Metric:N", scale=alt.Scale(domain=list(metric_colors.keys()), range=list(metric_colors.values())),
+                                    legend=alt.Legend(title="Metrics")),
+                    column=alt.Column("Focus Area:N", title=None, header=alt.Header(labelFontSize=14)),  # optional small multiples
+                    tooltip=[
+                        alt.Tooltip("Focus Area:N"),
+                        alt.Tooltip("Metric:N"),
+                        alt.Tooltip("Value:Q", format=",.2f")
+                    ],
+                )
+                .properties(height=280)
+            )
+            # Alternative: grouped bars without small multiples (comment line above and use a single x with order)
+            chart = chart.configure_axis(labelFontSize=12, titleFontSize=13).configure_legend(titleFontSize=13, labelFontSize=12)
+            st.altair_chart(chart, use_container_width=True)
+        except Exception as e:
+            st.error(f"Summary chart failed: {e}")
+
+
 
     def _gather_scenario_volumes() -> tuple[pd.DataFrame, str]:
         ACF_TO_FT3 = 43560.0
@@ -1769,18 +1791,31 @@ def app_ui():
         unit_label = "m³" if to_m3 else "ft³"
 
         friendly_map = {
+            # --- Baseline entries (keep) ---
             "Baseline (No Tide Gate) – Current":  "baseline_nogate_current",
             "Baseline + Tide Gate – Current":     "baseline_gate_current",
             "Baseline (No Tide Gate) – +20%":     "baseline_nogate_future",
             "Baseline + Tide Gate – +20%":        "baseline_gate_future",
-            "LID (No Tide Gate) – Current":       "lid_nogate_current",
-            "LID + Tide Gate – Current":          "lid_gate_current",
-            "LID (No Tide Gate) – +20%":          "lid_nogate_future",
-            "LID + Tide Gate – +20%":             "lid_gate_future",
-            "Max LID (No Tide Gate) – Current":   "lid_max_nogate_current",
-            "Max LID + Tide Gate – Current":      "lid_max_gate_current",
-            "Max LID (No Tide Gate) – +20%":      "lid_max_nogate_future",
-            "Max LID + Tide Gate – +20%":         "lid_max_gate_future",
+
+            # --- NEW: pattern scenarios — Current rainfall ---
+            "Even Pattern (No Tide Gate) – Current":       "pattern_even_current_nogate",
+            "Even Pattern + Tide Gate – Current":          "pattern_even_current_gate",
+            "Upstream Pattern (No Tide Gate) – Current":   "pattern_upstream_current_nogate",
+            "Upstream Pattern + Tide Gate – Current":      "pattern_upstream_current_gate",
+            "Downstream Pattern (No Tide Gate) – Current": "pattern_downstream_current_nogate",
+            "Downstream Pattern + Tide Gate – Current":    "pattern_downstream_current_gate",
+            "High‑Runoff Pattern (No Tide Gate) – Current": "pattern_highrunoff_current_nogate",
+            "High‑Runoff Pattern + Tide Gate – Current":    "pattern_highrunoff_current_gate",
+
+            # --- NEW: pattern scenarios — +20% rainfall ---
+            "Even Pattern (No Tide Gate) – +20%":       "pattern_even_future_nogate",
+            "Even Pattern + Tide Gate – +20%":          "pattern_even_future_gate",
+            "Upstream Pattern (No Tide Gate) – +20%":   "pattern_upstream_future_nogate",
+            "Upstream Pattern + Tide Gate – +20%":      "pattern_upstream_future_gate",
+            "Downstream Pattern (No Tide Gate) – +20%": "pattern_downstream_future_nogate",
+            "Downstream Pattern + Tide Gate – +20%":    "pattern_downstream_future_gate",
+            "High‑Runoff Pattern (No Tide Gate) – +20%": "pattern_highrunoff_future_nogate",
+            "High‑Runoff Pattern + Tide Gate – +20%":    "pattern_highrunoff_future_gate",
         }
 
         rows = []
