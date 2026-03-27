@@ -1488,18 +1488,21 @@ def app_ui():
     CapRG_total = int(sum(caps_RG.values()))
     CapRB_total = int(sum(caps_RB.values()))
 
-    # Unit costs (shared)
-    c1, c2 = st.columns(2)
-    with c1:
-        unit_cost_rg = st.number_input("Rain Garden cost ($/unit)", min_value=0.0, value=500.0, step=25.0)
-    with c2:
-        unit_cost_rb = st.number_input("Rain Barrel cost ($/unit)", min_value=0.0, value=150.0, step=5.0)
+
 
     # Build plan_base from the selected path
     plan_base = None
 
     if "Path A" in path_choice:
         st.markdown("### Path A — Percent Uptake (whole watershed)")
+
+        # Unit costs (shared)
+        c1, c2 = st.columns(2)
+        with c1:
+            unit_cost_rg = st.number_input("Rain Garden cost ($/unit)", min_value=0.0, value=500.0, step=25.0)
+        with c2:
+            unit_cost_rb = st.number_input("Rain Barrel cost ($/unit)", min_value=0.0, value=150.0, step=5.0)
+
         a1, a2 = st.columns(2)
         with a1:
             pct_rg = st.slider("RG uptake (%)", 0, 100, 20, step=1,
@@ -1525,6 +1528,13 @@ def app_ui():
             "**Example (Pin RG = 30%)**: CoastWise applies 30% of each subcatchment’s RG max, totals that cost, then finds the RB% "
             "that best uses the remaining budget.\n"
         )
+
+        # Unit costs (shared)
+        c1, c2 = st.columns(2)
+        with c1:
+            unit_cost_rg = st.number_input("Rain Garden cost ($/unit)", min_value=0.0, value=500.0, step=25.0)
+        with c2:
+            unit_cost_rb = st.number_input("Rain Barrel cost ($/unit)", min_value=0.0, value=150.0, step=5.0)
 
         # ---- Budget + pinned percent controls ----
         b1, b2, b3 = st.columns([1,1,2])
