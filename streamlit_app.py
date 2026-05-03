@@ -265,41 +265,6 @@ def extract_total_runoff_from_text(txt: str) -> pd.DataFrame:
         i += 1
     return pd.DataFrame(rows, columns=["Subcatchment","Total_in"])
 
-def node_layer_from_shp(node_shp_path: str, node_vol_dict: Dict, name_field_hint: str = "NAME"):
-    try:
-        nodes_gdf = load_nodes(node_shp_path)
-        name_field = name_field_hint if name_field_hint in nodes_gdf.columns else None
-        if name_field is None:
-            for c in ["NAME","Name","node_id","NODEID","NodeID","id","ID"]:
-                if c in nodes_gdf.columns:
-                    name_field = c
-                    break
-        if name_field is None:
-            for c in nodes_gdf.columns:
-                if c.lower() != "geometry":
-                    name_field = c; break
-        if name_field is None:
-            return None
-
-        nodes_gdf["_node_id"] = nodes_gdf[name_field].astype(str).str.strip()
-        vol_map = {str(k).strip(): float(v) for k, v in (node_vol_dict or {}).items()}
-        nodes_gdf["_cuft_event"] = nodes_gdf["_node_id"].map(lambda nid: vol_map.get(nid, 0.0))
-        nodes_gdf["_flooded"] = nodes_gdf["_cuft_event"] > 0.0
-        nodes_gdf["_color_rgba"] = nodes_gdf["_flooded"].map(lambda f: [255,0,0,255] if f else [0,0,0,255])
-
-        return pdk.Layer(
-            "GeoJsonLayer",
-            data=nodes_gdf.__geo_interface__,
-            pickable=True,
-            stroked=False,
-            filled=True,
-            get_fill_color="properties._color_rgba",
-            get_point_radius=4,
-            pointRadiusMinPixels=4,
-        )
-    except Exception:
-        return None
-
 future_mult = 1.2
 
 def _rain_lines_pair(sim_minutes, rain_curve_in, sim_start_str, future_mult=future_mult):
@@ -309,96 +274,6 @@ def _rain_lines_pair(sim_minutes, rain_curve_in, sim_start_str, future_mult=futu
     fut = format_timeseries("rain_gage_timeseries", sim_minutes, fut_vals, sim_start_str)
     return cur, fut
     
-def render_total_runoff_map_single(
-    df_in_inches,
-    title,
-    nodes_post5h_dict,
-    unit_ui,
-    ws_shp_path,
-    pipe_shp_path,
-    node_shp_path,
-    node_name_field_hint="NAME",
-    legend_range: Tuple[float,float] | None = None,
-    widget_key: str | None = None,
-    show_title: bool = True,   # <-- NEW
-):
-    ws_gdf = load_ws(ws_shp_path)
-    gdf, runoff_unit = prep_total_runoff_gdf(df_in_inches, unit_ui, ws_gdf)
-
-    if legend_range is not None:
-        vmin, vmax = legend_range
-    else:
-        vals = gdf["Total_R"].to_numpy(dtype=float)
-        finite = vals[np.isfinite(vals)]
-        if finite.size == 0:
-            vmin, vmax = 0.0, 1.0
-        else:
-            vmin, vmax = float(finite.min()), float(finite.max())
-            if abs(vmax - vmin) < 1e-9:
-                vmax = vmin + 1e-6
-
-    gdf["_fill_total"] = make_color(gdf["Total_R"], vmin, vmax)
-    gdf["_label"] = gdf["NAME"]
-
-    centroid = gdf.geometry.union_all().centroid
-    view_state = pdk.ViewState(latitude=centroid.y, longitude=centroid.x, zoom=13.45)
-
-    poly_layer = pdk.Layer(
-        "GeoJsonLayer",
-        data=gdf.__geo_interface__,
-        pickable=True, stroked=True, filled=True,
-        get_fill_color="properties._fill_total",
-        get_line_color=[255, 255, 255, 255],
-        line_width_min_pixels=1,
-    )
-    pipe_layer = None
-    try:
-        pipes = gpd.read_file(pipe_shp_path)
-        pipes = pipes[pipes.geometry.notnull() & pipes.geometry.geom_type.isin(["LineString","MultiLineString"])]
-        if not pipes.empty:
-            if pipes.crs != ws_gdf.crs:
-                pipes = pipes.to_crs(ws_gdf.crs)
-            pipes["_pipe_label"] = pipes["NAME"] if "NAME" in pipes.columns else ""
-            pipe_layer = pdk.Layer(
-                "GeoJsonLayer",
-                data=pipes.__geo_interface__,
-                pickable=True, filled=False, stroked=True,
-                get_line_color=[80,80,80,255], get_line_width=2, line_width_min_pixels=2,
-                tooltip={"text": "{_pipe_label}"},
-            )
-    except Exception:
-        pass
-
-    nodes_layer = node_layer_from_shp(node_shp_path, nodes_post5h_dict, node_name_field_hint)
-
-    reps = gdf.geometry.representative_point()
-    labels = pd.DataFrame({"lon": reps.x, "lat": reps.y, "text": gdf["_label"]})
-    text_layer = pdk.Layer("TextLayer", data=labels,
-                           get_position='[lon, lat]', get_text="text",
-                           get_size=10, get_color=[0,0,0], get_alignment_baseline="'center'")
-
-    layers = [poly_layer]
-    if pipe_layer is not None: layers.append(pipe_layer)
-    if nodes_layer is not None: layers.append(nodes_layer)
-    layers.append(text_layer)
-
-    if show_title:
-        st.markdown(f"**{title}**")
-    st.pydeck_chart(
-        pdk.Deck(
-            layers=layers,
-            initial_view_state=view_state,
-            map_provider="carto",
-            map_style="light",
-            tooltip={"html": f"<b>{{NAME}}</b><br/>Total runoff: {{Total_R}} {runoff_unit}",
-                    "style": {"backgroundColor":"white","color":"black"}},
-        ),
-        use_container_width=True,
-        height=250,
-        key=(widget_key or f"cmpmap_{title.replace(' ', '_')}")
-    )
-
-    return runoff_unit, (vmin, vmax)
 
 from typing import Dict, Tuple, Set
 
@@ -664,32 +539,6 @@ def render_focus_placement_map_log(plan: Dict[str, Dict[str,int]],
         key=widget_key
     )
 
-def _legend_html(unit: str, vmin: float, vmax: float) -> str:
-    cmap = mpl.colormaps.get_cmap("Blues")
-    norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax, clip=True)
-    c0 = [int(v*255) for v in cmap(norm(vmin))[:3]]
-    c1 = [int(v*255) for v in cmap(norm(vmax))[:3]]
-    return f"""
-    <div style="display:flex; justify-content:center; margin-top:6px;">
-      <div style="min-width:260px; max-width:640px; width:60%;">
-        <div style="text-align:center; font-size:13px;"><b>Runoff Legend ({unit})</b></div>
-        <div style="display:flex; align-items:center; gap:10px;">
-          <span>{vmin:.2f}</span>
-          <div style="flex:1; height:12px;
-              background:linear-gradient(to right,
-              rgb({c0[0]},{c0[1]},{c0[2]}),
-              rgb({c1[0]},{c1[1]},{c1[2]}));
-              border:1px solid #888;"></div>
-          <span>{vmax:.2f}</span>
-        </div>
-        <div style="color:#555; font-size:12px; text-align:center; margin-top:6px;">
-          Same scale for all 8 comparison.
-        </div>
-      </div>
-    </div>
-    """
-
-
 def rain_window_with_buffer(sim_start_str: str,
                             minutes_15: List[int] | np.ndarray,
                             rain_curve_in: List[float] | np.ndarray,
@@ -711,12 +560,13 @@ def rain_window_with_buffer(sim_start_str: str,
     t_end   = t0 + timedelta(minutes=int(minutes_15[i1])) + timedelta(hours=float(buffer_hours))
     return (t_start, t_end)
 
-def run_swmm_scenario(
+def run_swmm_scenario_baseline(
     scenario_name: str,
     rain_lines: List[str],
     tide_lines: List[str],
     lid_lines: List[str],
     gate_flag: str,
+    duration_minutes: int,
     report_interval=timedelta(minutes=5),
     template_path="SWMM_Project.inp",
     event_window_mode: str = "rain+2h",
@@ -724,13 +574,94 @@ def run_swmm_scenario(
     rain_minutes: List[int] | None = None,
     rain_curve_in: List[float] | None = None,
     sim_start_str: str | None = None,
-) -> dict:
-    """Run SWMM; keep RPT only in session_state; return parsed artifacts."""
+):
+    """
+    ORIGINAL baseline runner:
+    ✔ Uses OUT-file logic
+    ✔ Supports event_window_mode and event_buffer_hours
+    ✔ Does NOT collect timestep flooding
+    """
+
     temp_dir  = st.session_state.temp_dir
     inp_path  = os.path.join(temp_dir, f"{scenario_name}.inp")
-    rpt_path  = os.path.join(temp_dir, f"{scenario_name}.rpt")   
-    out_path  = os.path.join(temp_dir, f"{scenario_name}.out")   
+    rpt_path  = os.path.join(temp_dir, f"{scenario_name}.rpt")
+    out_path  = os.path.join(temp_dir, f"{scenario_name}.out")
 
+    # Fill the template
+    with open(template_path, "r") as f:
+        text = f.read()
+    text = (
+        text.replace("$RAINFALL_TIMESERIES$", "\n".join(rain_lines))
+            .replace("$TIDE_TIMESERIES$", "\n".join(tide_lines))
+            .replace("$LID_USAGE$", "\n".join(lid_lines))
+            .replace("$TIDE_GATE_CONTROL$", gate_flag)
+    )
+    with open(inp_path, "w") as f:
+        f.write(text)
+
+    # Step size
+    step_s = int(report_interval.total_seconds())
+
+    # Run SWMM normally (no live capture)
+    with Simulation(inp_path, rpt_path, out_path) as sim:
+        sim.step_advance(step_s)
+        for _ in sim:
+            pass
+
+    # Read RPT-based results
+    rpt_text = _read_text_keep(rpt_path)
+
+    df_nf = parse_node_flooding_summary_from_text(rpt_text)
+    to_metric = (st.session_state.get("unit_ui") == "Metric (SI)")
+    total_event_vol, node_cuft_event = summarize_node_flooding_in_window(
+        df_nf, to_metric=to_metric
+    )
+
+    df_runoff = extract_total_runoff_from_text(rpt_text)
+    df_ir     = extract_infiltration_and_runoff_from_text(rpt_text)
+
+    # Save outputs exactly like before
+    st.session_state.setdefault("rpts", {})[scenario_name] = rpt_text
+    st.session_state[f"{scenario_name}_event_total_flood"] = total_event_vol
+    st.session_state[f"{scenario_name}_node_flood_event_cuft"] = node_cuft_event
+    st.session_state[f"{scenario_name}_inp_path"] = inp_path
+    st.session_state[f"{scenario_name}_out_path"] = out_path
+    st.session_state[f"{scenario_name}_storm_start"] = datetime.strptime(
+        sim_start_str, "%m/%d/%Y %H:%M"
+    )
+    st.session_state[f"{scenario_name}_storm_dur_hours"] = duration_minutes / 60.0
+
+    return {
+        "df_runoff": df_runoff,
+        "node_cuft_event": node_cuft_event,
+        "df_continuity": df_ir,
+        "total_event_vol": total_event_vol,
+    }
+
+def run_swmm_scenario(
+    scenario_name: str,
+    rain_lines: List[str],
+    tide_lines: List[str],
+    lid_lines: List[str],
+    gate_flag: str,
+    duration_minutes: int,
+    report_interval=timedelta(minutes=5),
+    template_path="SWMM_Project.inp",
+    rain_minutes: List[int] | None = None,
+    rain_curve_in: List[float] | None = None,
+    sim_start_str: str | None = None,
+):
+    """
+    Run SWMM and capture node flooding at every timestep directly from pyswmm.
+    We DO NOT read the OUT file for flooding.
+    """
+
+    temp_dir  = st.session_state.temp_dir
+    inp_path  = os.path.join(temp_dir, f"{scenario_name}.inp")
+    rpt_path  = os.path.join(temp_dir, f"{scenario_name}.rpt")
+    out_path  = os.path.join(temp_dir, f"{scenario_name}.out")
+
+    # Inject rainfall / tide / LID usage into the template
     with open(template_path, "r") as f:
         text = f.read()
     text = (
@@ -744,24 +675,54 @@ def run_swmm_scenario(
 
     step_s = int(report_interval.total_seconds())
 
+    # -------------------------------
+    # 1. CAPTURE FLOODING TIME SERIES
+    # -------------------------------
+    flooding_records = []   # list of {datetime, node: flooding}
+
     with Simulation(inp_path, rpt_path, out_path) as sim:
         sim.step_advance(step_s)
+        nodes = Nodes(sim)
+
+        # Capture node list (new pyswmm API)
+        if "node_ids" not in st.session_state:
+            st.session_state["node_ids"] = [node.nodeid for node in Nodes(sim)]
+
         for _ in sim:
-            pass
+            t = sim.current_time
+
+            row = {"datetime": t}
+            for nid in st.session_state["node_ids"]:
+                try:
+                    row[nid] = nodes[nid].flooding  # cfs
+                except Exception:
+                    row[nid] = 0.0
+
+            flooding_records.append(row)
 
     rpt_text = _read_text_keep(rpt_path)
 
-
     df_nf = parse_node_flooding_summary_from_text(rpt_text)
     to_metric = (st.session_state.get("unit_ui") == "Metric (SI)")
-    total_event_vol, node_cuft_event = summarize_node_flooding_in_window(df_nf, to_metric=to_metric)
-    df_runoff = extract_total_runoff_from_text(rpt_text)
-    df_ir     = extract_infiltration_and_runoff_from_text(rpt_text)
+    total_event_vol, node_cuft_event = summarize_node_flooding_in_window(df_nf, to_metric)
 
+    df_runoff = extract_total_runoff_from_text(rpt_text)
+    df_ir = extract_infiltration_and_runoff_from_text(rpt_text)
+
+    # Save everything needed
+    flooding_df = pd.DataFrame(flooding_records)
+
+    st.session_state.setdefault("flood_ts", {})
+    st.session_state["flood_ts"][scenario_name] = flooding_df
 
     st.session_state.setdefault("rpts", {})[scenario_name] = rpt_text
     st.session_state[f"{scenario_name}_event_total_flood"] = total_event_vol
     st.session_state[f"{scenario_name}_node_flood_event_cuft"] = node_cuft_event
+
+    # Storm metadata (important for clipping later)
+    st.session_state[f"{scenario_name}_inp_path"] = inp_path
+    st.session_state[f"{scenario_name}_storm_start"] = datetime.strptime(sim_start_str, "%m/%d/%Y %H:%M")
+    st.session_state[f"{scenario_name}_storm_dur_hours"] = duration_minutes / 60.0
 
     return {
         "df_runoff": df_runoff,
@@ -769,6 +730,97 @@ def run_swmm_scenario(
         "df_continuity": df_ir,
         "total_event_vol": total_event_vol,
     }
+
+def _build_baseline_map_html(df_swmm_local: pd.DataFrame, unit_ui: str, ws_shp_path: str) -> str:
+    ws_gdf_local = load_ws(ws_shp_path)
+    gdf, unit_r = prep_total_runoff_gdf(df_swmm_local, unit_ui, ws_gdf_local)
+
+    vals = gdf["Total_R"].to_numpy()
+    vmin_raw, vmax_raw = np.nanmin(vals), np.nanmax(vals)
+    vmin = float(vmin_raw) if np.isfinite(vmin_raw) else 0.0
+    vmax = float(vmax_raw) if np.isfinite(vmax_raw) else 1.0
+    if abs(vmax - vmin) < 1e-9:
+        vmax = vmin + 1e-6
+
+    gdf["_fill"] = make_color(gdf["Total_R"], vmin, vmax)
+    gdf["_label"] = gdf["NAME"]
+    gdf["Total_R_disp"] = gdf["Total_R"].apply(lambda v: f"{float(v):,.2f}")
+
+    centroid = gdf.geometry.union_all().centroid
+    view_state = pdk.ViewState(latitude=centroid.y, longitude=centroid.x, zoom=14.5)
+
+    poly_layer = pdk.Layer(
+        "GeoJsonLayer", data=gdf.__geo_interface__,
+        pickable=True, stroked=True, filled=True,
+        get_fill_color="properties._fill",
+        get_line_color=[255, 255, 255, 255],
+        line_width_min_pixels=1,
+    )
+
+    reps = gdf.geometry.representative_point()
+    labels_df = pd.DataFrame({"lon": reps.x, "lat": reps.y, "text": gdf["_label"]})
+    text_layer = pdk.Layer(
+        "TextLayer", data=labels_df,
+        get_position='[lon, lat]', get_text="text",
+        get_size=14, get_color=[0, 0, 0], get_alignment_baseline="'center'"
+    )
+
+    tooltip = {
+        "html": (
+            "<div style='font-size:16px; line-height:1.5;'>"
+            "<div style='font-weight:600;'>{NAME}</div>"
+            f"<div>Runoff: {{Total_R_disp}} {unit_r}</div>"
+            "</div>"
+        ),
+        "style": {
+            "backgroundColor": "white",
+            "color": "black",
+            "fontFamily": "Inter, Arial, Helvetica, sans-serif",
+            "fontSize": "16px",
+            "padding": "8px 10px",
+            "borderRadius": "8px",
+            "boxShadow": "0 2px 8px rgba(0,0,0,0.20)",
+        },
+    }
+
+    deck_obj = pdk.Deck(
+        layers=[poly_layer, text_layer],
+        initial_view_state=view_state,
+        map_provider="carto",
+        map_style="light",
+        tooltip=tooltip,
+    )
+    map_html = deck_obj.to_html(as_string=True)
+
+    map_html = map_html.replace(
+        "</head>",
+        "<style>.deck-tooltip{font-size:16px !important; line-height:1.5 !important;"
+        "padding:8px 10px !important; border-radius:8px !important;}</style></head>"
+    )
+
+    # Legend
+    cmap = mpl.colormaps.get_cmap("Blues")
+    norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax, clip=True)
+    c0 = [int(v * 255) for v in cmap(norm(vmin))[:3]]
+    c1 = [int(v * 255) for v in cmap(norm(vmax))[:3]]
+
+    legend_html = f"""
+    <div style="display:flex; justify-content:center; margin-top:6px;">
+      <div style="min-width:260px; max-width:640px; width:60%;">
+        <div style="text-align:center; font-size:14px;"><b>Runoff Legend ({unit_r})</b></div>
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span>{vmin:.2f}</span>
+          <div style="flex:1; height:12px;
+              background:linear-gradient(to right,
+              rgb({c0[0]},{c0[1]},{c0[2]}),
+              rgb({c1[0]},{c1[1]},{c1[2]}));
+              border:1px solid #888;"></div>
+          <span>{vmax:.2f}</span>
+        </div>
+      </div>
+    </div>
+    """
+    return map_html, legend_html
 
 def extract_infiltration_and_runoff_from_text(txt: str) -> pd.DataFrame:
     lines = txt.splitlines(True)
@@ -853,96 +905,7 @@ def _rehydrate_baseline_into_store(prefix: str):
             if not df.empty:
                 remember_scenario(name, df, nodes, prefix)
 
-def _build_baseline_map_html(df_swmm_local: pd.DataFrame, unit_ui: str, ws_shp_path: str) -> str:
-    ws_gdf_local = load_ws(ws_shp_path)
-    gdf, unit_r = prep_total_runoff_gdf(df_swmm_local, unit_ui, ws_gdf_local)
 
-    vals = gdf["Total_R"].to_numpy()
-    vmin_raw, vmax_raw = np.nanmin(vals), np.nanmax(vals)
-    vmin = float(vmin_raw) if np.isfinite(vmin_raw) else 0.0
-    vmax = float(vmax_raw) if np.isfinite(vmax_raw) else 1.0
-    if abs(vmax - vmin) < 1e-9:
-        vmax = vmin + 1e-6
-
-    gdf["_fill"] = make_color(gdf["Total_R"], vmin, vmax)
-    gdf["_label"] = gdf["NAME"]
-    gdf["Total_R_disp"] = gdf["Total_R"].apply(lambda v: f"{float(v):,.2f}")
-
-    centroid = gdf.geometry.union_all().centroid
-    view_state = pdk.ViewState(latitude=centroid.y, longitude=centroid.x, zoom=14.5)
-
-    poly_layer = pdk.Layer(
-        "GeoJsonLayer", data=gdf.__geo_interface__,
-        pickable=True, stroked=True, filled=True,
-        get_fill_color="properties._fill",
-        get_line_color=[255, 255, 255, 255],
-        line_width_min_pixels=1,
-    )
-
-    reps = gdf.geometry.representative_point()
-    labels_df = pd.DataFrame({"lon": reps.x, "lat": reps.y, "text": gdf["_label"]})
-    text_layer = pdk.Layer(
-        "TextLayer", data=labels_df,
-        get_position='[lon, lat]', get_text="text",
-        get_size=14, get_color=[0, 0, 0], get_alignment_baseline="'center'"
-    )
-
-    tooltip = {
-        "html": (
-            "<div style='font-size:16px; line-height:1.5;'>"
-            "<div style='font-weight:600;'>{NAME}</div>"
-            f"<div>Runoff: {{Total_R_disp}} {unit_r}</div>"
-            "</div>"
-        ),
-        "style": {
-            "backgroundColor": "white",
-            "color": "black",
-            "fontFamily": "Inter, Arial, Helvetica, sans-serif",
-            "fontSize": "16px",
-            "padding": "8px 10px",
-            "borderRadius": "8px",
-            "boxShadow": "0 2px 8px rgba(0,0,0,0.20)",
-        },
-    }
-
-    deck_obj = pdk.Deck(
-        layers=[poly_layer, text_layer],
-        initial_view_state=view_state,
-        map_provider="carto",
-        map_style="light",
-        tooltip=tooltip,
-    )
-    map_html = deck_obj.to_html(as_string=True)
-
-    map_html = map_html.replace(
-        "</head>",
-        "<style>.deck-tooltip{font-size:16px !important; line-height:1.5 !important;"
-        "padding:8px 10px !important; border-radius:8px !important;}</style></head>"
-    )
-
-    # Legend (optional: bump text size a bit)
-    cmap = mpl.colormaps.get_cmap("Blues")
-    norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax, clip=True)
-    c0 = [int(v * 255) for v in cmap(norm(vmin))[:3]]
-    c1 = [int(v * 255) for v in cmap(norm(vmax))[:3]]
-
-    legend_html = f"""
-    <div style="display:flex; justify-content:center; margin-top:6px;">
-      <div style="min-width:260px; max-width:640px; width:60%;">
-        <div style="text-align:center; font-size:14px;"><b>Runoff Legend ({unit_r})</b></div>
-        <div style="display:flex; align-items:center; gap:10px;">
-          <span>{vmin:.2f}</span>
-          <div style="flex:1; height:12px;
-              background:linear-gradient(to right,
-              rgb({c0[0]},{c0[1]},{c0[2]}),
-              rgb({c1[0]},{c1[1]},{c1[2]}));
-              border:1px solid #888;"></div>
-          <span>{vmax:.2f}</span>
-        </div>
-      </div>
-    </div>
-    """
-    return map_html, legend_html
 
 def generate_lid_usage_lines(lid_config: Dict[str, Dict[str, int]], excel_df: pd.DataFrame) -> List[str]:
 
@@ -1427,16 +1390,16 @@ def app_ui():
             lid_lines = [";"] 
             if run_current:  
 
-                info1 = run_swmm_scenario(
-                    f"{prefix}baseline_nogate_current", rain_lines_cur, tide_lines, lid_lines, "NO",
+                info1 = run_swmm_scenario_baseline(
+                    f"{prefix}baseline_nogate_current", rain_lines_cur, tide_lines, lid_lines, "NO", duration_minutes,
                     template_path=template_inp,
                     event_window_mode="rain+2h", event_buffer_hours=2.0,
                     rain_minutes=minutes_15,
                     rain_curve_in=st.session_state["rain_sim_curve_current_in"],
                     sim_start_str=simulation_date,
                 )
-                info2 = run_swmm_scenario(
-                    f"{prefix}baseline_gate_current",   rain_lines_cur, tide_lines, lid_lines, "YES",
+                info2 = run_swmm_scenario_baseline(
+                    f"{prefix}baseline_gate_current",   rain_lines_cur, tide_lines, lid_lines, "YES", duration_minutes,
                     template_path=template_inp,
                     event_window_mode="rain+2h", event_buffer_hours=2.0,
                     rain_minutes=minutes_15,
@@ -1452,16 +1415,16 @@ def app_ui():
                 remember_scenario("baseline_gate_current",   info2["df_runoff"], info2["node_cuft_event"], prefix)
 
             if run_future: 
-                info3 = run_swmm_scenario(
-                    f"{prefix}baseline_nogate_future",  rain_lines_fut, tide_lines, lid_lines, "NO",
+                info3 = run_swmm_scenario_baseline(
+                    f"{prefix}baseline_nogate_future",  rain_lines_fut, tide_lines, lid_lines, "NO", duration_minutes,
                     template_path=template_inp,
                     event_window_mode="rain+2h", event_buffer_hours=2.0,
                     rain_minutes=minutes_15,
                     rain_curve_in=st.session_state["rain_sim_curve_future_in"],
                     sim_start_str=simulation_date,
                 )
-                info4 = run_swmm_scenario(
-                    f"{prefix}baseline_gate_future",    rain_lines_fut, tide_lines, lid_lines, "YES",
+                info4 = run_swmm_scenario_baseline(
+                    f"{prefix}baseline_gate_future",    rain_lines_fut, tide_lines, lid_lines, "YES", duration_minutes,
                     template_path=template_inp,
                     event_window_mode="rain+2h", event_buffer_hours=2.0,
                     rain_minutes=minutes_15,
@@ -2007,11 +1970,11 @@ def app_ui():
         def run_focus_pair(prefix_key: str, plan: Dict[str, Dict[str,int]],
                         rain_lines, tide_lines, template_inp, minutes_15, sim_date, rain_curve):
             lid_lines = generate_lid_usage_lines(plan, raster_df)  # your existing generator
-            info_off = run_swmm_scenario(f"{prefix}{prefix_key}_nogate", rain_lines, tide_lines, lid_lines, "NO",
-                                        template_path=template_inp, event_window_mode="rain+2h", event_buffer_hours=2.0,
+            info_off = run_swmm_scenario(f"{prefix}{prefix_key}_nogate", rain_lines, tide_lines, lid_lines, "NO", duration_minutes,
+                                        template_path=template_inp, 
                                         rain_minutes=minutes_15, rain_curve_in=rain_curve, sim_start_str=sim_date)
-            info_on  = run_swmm_scenario(f"{prefix}{prefix_key}_gate",   rain_lines, tide_lines, lid_lines, "YES",
-                                        template_path=template_inp, event_window_mode="rain+2h", event_buffer_hours=2.0,
+            info_on  = run_swmm_scenario(f"{prefix}{prefix_key}_gate",   rain_lines, tide_lines, lid_lines, "YES", duration_minutes,
+                                        template_path=template_inp, 
                                         rain_minutes=minutes_15, rain_curve_in=rain_curve, sim_start_str=sim_date)
             remember_scenario(f"{prefix_key}_nogate", info_off["df_runoff"], info_off["node_cuft_event"], prefix)
             remember_scenario(f"{prefix_key}_gate",   info_on["df_runoff"],  info_on["node_cuft_event"],  prefix)
@@ -2029,54 +1992,109 @@ def app_ui():
             run_focus_pair(f"focus_downstream_{tag}", plan_downstr,  rain_lines, tide_lines, template_inp, minutes_15, simulation_date, rain_curve)
             run_focus_pair(f"focus_highrunoff_{tag}", plan_highro,   rain_lines, tide_lines, template_inp, minutes_15, simulation_date, rain_curve)
 
-    st.subheader("Focus Area Comparison Maps")
+            def extract_placement_from_parts(parts):
+                """
+                Extracts 'focus_all', 'focus_upstream', etc.
+                from scenario names like:
+                user_5_focus_all_current_nogate
+                """
+                focus_labels = ["all", "upstream", "downstream", "highrunoff"]
 
-    set_tag = "current" if st.session_state.get("rain_variant", "current") == "current" else "future"
-    FOCUS_ROWS = [
-        ("All subcatchments", f"focus_all_{set_tag}_nogate",      f"focus_all_{set_tag}_gate"),
-        ("Upstream",          f"focus_upstream_{set_tag}_nogate", f"focus_upstream_{set_tag}_gate"),
-        ("Downstream/outlet", f"focus_downstream_{set_tag}_nogate", f"focus_downstream_{set_tag}_gate"),
-        ("Highest runoff",    f"focus_highrunoff_{set_tag}_nogate", f"focus_highrunoff_{set_tag}_gate"),
-    ]
+                for i in range(len(parts) - 1):
+                    if parts[i] == "focus" and parts[i+1] in focus_labels:
+                        return f"focus_{parts[i+1]}"
 
-    recs = [recall_scenario(name, prefix) for _, n_off, n_on in FOCUS_ROWS for name in (n_off, n_on)]
-    dfs_available = [r["df"] for r in recs if r and isinstance(r.get("df"), pd.DataFrame) and not r["df"].empty]
-    legend_range = _global_runoff_range_across(dfs_available, st.session_state["unit_ui"], WS_SHP_PATH) if dfs_available else (0.0, 1.0)
+                raise KeyError(f"Could not find placement in scenario name: {parts}")
+            
+            def scenario_title(label: str, gate: str) -> str:
+                pretty_names = {
+                    "focus_all": "All Subcatchments",
+                    "focus_upstream": "Upstream",
+                    "focus_downstream": "Downstream",
+                    "focus_highrunoff": "High-Runoff"
+                }
+                gate_text = "Tide Gate ON" if gate == "gate" else "Tide Gate OFF"
+                return f"{pretty_names[label]} – {gate_text}"
 
-    for (label, name_off, name_on) in FOCUS_ROWS:
-        st.markdown(f"#### {label}")
-        cols = st.columns(2, gap="medium")
 
-        with cols[0]:
-            rec_off = recall_scenario(name_off, prefix)
-            if not rec_off:
-                st.info("Not run yet.")
-            else:
-                render_total_runoff_map_single(
-                    df_in_inches=rec_off["df"], title=f"{label} – NO gate",
-                    nodes_post5h_dict=rec_off.get("nodes", {}) or {},
-                    unit_ui=st.session_state["unit_ui"],
-                    ws_shp_path=WS_SHP_PATH, pipe_shp_path=PIPE_SHP_PATH, node_shp_path=NODE_SHP_PATH,
-                    node_name_field_hint="NAME", legend_range=legend_range,
-                    widget_key=f"focus_cmp_{label}_{set_tag}_nogate", show_title=False
+            from inundation_mapper import (
+                extract_flooding_window,
+                integrate_flood_volume,
+                simulate_inundation
+            )
+
+            st.subheader("Inundation Extent and Depth Maps")
+
+            scenario_list = [
+                f"{prefix}focus_all_{tag}_nogate",
+                f"{prefix}focus_all_{tag}_gate",
+                f"{prefix}focus_upstream_{tag}_nogate",
+                f"{prefix}focus_upstream_{tag}_gate",
+                f"{prefix}focus_downstream_{tag}_nogate",
+                f"{prefix}focus_downstream_{tag}_gate",
+                f"{prefix}focus_highrunoff_{tag}_nogate",
+                f"{prefix}focus_highrunoff_{tag}_gate",
+            ]
+
+            results = {}
+
+            for scenario in scenario_list:
+
+                # -----------------------
+                # Get flooding time series (captured during simulation)
+                # -----------------------
+                flood_df = st.session_state["flood_ts"][scenario]
+
+                # Storm metadata
+                storm_start = st.session_state[f"{scenario}_storm_start"]
+                storm_dur_hours = st.session_state[f"{scenario}_storm_dur_hours"]
+
+                # -----------------------
+                # Clip flooding time series to the analysis window
+                # storm_start -1 hr → storm_end +2 hr
+                # -----------------------
+                df_clip = extract_flooding_window(
+                    flood_df,
+                    storm_start,
+                    storm_dur_hours
                 )
 
-        with cols[1]:
-            rec_on = recall_scenario(name_on, prefix)
-            if not rec_on:
-                st.info("Not run yet.")
-            else:
-                render_total_runoff_map_single(
-                    df_in_inches=rec_on["df"], title=f"{label} – gate ON",
-                    nodes_post5h_dict=rec_on.get("nodes", {}) or {},
-                    unit_ui=st.session_state["unit_ui"],
-                    ws_shp_path=WS_SHP_PATH, pipe_shp_path=PIPE_SHP_PATH, node_shp_path=NODE_SHP_PATH,
-                    node_name_field_hint="NAME", legend_range=legend_range,
-                    widget_key=f"focus_cmp_{label}_{set_tag}_gate", show_title=False
+                # -----------------------
+                # Integrate flooding (cfs → ft³)
+                # -----------------------
+                volumes = integrate_flood_volume(df_clip)
+
+                # -----------------------
+                # Run inundation model
+                # -----------------------
+                out_png = f"inundation_outputs/{scenario}.png"
+                simulate_inundation(
+                    dem_path="map_files/DEM.tif",
+                    nodes_path="map_files/Nodes.shp",
+                    volumes=volumes,
+                    out_png=out_png
                 )
 
-    st.markdown(_legend_html("in" if st.session_state["unit_ui"] == "U.S. Customary" else "cm",
-                            legend_range[0], legend_range[1]), unsafe_allow_html=True)
+                results[scenario] = out_png
+
+
+            # ----------------------------------------------------------
+            # Display results with human-friendly titles
+            # ----------------------------------------------------------
+
+            cols = st.columns(2)
+
+            for i, scenario in enumerate(scenario_list):
+                with cols[i % 2]:
+
+                    parts = scenario.split("_")
+                    placement = extract_placement_from_parts(parts)
+                    gate_state = parts[-1]  # gate / nogate
+                    title = scenario_title(placement, gate_state)
+
+                    st.markdown(f"### {title}")
+                    st.image(results[scenario], use_container_width=True)
+
 
     def _gather_scenario_volumes() -> tuple[pd.DataFrame, str]:
         ACF_TO_FT3 = 43560.0
