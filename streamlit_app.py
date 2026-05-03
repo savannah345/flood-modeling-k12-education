@@ -521,70 +521,6 @@ def solve_group_percents_to_budget(pRG_global: float, pRB_global: float,
     plan_g = largest_remainder_toward_budget(plan_g, caps_RG, caps_RB, cRG, cRB, target_budget)
     return pRG_g, pRB_g, plan_g
 
-def harmonize_mix_to_target_share(plan: dict, caps_RG: dict, caps_RB: dict,
-                                  cRG: float, cRB: float,
-                                  target_budget: float,
-                                  target_rg_cost_share: float,
-                                  tolerance: float = 0.01) -> dict:
-    """
-    Softly adjust RG/RB mix to be near target_rg_cost_share (± tolerance) while staying near budget
-    and respecting caps. Tries small local moves (swap RB→RG or RG→RB) to reduce share deviation.
-    """
-    def cost_share_rg(p: dict) -> float:
-        total_rg_cost = cRG * sum(v["rain_gardens"] for v in p.values())
-        total_cost    = total_rg_cost + cRB * sum(v["rain_barrels"] for v in p.values())
-        return (total_rg_cost / total_cost) if total_cost > 0 else 0.0
-
-    # Quick iterations to reduce share deviation
-    max_iters = 200
-    for _ in range(max_iters):
-        share = cost_share_rg(plan)
-        dev   = share - target_rg_cost_share
-
-        if abs(dev) <= tolerance:
-            break  # within band
-
-        spent = plan_cost(plan, cRG, cRB)
-
-        if dev < 0:
-            # RG share too low → try increasing RG or decreasing RB
-            # Prefer move that keeps budget closer: add RG if budget room, else replace RB with RG
-            # Add RG where capacity remains
-            added = False
-            for s, v in plan.items():
-                if (caps_RG.get(s, 0) or 0) > v["rain_gardens"] and (spent + cRG) <= target_budget:
-                    plan[s]["rain_gardens"] += 1
-                    added = True
-                    break
-            if not added:
-                # Try RB→RG swap at same subcatch if possible (reduce RB then add RG)
-                for s, v in plan.items():
-                    if v["rain_barrels"] > 0 and (caps_RG.get(s, 0) or 0) > v["rain_gardens"]:
-                        # Budget change = cRG - cRB; allow small overshoot within one unit
-                        if (spent + (cRG - cRB)) <= (target_budget + min(cRG, cRB)):
-                            plan[s]["rain_barrels"] -= 1
-                            plan[s]["rain_gardens"] += 1
-                            break
-        else:
-            # RG share too high → try increasing RB or decreasing RG
-            added = False
-            for s, v in plan.items():
-                if (caps_RB.get(s, 0) or 0) > v["rain_barrels"] and (spent + cRB) <= target_budget:
-                    plan[s]["rain_barrels"] += 1
-                    added = True
-                    break
-            if not added:
-                for s, v in plan.items():
-                    if v["rain_gardens"] > 0:
-                        # Budget change = cRB - cRG (negative); allow small undershoot
-                        if (spent + (cRB - cRG)) >= (target_budget - min(cRG, cRB)):
-                            plan[s]["rain_gardens"] -= 1
-                            plan[s]["rain_barrels"]  += 1
-                            break
-
-    # Final minor nudge toward budget if we drifted
-    plan = largest_remainder_toward_budget(plan, caps_RG, caps_RB, cRG, cRB, target_budget)
-    return plan
 
 def restrict_plan_to_group(plan: Dict[str, Dict[str,int]], group_names: Set[str]) -> Dict[str, Dict[str,int]]:
     group = set(group_names or set())
@@ -596,6 +532,56 @@ def summarize_plan(plan: Dict[str, Dict[str,int]], cRG: float, cRB: float) -> di
     spent = cRG * total_rg + cRB * total_rb
     treated_ft2 = 400.0 * total_rg + 300.0 * total_rb
     return {"rg": int(total_rg), "rb": int(total_rb), "spent": float(spent), "treated_ft2": float(treated_ft2)}
+
+def enforce_rg_limit(plan, RG_limit_all, caps_RG):
+    """
+    Ensures no scenario uses more rain gardens than the 'All' scenario.
+    If RG exceeds limit, remove RG from lowest-capacity subs first.
+    """
+    current_rg = sum(v["rain_gardens"] for v in plan.values())
+    if current_rg <= RG_limit_all:
+        return plan
+
+    remove_needed = current_rg - RG_limit_all
+
+    # remove from lowest RG-capacity subs first to avoid breaking constraints later
+    subs_sorted = sorted(plan.keys(), key=lambda s: caps_RG.get(s, 0))
+
+    for s in subs_sorted:
+        if remove_needed <= 0:
+            break
+
+        rg_here = plan[s]["rain_gardens"]
+        if rg_here > 0:
+            rm = min(rg_here, remove_needed)
+            plan[s]["rain_gardens"] -= rm
+            remove_needed -= rm
+
+    return plan
+
+
+def fill_with_rb_to_budget(plan, caps_RB, cRG, cRB, target_budget):
+    """
+    After RG counts are capped, fill remaining budget using RB until target_budget is reached.
+    """
+    spend = cRG * sum(v["rain_gardens"] for v in plan.values()) + \
+            cRB * sum(v["rain_barrels"]  for v in plan.values())
+
+    if spend >= target_budget:
+        return plan
+
+    # add RB in subs with the most RB capacity
+    subs_sorted = sorted(plan.keys(), key=lambda s: caps_RB.get(s, 0), reverse=True)
+
+    for s in subs_sorted:
+        max_rb = caps_RB.get(s, 0)
+        while plan[s]["rain_barrels"] < max_rb and spend + cRB <= target_budget:
+            plan[s]["rain_barrels"] += 1
+            spend += cRB
+            if spend >= target_budget:
+                break
+
+    return plan
 
 # --- LID placement map (logarithmic green shading; zero-LID transparent; Deck-level tooltip) ---
 def render_focus_placement_map_log(plan: Dict[str, Dict[str,int]],
@@ -1094,8 +1080,7 @@ def app_ui():
     future_mult = 1.2
 
     st.title("CoastWise")
-    st.markdown('<a href="https://github.com/savannah345/flood-modeling-k12-education/blob/main/CoastWise_Tutorial.docx" target="_blank">Tutorial</a>', unsafe_allow_html=True)
-
+    
     # --- Fixed subcatchment lists (must match shapefile NAME like "Sub_20") ---
     UPSTREAM_LIST = {f"Sub_{n}" for n in [20,22,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39]}
     DOWNSTREAM_LIST = {f"Sub_{n}" for n in [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,21,23]}
@@ -1141,7 +1126,7 @@ def app_ui():
     st.success(
         "Use the controls below to configure your storm scenario. "
         "These settings determine the rainfall event, tide conditions, and alignment "
-        "that will be used to generate boundary inputs for the SWMM simulation."
+        "that will be used to generate inputs for the simulation."
     )
 
     with st.form("scenario_settings"):
@@ -1231,7 +1216,7 @@ def app_ui():
         # ---------------- Tide Alignment ----------------
         align_choice = st.radio(
             "Tide Alignment",
-            ["Peak aligned with High Tide", "Peak aligned with Low Tide"],
+            ["Rainfall aligned with High Tide", "Rainfall aligned with Low Tide"],
             index=(0 if cfg["align_mode"] == "peak" else 1),
             horizontal=True,
             help=(
@@ -1381,66 +1366,61 @@ def app_ui():
     with c_m3:
         st.metric(f"Tide Range ({tide_disp_unit})", f"{(np.nanmax(df_rt['Tide'])-np.nanmin(df_rt['Tide'])):.2f}")
 
-    # ----- Altair combined chart (left y-axis = rainfall, right y-axis = tide) -----
     import altair as alt
     alt.data_transformers.disable_max_rows()
 
-    base = alt.Chart(df_rt).encode(
-        x=alt.X("Hour:Q", title="Hour", scale=alt.Scale(nice=False))
+    # Determine the hour at which rainfall is aligned (the rainfall peak)
+    align_idx = int(np.argmax(df_rt["Rain_Current"]))
+    align_hour = float(df_rt["Hour"].iloc[align_idx])
+
+    align_hour = float(df_rt["Hour"].iloc[align_idx])
+
+    # ------------------- Vertical Alignment Line -------------------
+    align_line = alt.Chart(df_rt).mark_rule(
+        stroke="red",
+        strokeDash=[6,6],
+        strokeWidth=2
+    ).encode(
+        x="Hour:Q"
+    ).transform_filter(
+        alt.datum.Hour == align_hour
     )
 
-    # Rainfall (Current) — darker area, left axis
-    rain_current = base.mark_area(color="steelblue", opacity=0.50).encode(
-        y=alt.Y("Rain_Current:Q",
-                title=f"Rainfall ({rain_disp_unit})",
-                axis=alt.Axis(titleColor="steelblue")),
-        tooltip=[
-            alt.Tooltip("Hour:Q", format=".1f"),
-            alt.Tooltip("Rain_Current:Q", title=f"Current ({rain_disp_unit})", format=".3f"),
-        ],
+    # ------------------- Rainfall Chart -------------------
+    rain_base = alt.Chart(df_rt).encode(
+        x=alt.X("Hour:Q", title="Hour")
     )
 
-    # Rainfall (Future +20%) — lighter area, left axis
-    rain_future = base.mark_area(color="#f74f4f", opacity=0.20).encode(
-        y=alt.Y("Rain_Future:Q",
-                axis=alt.Axis(title=None, labels=False, ticks=False)),  # share left axis visually
-        tooltip=[
-            alt.Tooltip("Hour:Q", format=".1f"),
-            alt.Tooltip("Rain_Future:Q", title=f"Future (+20%) ({rain_disp_unit})", format=".3f"),
-        ],
+    rain_current = rain_base.mark_area(color="steelblue", opacity=0.5).encode(
+        y=alt.Y("Rain_Current:Q", title=f"Rainfall ({rain_disp_unit})")
     )
 
-    # Tide — line on right axis
-    tide_line = base.mark_line(color="#2e9144", strokeWidth=3).encode(
-        y=alt.Y("Tide:Q",
-                title=f"Tide ({tide_disp_unit})",
-                axis=alt.Axis(titleColor="#2e9144", orient="right")),
-        tooltip=[
-            alt.Tooltip("Hour:Q", format=".1f"),
-            alt.Tooltip("Tide:Q", title=f"Tide ({tide_disp_unit})", format=".2f"),
-        ],
+    rain_future = rain_base.mark_area(color="#f74f4f", opacity=0.2).encode(
+        y="Rain_Future:Q"
     )
 
-    combo_chart = alt.layer(tide_line, rain_future, rain_current).resolve_scale(
-        y="independent"  # let rainfall and tide use separate axes/scales
-    ).properties(
-        title="Rainfall (Current & +20%) and Tide Combined",
-        height=380,
-    ).configure_title(
-        fontSize=18
-    ).configure_axis(
-        labelFontSize=13,
-        titleFontSize=14,
-        grid=False  # remove gridlines
-    ).interactive()  # zoom + pan
+    rain_chart = alt.layer(rain_current, rain_future, align_line).properties(
+        title="Rainfall Event",
+        height=300
+    ).configure_title(fontSize=18).interactive()
 
-    st.altair_chart(combo_chart, use_container_width=True)
+    st.altair_chart(rain_chart, use_container_width=True)
 
-    # Clear, short explanation under the chart (optional)
-    st.caption(
-        f"Rainfall shown as areas (left axis: {rain_disp_unit}); Tide shown as line (right axis: {tide_disp_unit}). "
-        "Zoom/pan to inspect alignment and peaks."
+    # ------------------- Tide Chart -------------------
+    tide_base = alt.Chart(df_rt).encode(
+        x=alt.X("Hour:Q", title="Hour")
     )
+
+    tide_line = tide_base.mark_line(color="#2e9144", strokeWidth=3).encode(
+        y=alt.Y("Tide:Q", title=f"Tide ({tide_disp_unit})")
+    )
+
+    tide_chart = alt.layer(tide_line, align_line).properties(
+        title="Tide Event",
+        height=300
+    ).configure_title(fontSize=18).interactive()
+
+    st.altair_chart(tide_chart, use_container_width=True)
 
     if st.button("Run Baseline Scenario" , key=f"{prefix}btn_run_baseline"):
         try:
@@ -1525,7 +1505,7 @@ def app_ui():
 
         st.markdown("""
         Higher runoff values typically occur in areas with more **impervious surfaces** such as 
-        roads, parking lots, rooftops, and other paved or compacted areas. These surfaces prevent 
+        roads, parking lots, rooftops, and other paved areas. These surfaces prevent 
         rainfall from soaking into the soil, increasing the amount of direct surface runoff. This 
         is why developed or urbanized areas often show darker (higher) runoff values. 
         The land cover map to the right helps show where these impervious areas are located.
@@ -1571,15 +1551,13 @@ def app_ui():
 
     # Explain the two paths *before* any controls
     st.info(
-        "• **Path A – Percent Uptake (whole watershed):** Choose RG% and RB%. CoastWise applies these to each "
-        "subcatchment’s feasible maximum RG and RB, highlighting "
-        "collective action across the watershed.\n"
+        "**Path A – Percent Uptake (whole watershed):** Choose the percent rain garden and rain barrel uptake across the whole watershed, highlighting collective action across the watershed."
     )
 
     st.info(
 
-        "• **Path B – Known Budget → Feasible Uptake:** Enter a budget and unit costs. Pin RG% or RB%. CoastWise solves "
-        "the other percent so the plan fits the budget as closely as integer caps allow, then reports counts, spend, and treated area.\n\n"
+        "**Path B – Known Budget → Feasible Uptake:** Enter a budget and unit costs for the rain gardens and rain barrels. Pin the percent rain garden or rain barrel to indicate how much of the budget should be devoted to a type of low impact developement. CoastWise solves "
+        "the other percent so the plan fits the budget, then reports the rain garden and rain barrel counts and the total costs.\n\n"
     )
 
     path_choice = st.selectbox(
@@ -1639,24 +1617,59 @@ def app_ui():
         pRG_hi_adj,  pRB_hi_adj,  plan_highro   = solve_group_percents_to_budget(pct_rg, pct_rb, caps_RG, caps_RB, HIGHRUNOFF_LIST,
                                                                                 unit_cost_rg, unit_cost_rb, B_target)
 
-        # Compute target RG cost share from the 'All' plan
-        rg_cost_all  = unit_cost_rg * sum(v["rain_gardens"] for v in plan_all.values())
-        tot_cost_all = rg_cost_all + unit_cost_rb * sum(v["rain_barrels"] for v in plan_all.values())
-        target_rg_share = (rg_cost_all / tot_cost_all) if tot_cost_all > 0 else 0.0
-
-        # Softly harmonize each group’s mix toward the 'All' cost share (±5%)
-        plan_all      = harmonize_mix_to_target_share(plan_all,      caps_RG, caps_RB, unit_cost_rg, unit_cost_rb, B_target, target_rg_share, 0.05)
-        plan_upstream = harmonize_mix_to_target_share(plan_upstream, caps_RG, caps_RB, unit_cost_rg, unit_cost_rb, B_target, target_rg_share, 0.05)
-        plan_downstr  = harmonize_mix_to_target_share(plan_downstr,  caps_RG, caps_RB, unit_cost_rg, unit_cost_rb, B_target, target_rg_share, 0.05)
-        plan_highro   = harmonize_mix_to_target_share(plan_highro,   caps_RG, caps_RB, unit_cost_rg, unit_cost_rb, B_target, target_rg_share, 0.05)
-
         # (Optional) Display achieved spend and RG/RB counts per group for transparency
         for tag, p in [("All", plan_all), ("Upstream", plan_upstream), ("Downstream", plan_downstr), ("High‑runoff", plan_highro)]:
             rg_cnt = sum(v["rain_gardens"] for v in p.values())
             rb_cnt = sum(v["rain_barrels"]  for v in p.values())
             spend  = unit_cost_rg * rg_cnt + unit_cost_rb * rb_cnt
 
-        st.markdown("### LID Placement — Compare Different Focus Areas")
+        # ---- Apply new LID rules ----
+
+        # 1. Determine RG limit from the All scenario
+        RG_limit_all = sum(v["rain_gardens"] for v in plan_all.values())
+
+        # 2. Enforce RG limit on the three groups
+        plan_upstream = enforce_rg_limit(plan_upstream, RG_limit_all, caps_RG)
+        plan_downstr  = enforce_rg_limit(plan_downstr,  RG_limit_all, caps_RG)
+        plan_highro   = enforce_rg_limit(plan_highro,   RG_limit_all, caps_RG)
+
+        # 3. Fill remaining budget using RB
+        plan_upstream = fill_with_rb_to_budget(plan_upstream, caps_RB, unit_cost_rg, unit_cost_rb, B_target)
+        plan_downstr  = fill_with_rb_to_budget(plan_downstr,  caps_RB, unit_cost_rg, unit_cost_rb, B_target)
+        plan_highro   = fill_with_rb_to_budget(plan_highro,   caps_RB, unit_cost_rg, unit_cost_rb, B_target)
+
+
+
+
+        with st.expander("Why CoastWise Shows Four Different Spatial Layouts"):
+            st.markdown("""
+        CoastWise creates four different LID layouts to help you understand how placement patterns influence outcomes such as runoff and flooding.
+
+        Each layout uses the **same total investment**, but places the LIDs in different priority areas:
+
+        1. **All Subcatchments** – spread across the whole watershed  
+        2. **Upstream** – focused where runoff begins  
+        3. **Downstream/Outlet** – focused where water tends to accumulate  
+        4. **High-Runoff Areas** – focused on the locations that generate the most runoff  
+
+        The purpose is to compare whether spreading LIDs across the watershed or concentrating them in specific areas has a larger benefit for managing stormwater and reducing flooding.
+
+        By holding the total cost constant, CoastWise allows you to see how the same investment performs under different placement strategies.
+        """)
+            
+        with st.expander("How CoastWise Places Rain Gardens and Rain Barrels"):
+            st.markdown("""
+        CoastWise places Rain Gardens and Rain Barrels based on what each part of the watershed can realistically support.
+
+        Some areas have good soils and open space, so they can hold more rain gardens. Other areas have shallow groundwater or limited pervious land, so they can only take a few rain gardens but can still use rain barrels.
+
+        When you select a percentage of Rain Gardens and Rain Barrels for the watershed:
+
+        - The percentage is applied to each area's **own capacity**.
+        - Areas that cannot support many rain gardens are filled with **rain barrels instead**.
+        - This keeps the overall investment the same across the watershed.
+        """)
+            
         row1 = st.columns(2, gap="large")
         with row1[0]:
             render_focus_placement_map_log(
@@ -1758,23 +1771,25 @@ def app_ui():
         pRG_hi_adj,  pRB_hi_adj,  plan_highro   = solve_group_percents_to_budget(pRG_solved, pRB_solved, caps_RG, caps_RB, HIGHRUNOFF_LIST,
                                                                                 unit_cost_rg, unit_cost_rb, B_target)
 
-        # Target RG cost share from 'All' (after group solve with B_target)
-        rg_cost_all  = unit_cost_rg * sum(v["rain_gardens"] for v in plan_all.values())
-        tot_cost_all = rg_cost_all + unit_cost_rb * sum(v["rain_barrels"] for v in plan_all.values())
-        target_rg_share = (rg_cost_all / tot_cost_all) if tot_cost_all > 0 else 0.0
-
-        # Harmonize mix per group (±5%)
-        plan_all      = harmonize_mix_to_target_share(plan_all,      caps_RG, caps_RB, unit_cost_rg, unit_cost_rb, B_target, target_rg_share, 0.05)
-        plan_upstream = harmonize_mix_to_target_share(plan_upstream, caps_RG, caps_RB, unit_cost_rg, unit_cost_rb, B_target, target_rg_share, 0.05)
-        plan_downstr  = harmonize_mix_to_target_share(plan_downstr,  caps_RG, caps_RB, unit_cost_rg, unit_cost_rb, B_target, target_rg_share, 0.05)
-        plan_highro   = harmonize_mix_to_target_share(plan_highro,   caps_RG, caps_RB, unit_cost_rg, unit_cost_rb, B_target, target_rg_share, 0.05)
-
         # Transparency
         for tag, p in [("All", plan_all), ("Upstream", plan_upstream), ("Downstream", plan_downstr), ("High‑runoff", plan_highro)]:
             rg_cnt = sum(v["rain_gardens"] for v in p.values())
             rb_cnt = sum(v["rain_barrels"]  for v in p.values())
             spend  = unit_cost_rg * rg_cnt + unit_cost_rb * rb_cnt
+        # ---- Apply new LID rules ----
 
+        # 1. Determine RG limit from the All scenario
+        RG_limit_all = sum(v["rain_gardens"] for v in plan_all.values())
+
+        # 2. Enforce RG limit on the three groups
+        plan_upstream = enforce_rg_limit(plan_upstream, RG_limit_all, caps_RG)
+        plan_downstr  = enforce_rg_limit(plan_downstr,  RG_limit_all, caps_RG)
+        plan_highro   = enforce_rg_limit(plan_highro,   RG_limit_all, caps_RG)
+
+        # 3. Fill remaining budget using RB
+        plan_upstream = fill_with_rb_to_budget(plan_upstream, caps_RB, unit_cost_rg, unit_cost_rb, B_target)
+        plan_downstr  = fill_with_rb_to_budget(plan_downstr,  caps_RB, unit_cost_rg, unit_cost_rb, B_target)
+        plan_highro   = fill_with_rb_to_budget(plan_highro,   caps_RB, unit_cost_rg, unit_cost_rb, B_target)
 
         # Treated area (using your constants: 400 ft² per RG; 300 ft² per RB)
         treated_ft2 = 400.0 * total_rg + 300.0 * total_rb
@@ -1949,6 +1964,20 @@ def app_ui():
 
         st.markdown("### Summary")
 
+        with st.expander("Understanding Costs, LID Mix, and Storage"):
+            st.markdown("""
+        CoastWise may show different numbers of rain gardens and rain barrels across the four layouts even when the total cost is the same. This is because each part of the watershed has different limits on how many rain gardens it can support.
+
+        When an area reaches its rain garden limit, rain barrels are added instead to keep the total investment equal.
+
+        Although the cost stays the same, the storage can differ because each LID type holds a different amount of water:
+
+        - Each rain barrel provides about **55 gallons** or 0.2 cubic meters.
+        - Each rain garden provides about **1,050 gallons** or 4 cubic meters.
+
+        A layout with fewer rain gardens and more rain barrels will have **less total storage**, even with the same budget. 
+        """)
+
         # --- Row 1: RG count | RB count ---
         row1 = st.columns(2, gap="large")
         with row1[0]:
@@ -2097,14 +2126,12 @@ def app_ui():
                 continue
 
             flood_display = float(st.session_state.get(f"{key}_event_total_flood", 0.0))
-            df_ir = extract_infiltration_and_runoff_from_text(rpt_text) if rpt_text else pd.DataFrame(columns=["label","volume_acft"])
-            infil_acft  = _safe_continuity(df_ir, "infiltration_loss")
+            df_ir = extract_infiltration_and_runoff_from_text(rpt_text)
             runoff_acft = _safe_continuity(df_ir, "surface_runoff")
 
             rows.append({
                 "Scenario": disp,
                 "Flooding":       flood_display,
-                "Infiltration":   acft_to_display(infil_acft),
                 "Surface Runoff": acft_to_display(runoff_acft),
             })
 
@@ -2112,7 +2139,7 @@ def app_ui():
         # integer display is fine (round at render), but keep as float for charts if needed
         return df, unit_label
 
-    if st.button("Watershed Volumes: Flooding / Infiltration / Surface Runoff", key=f"{prefix}btn_volumes_per_metric"):
+    if st.button("Watershed Volumes: Flooding and Surface Runoff", key=f"{prefix}btn_volumes_per_metric"):
         # --- Make Altair safe in this block ---
         import altair as alt
         try:
@@ -2152,7 +2179,6 @@ def app_ui():
 
         # Compute domains before plotting
         flood_dom  = _domain_minmax_pad(df_vol["Flooding"], pad=5000.0)
-        infil_dom  = _domain_minmax_pad(df_vol["Infiltration"], pad=5000.0)
         runoff_dom = _domain_minmax_pad(df_vol["Surface Runoff"], pad=5000.0)
 
         # --- Chart builder: accepts explicit domain; includes a fallback when all zeros ---
@@ -2221,18 +2247,8 @@ def app_ui():
                 )
             )
 
-            # Value labels (positioned at the end of the bar)
-            labels = (
-                alt.Chart(df)
-                .mark_text(align="left", baseline="middle", dx=6, color="#333", fontSize=13)
-                .encode(
-                    x=alt.X("Value:Q", scale=alt.Scale(domain=x_domain, nice=False, zero=False)),
-                    y=alt.Y("Scenario:N", sort=order),
-                    text=alt.Text("Value:Q", format=",.0f")
-                )
-            )
 
-            chart = (bars + labels).properties(height=height_px)
+            chart = bars.properties(height=height_px)
             if isinstance(title_text, str) and title_text.strip():
                 chart = chart.properties(title=title_text)
 
@@ -2253,15 +2269,6 @@ def app_ui():
             title_text="",
             color="#3e95d3",
             x_domain=flood_dom
-        )
-
-        st.markdown("**Infiltration**")
-        _bar_metric(
-            df_vol["Infiltration"], unit_lbl,
-            key_suffix="infil",
-            title_text="",
-            color="#2ca02c",
-            x_domain=infil_dom
         )
 
         st.markdown("**Surface Runoff**")
@@ -2319,10 +2326,11 @@ def app_ui():
             df_tide.to_excel(writer, sheet_name="Tide Event", index=False)
 
             out = df_vol.reset_index()
-            out.columns = ["Scenario",
-                        f"Flooding ({unit_lbl})",
-                        f"Infiltration ({unit_lbl})",
-                        f"Surface Runoff ({unit_lbl})"]
+
+            out = out.rename(columns={
+                "Flooding":       f"Flooding ({unit_lbl})",
+                "Surface Runoff": f"Surface Runoff ({unit_lbl})"
+            })
             out.to_excel(writer, sheet_name="Scenario Volumes", index=False)
 
         st.download_button(
