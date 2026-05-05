@@ -645,23 +645,28 @@ def run_swmm_scenario(
     lid_lines: List[str],
     gate_flag: str,
     duration_minutes: int,
-    report_interval=timedelta(minutes=5),
     template_path="SWMM_Project.inp",
     rain_minutes: List[int] | None = None,
     rain_curve_in: List[float] | None = None,
     sim_start_str: str | None = None,
 ):
     """
-    Run SWMM and capture node flooding at every timestep directly from pyswmm.
-    We DO NOT read the OUT file for flooding.
+    Run SWMM using hydraulic timesteps, capturing:
+      - flooding (ft³/s)
+      - lateral inflow (ft³/s)
+      - total inflow (ft³/s)
+      - depth (ft)
+      - head (ft)
+    Output is thinned (every Nth timestep).
+    A CSV is written for debugging.
     """
 
-    temp_dir  = st.session_state.temp_dir
-    inp_path  = os.path.join(temp_dir, f"{scenario_name}.inp")
-    rpt_path  = os.path.join(temp_dir, f"{scenario_name}.rpt")
-    out_path  = os.path.join(temp_dir, f"{scenario_name}.out")
+    temp_dir = st.session_state.temp_dir
+    inp_path = os.path.join(temp_dir, f"{scenario_name}.inp")
+    rpt_path = os.path.join(temp_dir, f"{scenario_name}.rpt")
+    out_path = os.path.join(temp_dir, f"{scenario_name}.out")
 
-    # Inject rainfall / tide / LID usage into the template
+    # ------- write the INP -------
     with open(template_path, "r") as f:
         text = f.read()
     text = (
@@ -673,55 +678,58 @@ def run_swmm_scenario(
     with open(inp_path, "w") as f:
         f.write(text)
 
-    step_s = int(report_interval.total_seconds())
-
-    # -------------------------------
-    # 1. CAPTURE FLOODING TIME SERIES
-    # -------------------------------
-    flooding_records = []   # list of {datetime, node: flooding}
+    # ------- run SWMM -------
+    timestep_records = []
+    N = 5  # record every 5th hydraulic step
 
     with Simulation(inp_path, rpt_path, out_path) as sim:
-        sim.step_advance(step_s)
+        sim.step_advance(0)  # hydraulic timestep
         nodes = Nodes(sim)
 
-        # Capture node list (new pyswmm API)
         if "node_ids" not in st.session_state:
-            st.session_state["node_ids"] = [node.nodeid for node in Nodes(sim)]
+            st.session_state["node_ids"] = [node.nodeid for node in nodes]
 
+        step = 0
         for _ in sim:
+            step += 1
+            if step % N != 0:
+                continue
+
             t = sim.current_time
-
             row = {"datetime": t}
+
             for nid in st.session_state["node_ids"]:
-                try:
-                    row[nid] = nodes[nid].flooding  # cfs
-                except Exception:
-                    row[nid] = 0.0
+                nd = nodes[nid]
+                row[f"{nid}_flood_cfs"] = float(nd.flooding)
+                row[f"{nid}_lat_cfs"] = float(nd.lateral_inflow)
+                row[f"{nid}_tot_cfs"] = float(nd.total_inflow)
+                row[f"{nid}_depth"] = float(nd.depth)
+                row[f"{nid}_head"] = float(nd.head)
 
-            flooding_records.append(row)
+            timestep_records.append(row)
 
+    flooding_df = pd.DataFrame(timestep_records)
+
+    # ------- CSV debug exporter -------
+    debug_dir = "workspaces/flood-modeling-k12-education/csv_files"
+    os.makedirs(debug_dir, exist_ok=True)
+    debug_path = os.path.join(debug_dir, f"{scenario_name}_hydraulics.csv")
+    flooding_df.to_csv(debug_path, index=False)
+    st.success(f"Hydraulic timestep CSV saved: {debug_path}")
+
+    # ------- parse report file -------
     rpt_text = _read_text_keep(rpt_path)
-
     df_nf = parse_node_flooding_summary_from_text(rpt_text)
     to_metric = (st.session_state.get("unit_ui") == "Metric (SI)")
     total_event_vol, node_cuft_event = summarize_node_flooding_in_window(df_nf, to_metric)
-
     df_runoff = extract_total_runoff_from_text(rpt_text)
     df_ir = extract_infiltration_and_runoff_from_text(rpt_text)
-
-    # Save everything needed
-    flooding_df = pd.DataFrame(flooding_records)
 
     st.session_state.setdefault("flood_ts", {})
     st.session_state["flood_ts"][scenario_name] = flooding_df
 
-    st.session_state.setdefault("rpts", {})[scenario_name] = rpt_text
-    st.session_state[f"{scenario_name}_event_total_flood"] = total_event_vol
-    st.session_state[f"{scenario_name}_node_flood_event_cuft"] = node_cuft_event
-
-    # Storm metadata (important for clipping later)
-    st.session_state[f"{scenario_name}_inp_path"] = inp_path
-    st.session_state[f"{scenario_name}_storm_start"] = datetime.strptime(sim_start_str, "%m/%d/%Y %H:%M")
+    st.session_state[f"{scenario_name}_storm_start"] = datetime.strptime(
+        sim_start_str, "%m/%d/%Y %H:%M")
     st.session_state[f"{scenario_name}_storm_dur_hours"] = duration_minutes / 60.0
 
     return {

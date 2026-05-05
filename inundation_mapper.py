@@ -32,20 +32,6 @@ def extract_flooding_window(flood_df, storm_start, storm_dur_hours):
 
     return df
 
-
-def integrate_flood_volume(df, report_step_minutes=5):
-    """Convert cfs to ft³."""
-    dt = report_step_minutes * 60.0
-    node_cols = [c for c in df.columns if c != "datetime"]
-
-    volumes = {}
-    for nid in node_cols:
-        s = df[nid].fillna(0).astype(float)
-        volumes[nid] = float(s.sum() * dt)
-
-    return volumes
-
-
 def clean_dem(dem, nodata):
     mask_bad = (dem > 1e20) | (dem < -1e20)
     if np.any(mask_bad):
@@ -62,34 +48,38 @@ def clean_dem(dem, nodata):
 
     return dem
 
-
-def simulate_inundation(dem_path, nodes_path, volumes, out_png):
-    """Very simplified inundation just for demonstration."""
-    with rasterio.open(dem_path) as src:
-        dem = src.read(1).astype(float)
-        dem = clean_dem(dem, src.nodata)
-        transform = src.transform
-        crs = src.crs
-
-    gdf = gpd.read_file(nodes_path).to_crs(crs)
-
+def simulate_inundation_timestep(dem, transform, gdf_nodes, volumes_dict):
+    """
+    Compute inundation depth for ONE timestep.
+    volumes_dict: {node: volume_ft3}
+    Returns a list of {
+       'lon': float,
+       'lat': float,
+       'depth': float
+    }
+    """
     depth = np.zeros_like(dem, float)
+    cell_area = transform.a * transform.a
 
-    for node, vol in volumes.items():
-        row = gdf[gdf["NAME"] == node]
+    for node, vol in volumes_dict.items():
+        row = gdf_nodes[gdf_nodes["NAME"] == node]
         if row.empty:
             continue
         pt = row.iloc[0].geometry
         c, r = ~transform * (pt.x, pt.y)
         r, c = int(r), int(c)
 
-        # very simplistic: put all water in that 1 cell
-        depth[r,c] += vol / (transform.a * transform.a)
+        if 0 <= r < depth.shape[0] and 0 <= c < depth.shape[1]:
+            depth[r, c] += vol / cell_area
 
-    plt.figure(figsize=(6,6))
-    plt.imshow(depth, cmap="Blues", vmin=0, vmax=np.nanpercentile(depth,95))
-    plt.axis("off")
-    plt.savefig(out_png, dpi=150)
-    plt.close()
+    points = []
+    H, W = depth.shape
+    for r in range(H):
+        for c in range(W):
+            d = depth[r, c]
+            if d <= 0:
+                continue
+            x, y = transform * (c + 0.5, r + 0.5)
+            points.append({"lon": x, "lat": y, "depth": float(d)})
 
-    return depth
+    return points
