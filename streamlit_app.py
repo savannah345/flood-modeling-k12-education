@@ -665,7 +665,7 @@ def run_swmm_scenario(
     # CONFIG — dynamic, adjustable, NOT hardcoded
     # ----------------------------------------------
     ROUTING_STEP_SEC = 5         # SWMM routing timestep (from INP)
-    N = 1                       # thinning factor (sample every N steps)
+    N = 5                       # thinning factor (sample every N steps)
     dt_seconds = ROUTING_STEP_SEC * N   # REAL timestep for recorded data
 
     # Store dt for inundation model
@@ -718,7 +718,7 @@ def run_swmm_scenario(
 
             for nid in st.session_state["node_ids"]:
                 nd = nodes[nid]
-                row[f"{nid}_flood_cfs"] = float(nd.flooding)
+                row[f"{nid}"] = float(nd.flooding)
                 #row[f"{nid}_lat_cfs"] = float(nd.lateral_inflow)
 
             timestep_records.append(row)
@@ -2068,101 +2068,50 @@ def app_ui():
                 gate_text = "Tide Gate ON" if gate == "gate" else "Tide Gate OFF"
                 return f"{pretty_names[label]} – {gate_text}"
 
-            # Correct imports for the new timestep-based inundation engine
-            from inundation_mapper import (
-                clean_dem,
-                simulate_inundation_timestep,
-            )
-            import rasterio
+            from inundation_mapper import compute_peak_inundation
 
-            st.subheader("Flood Inundation Animation")
+            st.subheader("Peak Inundation Map")
 
-            # The 8 scenarios to visualize
+            # We only run 2 scenarios now:
             scenario_list = [
                 f"{prefix}focus_all_{tag}_nogate",
-                f"{prefix}focus_all_{tag}_gate",
-                f"{prefix}focus_upstream_{tag}_nogate",
-                f"{prefix}focus_upstream_{tag}_gate",
-                f"{prefix}focus_downstream_{tag}_nogate",
-                f"{prefix}focus_downstream_{tag}_gate",
-                f"{prefix}focus_highrunoff_{tag}_nogate",
-                f"{prefix}focus_highrunoff_{tag}_gate",
+                f"{prefix}focus_all_{tag}_gate"
             ]
 
             for scenario in scenario_list:
-
                 st.markdown(f"### Scenario: {scenario}")
 
-                # 1. Load timestep-based hydraulics collected earlier
+                # Load flooding time series
                 flooding_df = st.session_state["flood_ts"][scenario]
 
-                # 2. Load DEM and nodes
-                with rasterio.open("map_files/DEM.tif") as src:
-                    dem = src.read(1).astype(float)
-                    dem = clean_dem(dem, src.nodata)
-                    transform = src.transform
-                    crs = src.crs
+                # Compute peak inundation
+                df_peak = compute_peak_inundation(
+                    flooding_df=flooding_df,
+                    dem_path="map_files/DEM.tif",
+                    nodes_shp_path="map_files/Nodes.shp",
+                    unit_system=st.session_state["unit_ui"],
+                    flowdir_path="map_files/D8_flowdir.tif"
+                )
 
-                gdf_nodes = gpd.read_file("map_files/Nodes.shp").to_crs(crs)
-
-                # 4. Only the water *leaving the system* (flooding) is used for inundation
-
-                frames = []
-
-                dt = st.session_state["dt_seconds"][scenario]
-
-                for idx, row in flooding_df.iterrows():
-                    vol_dict = {}
-                    for col in flooding_df.columns:
-                        if col.endswith("_flood_cfs"):
-                            nid = col.replace("_flood_cfs", "")
-                            vol = row[col] * dt     # dynamic timestep conversion
-                            if vol > 0:
-                                vol_dict[nid] = vol
-
-                    pts = simulate_inundation_timestep(dem, transform, gdf_nodes, vol_dict)
-                    for p in pts:
-                        p["time"] = row["datetime"]
-
-                    frames.extend(pts)
-
-                df_anim = pd.DataFrame(frames)
-
-                if df_anim.empty:
+                if df_peak.empty:
                     st.info("No inundation detected for this scenario.")
                     continue
 
-                # Convert time to seconds for pydeck animation
-                df_anim["timestamp_sec"] = df_anim["time"].astype("int64") // 1_000_000_000
+                # Normalize color for depth (simple Blue ramp)
+                max_depth = df_peak["depth"].max()
+                df_peak["color_r"] = (df_peak["depth"] / max_depth * 0).astype(int)
+                df_peak["color_g"] = (df_peak["depth"] / max_depth * 120).clip(50,150).astype(int)
+                df_peak["color_b"] = (df_peak["depth"] / max_depth * 255).clip(150,255).astype(int)
+                df_peak["color_a"] = (df_peak["depth"] / max_depth * 200).clip(80,200).astype(int)
 
-                # Normalize depth to color
-                max_depth = df_anim["depth"].max()
-                df_anim["color_r"] = (df_anim["depth"] / max_depth * 255).clip(0,255)
-                df_anim["color_g"] = 80
-                df_anim["color_b"] = 200
-                df_anim["color_a"] = (df_anim["depth"] / max_depth * 180).clip(40,200)
-
-                # Animation slider
-                min_t = int(df_anim["timestamp_sec"].min())
-                max_t = int(df_anim["timestamp_sec"].max())
-
-                current_t = st.slider(
-                    f"Time selection for {scenario}",
-                    min_t, max_t, min_t,
-                    step=300,
-                    format="Time step: %d"
-                )
-
-                # Filter to current frame for static view
-                df_frame = df_anim[df_anim["timestamp_sec"] == current_t]
-
+                # Build map
                 flood_layer = pdk.Layer(
                     "ScatterplotLayer",
-                    data=df_anim,
+                    data=df_peak,
                     get_position='[lon, lat]',
-                    get_radius=14,
+                    get_radius=3,
                     get_fill_color='[color_r, color_g, color_b, color_a]',
-                    get_time="timestamp_sec",
+                    pickable=False
                 )
 
                 ws_layer = pdk.Layer(
@@ -2171,28 +2120,22 @@ def app_ui():
                     stroked=True,
                     filled=False,
                     get_line_color=[0, 0, 0, 160],
-                    line_width_min_pixels=1,
+                    line_width_min_pixels=1
                 )
 
                 view_state = pdk.ViewState(
-                    latitude=df_anim["lat"].mean(),
-                    longitude=df_anim["lon"].mean(),
-                    zoom=13.4
+                    latitude=df_peak["lat"].mean(),
+                    longitude=df_peak["lon"].mean(),
+                    zoom=13.5
                 )
 
                 deck = pdk.Deck(
                     layers=[flood_layer, ws_layer],
                     initial_view_state=view_state,
-                    map_style="light",
-                    parameters={"animationSpeed": 1},
+                    map_style="light"
                 )
 
-                deck.update_triggers = {
-                    "get_time": df_anim["timestamp_sec"].tolist()
-                }
-
                 st.pydeck_chart(deck)
-
 
     def _gather_scenario_volumes() -> tuple[pd.DataFrame, str]:
         ACF_TO_FT3 = 43560.0
