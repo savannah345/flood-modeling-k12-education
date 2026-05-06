@@ -50,7 +50,7 @@ def ensure_playwright_browsers():
 ensure_playwright_browsers()
 
 MSL_OFFSET_NAVD88_FT = 0
-WS_SHP_PATH  = st.session_state.get("WS_SHP_PATH", "map_files/Subcatchments.shp")
+WS_SHP_PATH  = st.session_state.get("WS_SHP_PATH", "map_files/Subcatchment.shp")
 NODE_SHP_PATH= st.session_state.get("NODE_SHP_PATH", "map_files/Nodes.shp")
 PIPE_SHP_PATH= st.session_state.get("PIPE_SHP_PATH", "map_files/Conduits.shp")
 
@@ -1092,7 +1092,7 @@ def app_ui():
 
     simulation_date = "05/31/2025 12:00"
     template_inp    = "SWMM_Project.inp"
-    WS_SHP_PATH     = st.session_state.get("WS_SHP_PATH", "map_files/Subcatchments.shp")
+    WS_SHP_PATH     = st.session_state.get("WS_SHP_PATH", "map_files/Subcatchment.shp")
     NODE_SHP_PATH   = st.session_state.get("NODE_SHP_PATH", "map_files/Nodes.shp")
     PIPE_SHP_PATH   = st.session_state.get("PIPE_SHP_PATH", "map_files/Conduits.shp")
 
@@ -2068,43 +2068,88 @@ def app_ui():
                 gate_text = "Tide Gate ON" if gate == "gate" else "Tide Gate OFF"
                 return f"{pretty_names[label]} – {gate_text}"
 
+
             from inundation_mapper import compute_peak_inundation
 
             st.subheader("Peak Inundation Map")
 
-            # We only run 2 scenarios now:
+            use_future = (st.session_state.get("rain_variant", "current") == "future")
+            tag = "future" if use_future else "current"
+
+            # Only the scenarios you actually run:
             scenario_list = [
                 f"{prefix}focus_all_{tag}_nogate",
-                f"{prefix}focus_all_{tag}_gate"
+                f"{prefix}focus_all_{tag}_gate",
             ]
 
+            # -------------------------
+            # Helpers for pretty titles
+            # -------------------------
+            def extract_placement_from_parts(parts):
+                for i in range(len(parts) - 1):
+                    if parts[i] == "focus":
+                        return f"focus_{parts[i+1]}"
+                raise KeyError("Scenario name missing placement label.")
+
+            def scenario_title(label: str, gate: str):
+                pretty = {
+                    "focus_all": "All Subcatchments",
+                    "focus_upstream": "Upstream",
+                    "focus_downstream": "Downstream",
+                    "focus_highrunoff": "High‑Runoff",
+                }
+                gate_text = "Tide Gate ON" if gate == "gate" else "Tide Gate OFF"
+                return f"{pretty[label]} – {gate_text}"
+
+
+            # ------------------------------------------------------------
+            # Main loop — compute + STORE maps so they NEVER disappear
+            # ------------------------------------------------------------
             for scenario in scenario_list:
-                st.markdown(f"### Scenario: {scenario}")
+                st.markdown("---")
 
-                # Load flooding time series
-                flooding_df = st.session_state["flood_ts"][scenario]
+                # Extract readable title
+                parts = scenario.split("_")
+                placement_label = extract_placement_from_parts(parts)
+                gate_state = parts[-1]
+                pretty_name = scenario_title(placement_label, gate_state)
 
-                # Compute peak inundation
-                df_peak = compute_peak_inundation(
-                    flooding_df=flooding_df,
-                    dem_path="map_files/DEM.tif",
-                    nodes_shp_path="map_files/Nodes.shp",
-                    unit_system=st.session_state["unit_ui"],
-                    flowdir_path="map_files/D8_flowdir.tif"
-                )
+                st.markdown(f"### {pretty_name}")
 
-                if df_peak.empty:
-                    st.info("No inundation detected for this scenario.")
+                # ✓ GUARANTEE flood time-series exists before computing
+                if "flood_ts" not in st.session_state or scenario not in st.session_state["flood_ts"]:
+                    st.warning(f"No flood time series found for **{pretty_name}**. Run scenarios first.")
                     continue
 
-                # Normalize color for depth (simple Blue ramp)
-                max_depth = df_peak["depth"].max()
-                df_peak["color_r"] = (df_peak["depth"] / max_depth * 0).astype(int)
-                df_peak["color_g"] = (df_peak["depth"] / max_depth * 120).clip(50,150).astype(int)
-                df_peak["color_b"] = (df_peak["depth"] / max_depth * 255).clip(150,255).astype(int)
-                df_peak["color_a"] = (df_peak["depth"] / max_depth * 200).clip(80,200).astype(int)
+                flooding_df = st.session_state["flood_ts"][scenario]
 
-                # Build map
+                # ---- Only compute peak inundation once ----
+                if f"{scenario}_peak_df" not in st.session_state:
+                    df_peak = compute_peak_inundation(
+                        flooding_df=flooding_df,
+                        dem_path="map_files/DEM.tif",
+                        nodes_shp_path="map_files/Nodes.shp",
+                        unit_system=st.session_state["unit_ui"],
+                        flowdir_path="map_files/D8_flowdir.tif"
+                    )
+                    st.session_state[f"{scenario}_peak_df"] = df_peak.copy()
+                else:
+                    df_peak = st.session_state[f"{scenario}_peak_df"]
+
+                # If no inundation at all
+                if df_peak.empty:
+                    st.info(f"No inundation detected for **{pretty_name}**.")
+                    continue
+
+                # ----------------------------
+                # Color scaling per scenario
+                # ----------------------------
+                max_depth = df_peak["depth"].max()
+                df_peak["color_r"] = 0
+                df_peak["color_g"] = ((df_peak["depth"] / max_depth) * 120).clip(50, 150).astype(int)
+                df_peak["color_b"] = ((df_peak["depth"] / max_depth) * 255).clip(150, 255).astype(int)
+                df_peak["color_a"] = ((df_peak["depth"] / max_depth) * 200).clip(80, 200).astype(int)
+
                 flood_layer = pdk.Layer(
                     "ScatterplotLayer",
                     data=df_peak,
@@ -2135,7 +2180,11 @@ def app_ui():
                     map_style="light"
                 )
 
-                st.pydeck_chart(deck)
+                # SAVE MAP so it survives rerun
+                st.session_state[f"{scenario}_inundation_map"] = deck
+
+                # RENDER MAP (PERSISTENT)
+                st.pydeck_chart(st.session_state[f"{scenario}_inundation_map"])
 
     def _gather_scenario_volumes() -> tuple[pd.DataFrame, str]:
         ACF_TO_FT3 = 43560.0

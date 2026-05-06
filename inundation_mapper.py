@@ -48,7 +48,8 @@ def load_static_inundation_data(dem_path, flowdir_path, nodes_path, unit_system)
         "flowdir": flowdir,
         "transform": transform,
         "cell_area": cell_area,
-        "node_locs": node_locs
+        "node_locs": node_locs,
+        "crs": crs
     }
     return st.session_state["inundation_static"]
 
@@ -264,7 +265,17 @@ def compute_peak_inundation(
             if d <= 0:
                 continue
 
-            lon, lat = transform * (c + 0.5, r + 0.5)
+            from rasterio.warp import transform as rio_transform
+
+            x, y = transform * (c + 0.5, r + 0.5)
+            lon, lat = rio_transform(
+                static["crs"],        # your UTM CRS
+                "EPSG:4326",          # required by Pydeck
+                [x], [y]
+            )
+
+            lon = lon[0]
+            lat = lat[0]
             pts.append({"lon": lon, "lat": lat, "depth": float(d)})
 
     return pd.DataFrame(pts)
