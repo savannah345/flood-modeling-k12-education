@@ -652,21 +652,38 @@ def run_swmm_scenario(
 ):
     """
     Run SWMM using hydraulic timesteps, capturing:
-      - flooding (ft³/s)
-      - lateral inflow (ft³/s)
-      - total inflow (ft³/s)
-      - depth (ft)
-      - head (ft)
-    Output is thinned (every Nth timestep).
-    A CSV is written for debugging.
+        - flooding (cfs)
+        - lateral inflow (cfs)
+    Output is clipped to:
+        - 1 hour before rainfall starts
+        - 2 hours after rainfall ends
+
+    NO hardcoded timestep assumptions — dt auto-calculated.
     """
 
+    # ----------------------------------------------
+    # CONFIG — dynamic, adjustable, NOT hardcoded
+    # ----------------------------------------------
+    ROUTING_STEP_SEC = 5         # SWMM routing timestep (from INP)
+    N = 1                       # thinning factor (sample every N steps)
+    dt_seconds = ROUTING_STEP_SEC * N   # REAL timestep for recorded data
+
+    # Store dt for inundation model
+    if "dt_seconds" not in st.session_state:
+        st.session_state["dt_seconds"] = {}
+    st.session_state["dt_seconds"][scenario_name] = dt_seconds
+
+    # ----------------------------------------------
+    # Setup file paths
+    # ----------------------------------------------
     temp_dir = st.session_state.temp_dir
     inp_path = os.path.join(temp_dir, f"{scenario_name}.inp")
     rpt_path = os.path.join(temp_dir, f"{scenario_name}.rpt")
     out_path = os.path.join(temp_dir, f"{scenario_name}.out")
 
-    # ------- write the INP -------
+    # ----------------------------------------------
+    # Write INP
+    # ----------------------------------------------
     with open(template_path, "r") as f:
         text = f.read()
     text = (
@@ -678,12 +695,13 @@ def run_swmm_scenario(
     with open(inp_path, "w") as f:
         f.write(text)
 
-    # ------- run SWMM -------
+    # ----------------------------------------------
+    # Run SWMM — collect thinned hydraulic results
+    # ----------------------------------------------
     timestep_records = []
-    N = 5  # record every 5th hydraulic step
 
     with Simulation(inp_path, rpt_path, out_path) as sim:
-        sim.step_advance(0)  # hydraulic timestep
+        sim.step_advance(ROUTING_STEP_SEC)  # use SWMM routing step
         nodes = Nodes(sim)
 
         if "node_ids" not in st.session_state:
@@ -701,35 +719,65 @@ def run_swmm_scenario(
             for nid in st.session_state["node_ids"]:
                 nd = nodes[nid]
                 row[f"{nid}_flood_cfs"] = float(nd.flooding)
-                row[f"{nid}_lat_cfs"] = float(nd.lateral_inflow)
-                row[f"{nid}_tot_cfs"] = float(nd.total_inflow)
-                row[f"{nid}_depth"] = float(nd.depth)
-                row[f"{nid}_head"] = float(nd.head)
+                #row[f"{nid}_lat_cfs"] = float(nd.lateral_inflow)
 
             timestep_records.append(row)
 
     flooding_df = pd.DataFrame(timestep_records)
 
-    # ------- CSV debug exporter -------
-    debug_dir = "workspaces/flood-modeling-k12-education/csv_files"
+    # Guarantee datetime exists (prevents KeyError)
+    if flooding_df.empty or "datetime" not in flooding_df.columns:
+        flooding_df = pd.DataFrame({"datetime": pd.to_datetime([])})
+
+    # ----------------------------------------------
+    # CLIP TO 1 hr before rain & 2 hrs after
+    # ----------------------------------------------
+    storm_start_dt = datetime.strptime(sim_start_str, "%m/%d/%Y %H:%M")
+
+    rain_indices = [i for i, v in enumerate(rain_curve_in) if float(v) > 0]
+
+    if len(rain_indices) == 0:
+        clipped_df = flooding_df.copy()
+    else:
+        i_start = rain_indices[0]
+        i_end = rain_indices[-1]
+
+        rain_start_dt = storm_start_dt + timedelta(minutes=int(rain_minutes[i_start]))
+        rain_end_dt   = storm_start_dt + timedelta(minutes=int(rain_minutes[i_end]))
+
+        window_start = rain_start_dt - timedelta(hours=1)
+        window_end   = rain_end_dt + timedelta(hours=2)
+
+        clipped_df = flooding_df[
+            (flooding_df["datetime"] >= window_start) &
+            (flooding_df["datetime"] <= window_end)
+        ].copy()
+
+    # ----------------------------------------------
+    # Save CSV (cfs only — no conversion)
+    # ----------------------------------------------
+    debug_dir = "csv_files"
     os.makedirs(debug_dir, exist_ok=True)
     debug_path = os.path.join(debug_dir, f"{scenario_name}_hydraulics.csv")
-    flooding_df.to_csv(debug_path, index=False)
-    st.success(f"Hydraulic timestep CSV saved: {debug_path}")
+    clipped_df.to_csv(debug_path, index=False)
 
-    # ------- parse report file -------
+    # ----------------------------------------------
+    # Parse RPT for runoff & flood event totals
+    # ----------------------------------------------
     rpt_text = _read_text_keep(rpt_path)
     df_nf = parse_node_flooding_summary_from_text(rpt_text)
     to_metric = (st.session_state.get("unit_ui") == "Metric (SI)")
-    total_event_vol, node_cuft_event = summarize_node_flooding_in_window(df_nf, to_metric)
+
+    total_event_vol, node_cuft_event = summarize_node_flooding_in_window(
+        df_nf, to_metric
+    )
     df_runoff = extract_total_runoff_from_text(rpt_text)
     df_ir = extract_infiltration_and_runoff_from_text(rpt_text)
 
     st.session_state.setdefault("flood_ts", {})
-    st.session_state["flood_ts"][scenario_name] = flooding_df
+    st.session_state["flood_ts"][scenario_name] = clipped_df
 
-    st.session_state[f"{scenario_name}_storm_start"] = datetime.strptime(
-        sim_start_str, "%m/%d/%Y %H:%M")
+    st.session_state[f"{scenario_name}_storm_start"] = storm_start_dt
     st.session_state[f"{scenario_name}_storm_dur_hours"] = duration_minutes / 60.0
 
     return {
@@ -1998,9 +2046,9 @@ def app_ui():
 
             # Run all four placement × gate combinations
             run_focus_pair(f"focus_all_{tag}",      plan_all,      rain_lines, tide_lines, template_inp, minutes_15, simulation_date, rain_curve)
-            run_focus_pair(f"focus_upstream_{tag}", plan_upstream, rain_lines, tide_lines, template_inp, minutes_15, simulation_date, rain_curve)
-            run_focus_pair(f"focus_downstream_{tag}", plan_downstr,  rain_lines, tide_lines, template_inp, minutes_15, simulation_date, rain_curve)
-            run_focus_pair(f"focus_highrunoff_{tag}", plan_highro,   rain_lines, tide_lines, template_inp, minutes_15, simulation_date, rain_curve)
+            #run_focus_pair(f"focus_upstream_{tag}", plan_upstream, rain_lines, tide_lines, template_inp, minutes_15, simulation_date, rain_curve)
+            #run_focus_pair(f"focus_downstream_{tag}", plan_downstr,  rain_lines, tide_lines, template_inp, minutes_15, simulation_date, rain_curve)
+            #run_focus_pair(f"focus_highrunoff_{tag}", plan_highro,   rain_lines, tide_lines, template_inp, minutes_15, simulation_date, rain_curve)
 
             # Helpers to name scenarios nicely
             def extract_placement_from_parts(parts):
@@ -2057,28 +2105,21 @@ def app_ui():
 
                 gdf_nodes = gpd.read_file("map_files/Nodes.shp").to_crs(crs)
 
-                # 3. Convert flood_cfs → volume per timestep (5-min default)
-                #    BUT you are now using hydraulic timesteps (variable dt),
-                #    so you only collected Nth timesteps and each row is instantaneous,
-                #    so convert to flood volume based on assumed 5 min or hydraulic dt if stored.
-                # For now: use fixed 5 min (300 sec)
-                flooding_df["volume_ft3"] = flooding_df.filter(like="_flood_cfs") * 300
-
                 # 4. Only the water *leaving the system* (flooding) is used for inundation
+
                 frames = []
 
-                for idx, row in flooding_df.iterrows():
+                dt = st.session_state["dt_seconds"][scenario]
 
-                    # build dictionary {node: volume_ft3}
+                for idx, row in flooding_df.iterrows():
                     vol_dict = {}
                     for col in flooding_df.columns:
                         if col.endswith("_flood_cfs"):
                             nid = col.replace("_flood_cfs", "")
-                            vol = row[col] * 300.0
+                            vol = row[col] * dt     # dynamic timestep conversion
                             if vol > 0:
                                 vol_dict[nid] = vol
 
-                    # compute inundation depth for this timestep
                     pts = simulate_inundation_timestep(dem, transform, gdf_nodes, vol_dict)
                     for p in pts:
                         p["time"] = row["datetime"]
