@@ -2172,7 +2172,10 @@ def app_ui():
         # =========================================================
         # SHOW FLOODING + INFILTRATION (LOG SCALE)
         # =========================================================
-        if "scenario_infiltration" in st.session_state and "scenario_flood_volume" in st.session_state:
+        if (
+                "scenario_labels_saved" in st.session_state 
+                and st.session_state["scenario_labels_saved"]
+        ):
 
             st.subheader("Watershed Summary: Flooding & Infiltration")
 
@@ -2196,48 +2199,77 @@ def app_ui():
 
             # Flood chart
             st.markdown("### Flooding")
+            min_flood = df_log["Flooding"].min()
+            max_flood = df_log["Flooding"].max()
+
             chart_flood = (
                 alt.Chart(df_log)
                 .mark_bar(color="#e41a1c")
                 .encode(
-                    x=alt.X("Flooding:Q",
-                            scale=alt.Scale(type="log"),
-                            axis=alt.Axis(title=f"Flood Volume ({flooding_unit})",
-                                        format=",.0f")),
-                    y=alt.Y("Scenario:N",
-                            sort="-x",
-                            title=None,
-                            axis=alt.Axis(labelFontSize=15, labelLimit=500)),
+                    x=alt.X(
+                        "Flooding:Q",
+                        scale=alt.Scale(domain=[min_flood * 0.9, max_flood * 1.1]),
+                        axis=alt.Axis(title=f"Flood Volume ({flooding_unit})")
+                    ),
+                    y=alt.Y(
+                        "Scenario:N",
+                        sort="-x",
+                        title=None,
+                        axis=alt.Axis(labelFontSize=15, labelLimit=500),
+                    ),
                     tooltip=[
                         alt.Tooltip("Scenario:N"),
-                        alt.Tooltip("Flooding:Q", title="Flooding (linear units)", format=",.0f")
+                        alt.Tooltip("Flooding:Q", format=",.2f"),
                     ],
                 )
                 .properties(height=chart_height)
             )
-            st.altair_chart(chart_flood, use_container_width=True)
 
             # Infiltration chart
+
             st.markdown("### Infiltration")
+
+            # Convert dict → numeric array (ensures no strings/None)
+            infil_values = pd.to_numeric(df_log["Infiltration"], errors="coerce").fillna(0.0)
+
+            # Compute safe padded domain (prevents all bars stacking at 0)
+            infil_min = float(infil_values.min())
+            infil_max = float(infil_values.max())
+
+            # If all values identical → expand domain artificially so bars show
+            if abs(infil_max - infil_min) < 1e-9:
+                infil_min = infil_min * 0.9
+                infil_max = infil_max * 1.1
+            else:
+                infil_min = infil_min * 0.9
+                infil_max = infil_max * 1.1
+
             chart_infil = (
                 alt.Chart(df_log)
                 .mark_bar(color="#377eb8")
                 .encode(
-                    x=alt.X("Infiltration:Q",
-                            scale=alt.Scale(type="log"),
-                            axis=alt.Axis(title=f"Infiltration ({infiltration_unit})",
-                                        format=",.0f")),
-                    y=alt.Y("Scenario:N",
-                            sort="-x",
-                            title=None,
-                            axis=alt.Axis(labelFontSize=15, labelLimit=500)),
+                    x=alt.X(
+                        "Infiltration:Q",
+                        scale=alt.Scale(domain=[infil_min, infil_max], nice=False, zero=True),
+                        axis=alt.Axis(
+                            title=f"Infiltration ({infiltration_unit})",
+                            format=",.1f"
+                        ),
+                    ),
+                    y=alt.Y(
+                        "Scenario:N",
+                        sort="-x",
+                        title=None,
+                        axis=alt.Axis(labelFontSize=15, labelLimit=500),
+                    ),
                     tooltip=[
                         alt.Tooltip("Scenario:N"),
-                        alt.Tooltip("Infiltration:Q", title="Infiltration (linear units)", format=",.0f")
+                        alt.Tooltip("Infiltration:Q", title="Infiltration", format=",.2f"),
                     ],
                 )
                 .properties(height=chart_height)
             )
+
             st.altair_chart(chart_infil, use_container_width=True)
 
         # =========================================================
@@ -2254,9 +2286,9 @@ def app_ui():
 
             colA, colB = st.columns(2)
             with colA:
-                scenA_label = st.selectbox("Scenario A", clean_labels_sorted, key="sA_new")
+                scenA_label = st.selectbox("", clean_labels_sorted, key="sA_new")
             with colB:
-                scenB_label = st.selectbox("Scenario B", clean_labels_sorted, key="sB_new")
+                scenB_label = st.selectbox("", clean_labels_sorted, key="sB_new")
 
             run_inundation = st.button("Compute Inundation Maps", key=f"{prefix}_run_inundation_maps_new")
 
@@ -2297,6 +2329,15 @@ def app_ui():
                 def build_heatmap(df, title):
                     if df.empty:
                         return pdk.Deck()
+                    
+                    colors = [
+                        [237, 248, 251],
+                        [198, 219, 239],
+                        [158, 202, 225],
+                        [107, 174, 214],
+                        [49, 130, 189],
+                        [8, 81, 156]
+                    ]
 
                     heat_layer = pdk.Layer(
                         "HeatmapLayer",
@@ -2306,6 +2347,7 @@ def app_ui():
                         radiusPixels=25,
                         intensity=1,
                         threshold=0.05,
+                        colorRange=colors,   
                     )
                     sub_gdf = load_ws(WS_SHP_PATH)
                     poly_layer = pdk.Layer(
@@ -2320,7 +2362,7 @@ def app_ui():
                     view = pdk.ViewState(
                         latitude=df["lat"].mean(),
                         longitude=df["lon"].mean(),
-                        zoom=13,
+                        zoom=13.5,
                     )
 
                     return pdk.Deck(
@@ -2338,10 +2380,12 @@ def app_ui():
                     st.markdown(f"### {scenB_label}")
                     st.pydeck_chart(build_heatmap(dfB, scenB_label), use_container_width=True)
 
-                st.markdown("### Shared Depth Legend")
+                unit_depth = "m" if st.session_state["unit_ui"]=="Metric (SI)" else "ft"
+
                 st.markdown(
                     f"""
                     <div style='width:80%; margin:auto;'>
+                        <div style='text-align:center; font-weight:600;'>Depth ({unit_depth})</div>
                         <div style='display:flex; justify-content:space-between;'>
                             <span>{dmin:.2f}</span>
                             <span>{dmax:.2f}</span>
