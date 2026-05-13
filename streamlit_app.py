@@ -26,6 +26,54 @@ from rainfall_and_tide_generator import (
 st.set_page_config(page_title="CoastWise", layout="centered")
 
 
+# Your existing theme dictionary
+alt_theme = {
+    "config": {
+        "title": {"fontSize": 20, "color": "black"},
+        "axis": {
+            "labelFontSize": 18,
+            "titleFontSize": 20,
+            "labelColor": "black",
+            "titleColor": "black"
+        },
+        "legend": {
+            "labelFontSize": 18,
+            "titleFontSize": 20,
+            "labelColor": "black",
+            "titleColor": "black"
+        }
+    }
+}
+
+@alt.theme.register("bigger_black", enable=True)
+def bigger_black_theme():
+    return alt.theme.ThemeConfig(alt_theme)
+
+
+st.markdown("""
+<style>
+/* PyDeck TextLayer labels */
+.deck-tooltip, .mapboxgl-popup-content {
+    color: black !important;
+    font-size: 16px !important;
+    font-weight: 500 !important;
+}
+
+/* TextLayer labels (subcatchment names) */
+text {
+    fill: black !important;
+    font-size: 16px !important;
+    font-weight: 600 !important;
+}
+
+/* PyDeck canvas default font */
+canvas {
+    color: black !important;
+    font-size: 16px !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 def _read_text_keep(path: str) -> str:
     """Read file contents and keep artifacts in temp for later use."""
     try:
@@ -2177,315 +2225,256 @@ def app_ui():
                     st.error(f"Scenario batch run failed: {e}")
 
 
+    # Only display summary UI AFTER all scenarios are run
+    if st.session_state.get("show_summary_charts", False):
 
-    if st.button("Show Flooding & Infiltration Summary", key="btn_show_summary"):
-        st.session_state["display_summary"] = not st.session_state.get("display_summary", False)
+        # Toggle button
+        if st.button("Show Flooding & Infiltration Summary", key="btn_show_summary"):
+            st.session_state["display_summary"] = not st.session_state.get("display_summary", False)
 
-    if st.session_state.get("display_summary", False):
+        # Summary section only appears when toggled on
+        if st.session_state.get("display_summary", False):
 
-        # Gather stored results
-        scenario_labels = st.session_state["scenario_labels_saved"]
-        flood_data = st.session_state["scenario_flood_saved"]
-        infil_data = st.session_state["scenario_infil_saved"]
+            # If results exist, show the real charts
+            if "scenario_labels_saved" in st.session_state:
+                scenario_labels = st.session_state["scenario_labels_saved"]
+                flood_data = st.session_state["scenario_flood_saved"]
+                infil_data = st.session_state["scenario_infil_saved"]
 
-        df_log = pd.DataFrame([
-            {
-                "Scenario": scenario_labels[k],
-                "Flooding": float(flood_data.get(k, 0.0)),
-                "Infiltration": float(infil_data.get(k, 0.0))
-            }
-            for k in scenario_labels.keys()
-        ])
+                # Gather stored results
+                scenario_labels = st.session_state["scenario_labels_saved"]
+                flood_data = st.session_state["scenario_flood_saved"]
+                infil_data = st.session_state["scenario_infil_saved"]
 
-        chart_height = 40 * len(df_log) + 100
+                df_log = pd.DataFrame([
+                    {
+                        "Scenario": scenario_labels[k],
+                        "Flooding": float(flood_data.get(k, 0.0)),
+                        "Infiltration": float(infil_data.get(k, 0.0))
+                    }
+                    for k in scenario_labels.keys()
+                ])
 
-
-        st.markdown("### Flooding")
-
-        flood_min = df_log["Flooding"].min()
-        flood_start = float(flood_min) - 100
-
-        # sort df by Flooding DESCENDING
-        df_flood_sorted = df_log.sort_values("Flooding", ascending=False).copy()
-        df_flood_sorted["ScenarioColor"] = df_flood_sorted["Scenario"]
-
-        flood_chart = (
-            alt.Chart(df_flood_sorted)
-            .mark_bar()
-            .encode(
-                x=alt.X(
-                    "Flooding:Q",
-                    scale=alt.Scale(
-                        domain=[flood_start, float(df_flood_sorted["Flooding"].max())],
-                        nice=False,
-                        zero=False
-                    ),
-                    axis=alt.Axis(title=f"Flood Volume ({flooding_unit})")
-                ),
-                y=alt.Y(
-                    "Scenario:N",
-                    sort=None,                     # <-- disables automatic sort
-                    axis=alt.Axis(labels=False, ticks=False, title=None)
-                ),
-                color=alt.Color(
-                    "ScenarioColor:N",
-                    legend=alt.Legend(title="Scenario")
-                ),
-                tooltip=[
-                    alt.Tooltip("Scenario:N"),
-                    alt.Tooltip("Flooding:Q", format=",.1f")
-                ],
-            )
-            .properties(
-                height=40 * len(df_flood_sorted) + 100,
-                padding={"left": 20, "right": 20, "top": 10, "bottom": 30}
-            )
-        )
-
-        st.altair_chart(flood_chart, use_container_width=True)
+                chart_height = 50 * len(df_log) + 100
 
 
-        # ==========================================================
-        # INFILTRATION CHART
-        # ==========================================================
-        st.markdown("### Infiltration")
-        infil_min = df_log["Infiltration"].min()
-        infil_start = float(infil_min) - 100
+                st.markdown("### Flooding")
 
-        # sort df by Infiltration DESCENDING
-        df_infil_sorted = df_log.sort_values("Infiltration", ascending=False).copy()
-        df_infil_sorted["ScenarioColor2"] = df_infil_sorted["Scenario"]
+                flood_min = df_log["Flooding"].min()
+                flood_start = float(flood_min) - 100
 
-        infil_chart = (
-            alt.Chart(df_infil_sorted)
-            .mark_bar()
-            .encode(
-                x=alt.X(
-                    "Infiltration:Q",
-                    scale=alt.Scale(
-                        domain=[infil_start, float(df_infil_sorted["Infiltration"].max())],
-                        nice=False,
-                        zero=False
-                    ),
-                    axis=alt.Axis(title=f"Infiltration ({infiltration_unit})")
-                ),
-                y=alt.Y(
-                    "Scenario:N",
-                    sort=None,
-                    axis=alt.Axis(labels=False, ticks=False, title=None)
-                ),
-                color=alt.Color(
-                    "ScenarioColor2:N",
-                    legend=alt.Legend(title="Scenario")
-                ),
-                tooltip=[
-                    alt.Tooltip("Scenario:N"),
-                    alt.Tooltip("Infiltration:Q", format=",.1f")
-                ],
-            )
-            .properties(
-                height=40 * len(df_infil_sorted) + 100,
-                padding={"left": 20, "right": 20, "top": 10, "bottom": 30}
-            )
-        )
-        st.altair_chart(infil_chart, use_container_width=True)
+                # sort df by Flooding DESCENDING
+                df_flood_sorted = df_log.sort_values("Flooding", ascending=False).copy()
+                df_flood_sorted["ScenarioColor"] = df_flood_sorted["Scenario"]
 
-
-        # ======================================================================
-        # INUNDATION COMPARISON (KEPT SEPARATE — DOES NOT TRIGGER SUMMARY)
-        # ======================================================================
-
-        if "scenario_flood_ts" in st.session_state and len(st.session_state["scenario_flood_ts"]) > 0:
-
-            st.markdown("---")
-            st.subheader("Compare Inundation Between Two Scenarios")
-
-            scenario_labels = st.session_state["scenario_display_labels"]
-            label_to_key = {v: k for k, v in scenario_labels.items()}
-            clean_labels_sorted = sorted(label_to_key.keys())
-
-            colA, colB = st.columns(2)
-            with colA:
-                scenA_label = st.selectbox("", clean_labels_sorted, key="sA_new")
-            with colB:
-                scenB_label = st.selectbox("", clean_labels_sorted, key="sB_new")
-
-            run_inundation = st.button("Compute Inundation Maps", key=f"{prefix}_run_inundation_maps_new")
-
-            if run_inundation:
-                from inundation_mapper import compute_peak_inundation
-
-                scenA_key = label_to_key[scenA_label]
-                scenB_key = label_to_key[scenB_label]
-
-                tsA = st.session_state["scenario_flood_ts"][scenA_key]
-                tsB = st.session_state["scenario_flood_ts"][scenB_key]
-
-                dfA = compute_peak_inundation(
-                    flooding_df=tsA,
-                    dem_path=DEM_PATH,
-                    nodes_shp_path=NODES_SHP_PATH,
-                    unit_system=st.session_state.get("unit_ui", "U.S. Customary"),
-                    flowdir_path=FLOWDIR_PATH,
+                flood_chart = (
+                    alt.Chart(df_flood_sorted)
+                    .mark_bar()
+                    .encode(
+                        x=alt.X(
+                            "Flooding:Q",
+                            scale=alt.Scale(
+                                domain=[flood_start, float(df_flood_sorted["Flooding"].max())],
+                                nice=False,
+                                zero=False
+                            ),
+                            axis=alt.Axis(title=f"Flood Volume ({flooding_unit})")
+                        ),
+                        y=alt.Y(
+                            "Scenario:N",
+                            sort=None,                     # <-- disables automatic sort
+                            axis=alt.Axis(labels=False, ticks=False, title=None)
+                        ),
+                        color=alt.Color(
+                            "ScenarioColor:N",
+                            legend=alt.Legend(title="Scenario")
+                        ),
+                        tooltip=[
+                            alt.Tooltip("Scenario:N"),
+                            alt.Tooltip("Flooding:Q", format=",.1f")
+                        ],
+                    )
+                    .properties(
+                        height=50 * len(df_flood_sorted) + 100,
+                        padding={"left": 20, "right": 20, "top": 10, "bottom": 30}
+                    )
                 )
 
-                dfB = compute_peak_inundation(
-                    flooding_df=tsB,
-                    dem_path=DEM_PATH,
-                    nodes_shp_path=NODES_SHP_PATH,
-                    unit_system=st.session_state.get("unit_ui", "U.S. Customary"),
-                    flowdir_path=FLOWDIR_PATH,
+                st.altair_chart(flood_chart, use_container_width=True)
+
+                st.markdown("### Infiltration")
+                infil_min = df_log["Infiltration"].min()
+                infil_start = float(infil_min) - 100
+
+                # sort df by Infiltration DESCENDING
+                df_infil_sorted = df_log.sort_values("Infiltration", ascending=False).copy()
+                df_infil_sorted["ScenarioColor2"] = df_infil_sorted["Scenario"]
+
+                infil_chart = (
+                    alt.Chart(df_infil_sorted)
+                    .mark_bar()
+                    .encode(
+                        x=alt.X(
+                            "Infiltration:Q",
+                            scale=alt.Scale(
+                                domain=[infil_start, float(df_infil_sorted["Infiltration"].max())],
+                                nice=False,
+                                zero=False
+                            ),
+                            axis=alt.Axis(title=f"Infiltration ({infiltration_unit})")
+                        ),
+                        y=alt.Y(
+                            "Scenario:N",
+                            sort=None,
+                            axis=alt.Axis(labels=False, ticks=False, title=None)
+                        ),
+                        color=alt.Color(
+                            "ScenarioColor2:N",
+                            legend=alt.Legend(title="Scenario")
+                        ),
+                        tooltip=[
+                            alt.Tooltip("Scenario:N"),
+                            alt.Tooltip("Infiltration:Q", format=",.1f")
+                        ],
+                    )
+                    .properties(
+                        height=40 * len(df_infil_sorted) + 100,
+                        padding={"left": 20, "right": 20, "top": 10, "bottom": 30}
+                    )
                 )
+                st.altair_chart(infil_chart, use_container_width=True)
 
-                st.session_state["df_inundation_A"] = dfA
-                st.session_state["df_inundation_B"] = dfB
+            else:
+                st.info("Run a scenario to populate these charts.")
 
-                all_depths = pd.concat([dfA["depth"], dfB["depth"]])
-                dmin, dmax = float(all_depths.min()), float(all_depths.max())
-                if abs(dmax - dmin) < 1e-9:
-                    dmax = dmin + 0.001
+            if "scenario_flood_ts" in st.session_state and len(st.session_state["scenario_flood_ts"]) > 0:
 
+                st.markdown("---")
+                st.subheader("Compare Inundation Between Two Scenarios")
 
+                scenario_labels = st.session_state["scenario_display_labels"]
+                label_to_key = {v: k for k, v in scenario_labels.items()}
+                clean_labels_sorted = sorted(label_to_key.keys())
 
-                def build_heatmap(df, title):
-                    if df.empty:
-                        return pdk.Deck()
-                    
-                    colors = [
-                        [237, 248, 251],
-                        [198, 219, 239],
-                        [158, 202, 225],
-                        [107, 174, 214],
-                        [49, 130, 189],
-                        [8, 81, 156]
-                    ]
+                colA, colB = st.columns(2)
+                with colA:
+                    scenA_label = st.selectbox("", clean_labels_sorted, key="sA_new")
+                with colB:
+                    scenB_label = st.selectbox("", clean_labels_sorted, key="sB_new")
 
-                    heat_layer = pdk.Layer(
-                        "HeatmapLayer",
-                        data=df,
-                        get_position='[lon, lat]',
-                        get_weight="depth",
-                        radiusPixels=25,
-                        intensity=1,
-                        threshold=0.05,
-                        colorRange=colors,   
-                    )
-                    sub_gdf = load_ws(WS_SHP_PATH)
-                    poly_layer = pdk.Layer(
-                        "GeoJsonLayer",
-                        data=sub_gdf.__geo_interface__,
-                        stroked=True,
-                        filled=False,
-                        lineWidthMinPixels=1,
-                        get_line_color=[0, 0, 0, 200],
+                run_inundation = st.button("Compute Inundation Maps", key=f"{prefix}_run_inundation_maps_new")
+
+                if run_inundation:
+                    from inundation_mapper import compute_peak_inundation
+
+                    scenA_key = label_to_key[scenA_label]
+                    scenB_key = label_to_key[scenB_label]
+
+                    tsA = st.session_state["scenario_flood_ts"][scenA_key]
+                    tsB = st.session_state["scenario_flood_ts"][scenB_key]
+
+                    dfA = compute_peak_inundation(
+                        flooding_df=tsA,
+                        dem_path=DEM_PATH,
+                        nodes_shp_path=NODES_SHP_PATH,
+                        unit_system=st.session_state.get("unit_ui", "U.S. Customary"),
+                        flowdir_path=FLOWDIR_PATH,
                     )
 
-                    view = pdk.ViewState(
-                        latitude=df["lat"].mean(),
-                        longitude=df["lon"].mean(),
-                        zoom=14.25,
+                    dfB = compute_peak_inundation(
+                        flooding_df=tsB,
+                        dem_path=DEM_PATH,
+                        nodes_shp_path=NODES_SHP_PATH,
+                        unit_system=st.session_state.get("unit_ui", "U.S. Customary"),
+                        flowdir_path=FLOWDIR_PATH,
                     )
 
-                    return pdk.Deck(
-                        layers=[heat_layer, poly_layer],
-                        initial_view_state=view,
-                        map_provider="carto",
-                        map_style="light",
-                    )
+                    st.session_state["df_inundation_A"] = dfA
+                    st.session_state["df_inundation_B"] = dfB
 
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.markdown(f"### {scenA_label}")
-                    st.pydeck_chart(build_heatmap(dfA, scenA_label), use_container_width=True)
-                with col2:
-                    st.markdown(f"### {scenB_label}")
-                    st.pydeck_chart(build_heatmap(dfB, scenB_label), use_container_width=True)
+                    all_depths = pd.concat([dfA["depth"], dfB["depth"]])
+                    dmin, dmax = float(all_depths.min()), float(all_depths.max())
+                    if abs(dmax - dmin) < 1e-9:
+                        dmax = dmin + 0.001
 
-                unit_depth = "m" if st.session_state["unit_ui"]=="Metric (SI)" else "ft"
 
-                st.markdown(
-                    f"""
-                    <div style='width:80%; margin:auto;'>
-                        <div style='text-align:center; font-weight:600;'>Depth ({unit_depth})</div>
-                        <div style='display:flex; justify-content:space-between;'>
-                            <span>{dmin:.2f}</span>
-                            <span>{dmax:.2f}</span>
+
+                    def build_heatmap(df, title):
+                        if df.empty:
+                            return pdk.Deck()
+                        
+                        colors = [
+                            [237, 248, 251],
+                            [198, 219, 239],
+                            [158, 202, 225],
+                            [107, 174, 214],
+                            [49, 130, 189],
+                            [8, 81, 156]
+                        ]
+
+                        heat_layer = pdk.Layer(
+                            "HeatmapLayer",
+                            data=df,
+                            get_position='[lon, lat]',
+                            get_weight="depth",
+                            radiusPixels=25,
+                            intensity=1,
+                            threshold=0.05,
+                            colorRange=colors,   
+                        )
+                        sub_gdf = load_ws(WS_SHP_PATH)
+                        poly_layer = pdk.Layer(
+                            "GeoJsonLayer",
+                            data=sub_gdf.__geo_interface__,
+                            stroked=True,
+                            filled=False,
+                            lineWidthMinPixels=1,
+                            get_line_color=[0, 0, 0, 200],
+                        )
+
+                        view = pdk.ViewState(
+                            latitude=df["lat"].mean(),
+                            longitude=df["lon"].mean(),
+                            zoom=14.25,
+                        )
+
+                        return pdk.Deck(
+                            layers=[heat_layer, poly_layer],
+                            initial_view_state=view,
+                            map_provider="carto",
+                            map_style="light",
+                        )
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown(f"### {scenA_label}")
+                        st.pydeck_chart(build_heatmap(dfA, scenA_label), use_container_width=True)
+                    with col2:
+                        st.markdown(f"### {scenB_label}")
+                        st.pydeck_chart(build_heatmap(dfB, scenB_label), use_container_width=True)
+
+                    unit_depth = "m" if st.session_state["unit_ui"]=="Metric (SI)" else "ft"
+
+                    st.markdown(
+                        f"""
+                        <div style='width:80%; margin:auto;'>
+                            <div style='text-align:center; font-weight:600;'>Depth ({unit_depth})</div>
+                            <div style='display:flex; justify-content:space-between;'>
+                                <span>{dmin:.2f}</span>
+                                <span>{dmax:.2f}</span>
+                            </div>
+                            <div style='height:15px; background: linear-gradient(to right,
+                                rgb(237,248,251),
+                                rgb(198,219,239),
+                                rgb(158,202,225),
+                                rgb(107,174,214),
+                                rgb(49,130,189),
+                                rgb(8,81,156)
+                            ); border:1px solid #555;'></div>
                         </div>
-                        <div style='height:15px; background: linear-gradient(to right,
-                            rgb(237,248,251),
-                            rgb(198,219,239),
-                            rgb(158,202,225),
-                            rgb(107,174,214),
-                            rgb(49,130,189),
-                            rgb(8,81,156)
-                        ); border:1px solid #555;'></div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-
-
-    def _gather_scenario_volumes() -> tuple[pd.DataFrame, str]:
-        ACF_TO_FT3 = 43560.0
-        FT3_TO_M3  = 0.0283168
-        to_m3 = (st.session_state.get("unit_ui") == "Metric (SI)")
-        unit_label = "m³" if to_m3 else "ft³"
-
-        # Only include scenarios the user has actually run (exist in rpts)
-        rpts = st.session_state.get("rpts", {})
-        prefix = st.session_state["scenario_prefix"]
-        use_future = (st.session_state.get("rain_variant", "current") == "future")
-        tag = "future" if use_future else "current"
-
-        candidates = [
-            # Baseline
-            (f"Baseline (No Tide Gate) – {'+20%' if use_future else 'Current'}", f"baseline_nogate_{tag}"),
-            (f"Baseline + Tide Gate – {'+20%' if use_future else 'Current'}",    f"baseline_gate_{tag}"),
-            # Focus areas
-            (f"All Subcatchments (No Tide Gate) – {'+20%' if use_future else 'Current'}",  f"focus_all_{tag}_nogate"),
-            (f"All Subcatchments + Tide Gate – {'+20%' if use_future else 'Current'}",     f"focus_all_{tag}_gate"),
-            (f"Upstream (No Tide Gate) – {'+20%' if use_future else 'Current'}",           f"focus_upstream_{tag}_nogate"),
-            (f"Upstream + Tide Gate – {'+20%' if use_future else 'Current'}",              f"focus_upstream_{tag}_gate"),
-            (f"Downstream/Outlet (No Tide Gate) – {'+20%' if use_future else 'Current'}",  f"focus_downstream_{tag}_nogate"),
-            (f"Downstream/Outlet + Tide Gate – {'+20%' if use_future else 'Current'}",     f"focus_downstream_{tag}_gate"),
-            (f"Highest Runoff (No Tide Gate) – {'+20%' if use_future else 'Current'}",     f"focus_highrunoff_{tag}_nogate"),
-            (f"Highest Runoff + Tide Gate – {'+20%' if use_future else 'Current'}",        f"focus_highrunoff_{tag}_gate"),
-        ]
-
-        rows = []
-
-        def acft_to_display(v_acft: float) -> float:
-            v_ft3 = v_acft * ACF_TO_FT3
-            return v_ft3 * FT3_TO_M3 if to_m3 else v_ft3
-
-        # Safe extractor (fixes the ambiguous Series bug)
-        def _safe_continuity(df_ir: pd.DataFrame, key: str) -> float:
-            if df_ir is None or df_ir.empty or "label" not in df_ir.columns or "volume_acft" not in df_ir.columns:
-                return 0.0
-            s = pd.to_numeric(df_ir.loc[df_ir["label"] == key, "volume_acft"], errors="coerce")
-            return float(s.fillna(0.0).sum())  # sum if multiple lines, else 0
-
-        for disp, canon in candidates:
-            key = f"{prefix}{canon}"
-            rpt_text = rpts.get(key, "")
-            if not rpt_text:
-                # Skip scenarios not run
-                continue
-
-            flood_display = float(st.session_state.get(f"{key}_event_total_flood", 0.0))
-            df_ir = extract_infiltration_and_runoff_from_text(rpt_text)
-            runoff_acft = _safe_continuity(df_ir, "surface_runoff")
-
-            rows.append({
-                "Scenario": disp,
-                "Flooding":       flood_display,
-                "Surface Runoff": acft_to_display(runoff_acft),
-            })
-
-        df = pd.DataFrame(rows).set_index("Scenario")
-        # integer display is fine (round at render), but keep as float for charts if needed
-        return df, unit_label
-
+                        """,
+                        unsafe_allow_html=True
+                    )
 
     st.markdown("---")
     if st.button("🚪 Logout"):
