@@ -1,4 +1,4 @@
-import os, io, re, glob, sys, shutil, tempfile, subprocess
+import os, re, sys, shutil, tempfile, subprocess
 from datetime import datetime, timedelta
 from typing import Dict, Tuple, List
 
@@ -45,7 +45,7 @@ alt_theme = {
     }
 }
 
-@alt.theme.register("bigger_black", enable=True)
+@alt.theme.register("bigger_black", enable= True)
 def bigger_black_theme():
     return alt.theme.ThemeConfig(alt_theme)
 
@@ -98,9 +98,10 @@ def ensure_playwright_browsers():
 ensure_playwright_browsers()
 
 MSL_OFFSET_NAVD88_FT = 0
+
 WS_SHP_PATH  = st.session_state.get("WS_SHP_PATH", "map_files/Subcatchment.shp")
+PIPES_SHP_PATH= st.session_state.get("PIPES_SHP_PATH", "map_files/Conduits.shp")
 NODES_SHP_PATH= st.session_state.get("NODES_SHP_PATH", "map_files/Nodes.shp")
-PIPE_SHP_PATH= st.session_state.get("PIPE_SHP_PATH", "map_files/Conduits.shp")
 DEM_PATH = st.session_state.get("DEM_PATH", "map_files/DEM.tif")
 FLOWDIR_PATH = st.session_state.get("FLOWDIR_PATH", "map_files/flow_direction.tif")
 
@@ -114,9 +115,9 @@ def get_clean_scenario_label(subset_key: str, gate_key: str, rain_label: str) ->
         "highrunoff": "High-Runoff",
     }[subset_key]
 
-    pretty_gate = "Tide Gate ON" if gate_key == "gate" else "Tide Gate OFF"
+    pretty_gate = "TG ON" if gate_key == "gate" else "TG OFF"
 
-    return f"{pretty_subset} – {pretty_gate} {rain_label}"
+    return f"{pretty_subset} – {pretty_gate}"
 
 @st.cache_resource(show_spinner=False)
 def load_ws(path="map_files/Subcatchments.shp") -> gpd.GeoDataFrame:
@@ -184,17 +185,6 @@ def format_timeseries(name: str, minutes: np.ndarray, values: np.ndarray, start_
         out.append(f"{name} {ts} {float(v):.5f}")
     return out
 
-def return_period_labels(duration_min: int, unit_ui: str) -> Dict[str, str]:
-    row = pf_df[pf_df["Duration_Minutes"] == duration_min]
-    if row.empty: return {}
-    row = row.iloc[0]
-    label = "inches" if unit_ui == "U.S. Customary" else "centimeters"
-    factor = 1 if unit_ui == "U.S. Customary" else 2.54
-    return {
-        col: f"{col}-year storm ({100//int(col)}% annual): {row[col]*factor:.2f} {label}"
-        for col in pf_df.columns[1:]
-    }
-
 def make_color(values, vmin, vmax, a=0.9):
     norm = mcolors.Normalize(vmin=vmin, vmax=vmax, clip=True)
     cmap = mpl.colormaps.get_cmap("Blues")
@@ -245,65 +235,6 @@ def prep_total_runoff_gdf(rpt_df: pd.DataFrame, unit_ui: str, ws_gdf: gpd.GeoDat
         unit = "cm"
 
     return merged, unit
-
-def parse_node_flooding_summary_from_text(txt: str) -> pd.DataFrame:
-    lines = txt.splitlines(True)
-    if not lines: return pd.DataFrame(columns=["Node","Gallons"])
-    def _is_dashes(s: str) -> bool:
-        s = s.strip(); return bool(s) and set(s) <= {"-"}
-    hdr = next((i for i,l in enumerate(lines) if l.strip().lower().startswith("node flooding summary")), None)
-    if hdr is None: return pd.DataFrame(columns=["Node","Gallons"])
-    i = hdr + 1; dash = 0
-    while i < len(lines) and dash < 2:
-        if _is_dashes(lines[i]): dash += 1
-        i += 1
-    if dash < 2 or i >= len(lines): return pd.DataFrame(columns=["Node","Gallons"])
-    out = []
-    num_re = re.compile(r"[-+]?\d+(?:\.\d+)?")
-    while i < len(lines):
-        raw = lines[i].rstrip("\n"); i += 1
-        if not raw.strip() or _is_dashes(raw) or raw.lstrip().startswith("*"): break
-        parts = raw.split()
-        if not parts: continue
-        node = parts[0]
-        nums = [float(m.group(0)) for m in num_re.finditer(raw)]
-        if len(nums) < 2: continue
-        mgal = nums[-2]
-        gallons = mgal * 1_000_000.0
-        out.append({"Node": node, "Gallons": gallons})
-    return pd.DataFrame(out, columns=["Node","Gallons"])
-
-_GAL_TO_FT3 = 7.48051948     
-_GAL_TO_M3  = 0.003785411784 
-
-def summarize_node_flooding_in_window(
-    df_nodes: pd.DataFrame,
-    to_metric: bool
-) -> tuple[float, dict[str, float]]:
-    """
-    Returns:
-      total_volume (m³ if to_metric else ft³),
-      per_node_ft3 (dict) — always ft³ for mapping/flagging
-    """
-    if df_nodes is None or df_nodes.empty:
-        return 0.0, {}
-
-    sub = df_nodes.copy()
-    if "Gallons" not in sub.columns and "TotalFlood_Mgal" in sub.columns:
-        sub["Gallons"] = pd.to_numeric(sub["TotalFlood_Mgal"], errors="coerce").fillna(0.0) * 1_000_000.0
-    else:
-        sub["Gallons"] = pd.to_numeric(sub["Gallons"], errors="coerce").fillna(0.0)
-
-    per_node_ft3 = {r["Node"]: float(r["Gallons"]) / _GAL_TO_FT3 for _, r in sub.iterrows()}
-
-    total_gal = float(sub["Gallons"].sum())
-    if to_metric:
-        total = total_gal * _GAL_TO_M3     
-    else:
-        total = total_gal / _GAL_TO_FT3    
-
-    return total, per_node_ft3
-
 
 def extract_total_runoff_from_text(txt: str) -> pd.DataFrame:
     lines = txt.splitlines(True)
@@ -606,27 +537,6 @@ def render_focus_placement_map_log(plan: Dict[str, Dict[str,int]],
         key=widget_key
     )
 
-def rain_window_with_buffer(sim_start_str: str,
-                            minutes_15: List[int] | np.ndarray,
-                            rain_curve_in: List[float] | np.ndarray,
-                            buffer_hours: float = 2.0,
-                            eps: float = 1e-9) -> Tuple[datetime, datetime] | None:
-    """Return (t_start, t_end) covering all times where rain>eps, plus +buffer_hours."""
-    if minutes_15 is None or rain_curve_in is None:
-        return None
-    if len(minutes_15) == 0 or len(rain_curve_in) == 0:
-        return None
-
-    t0 = datetime.strptime(sim_start_str, "%m/%d/%Y %H:%M")
-    wet_idx = [i for i, v in enumerate(rain_curve_in) if (float(v) if v is not None else 0.0) > eps]
-    if not wet_idx:
-        return None
-
-    i0, i1 = wet_idx[0], wet_idx[-1]
-    t_start = t0 + timedelta(minutes=int(minutes_15[i0]))
-    t_end   = t0 + timedelta(minutes=int(minutes_15[i1])) + timedelta(hours=float(buffer_hours))
-    return (t_start, t_end)
-
 def run_swmm_scenario_baseline(
     scenario_name: str,
     rain_lines: List[str],
@@ -690,19 +600,12 @@ def run_swmm_scenario_baseline(
     # Read RPT-based results
     rpt_text = _read_text_keep(rpt_path)
 
-    df_nf = parse_node_flooding_summary_from_text(rpt_text)
-    to_metric = (st.session_state.get("unit_ui") == "Metric (SI)")
-    total_event_vol, node_cuft_event = summarize_node_flooding_in_window(
-        df_nf, to_metric=to_metric
-    )
-
+    # KEEP infiltration and runoff
     df_runoff = extract_total_runoff_from_text(rpt_text)
     df_ir     = extract_infiltration_and_runoff_from_text(rpt_text)
 
-    # Save outputs exactly like before
+    # Save outputs 
     st.session_state.setdefault("rpts", {})[scenario_name] = rpt_text
-    st.session_state[f"{scenario_name}_event_total_flood"] = total_event_vol
-    st.session_state[f"{scenario_name}_node_flood_event_cuft"] = node_cuft_event
     st.session_state[f"{scenario_name}_inp_path"] = inp_path
     st.session_state[f"{scenario_name}_out_path"] = out_path
     st.session_state[f"{scenario_name}_storm_start"] = tally_start_dt
@@ -710,9 +613,7 @@ def run_swmm_scenario_baseline(
 
     return {
         "df_runoff": df_runoff,
-        "node_cuft_event": node_cuft_event,
         "df_continuity": df_ir,
-        "total_event_vol": total_event_vol,
     }
 
 def run_swmm_scenario(
@@ -832,20 +733,6 @@ def run_swmm_scenario(
     # -----------------------------------------------
     rpt_text = _read_text_keep(rpt_path)
 
-    df_nf = parse_node_flooding_summary_from_text(rpt_text)
-    to_metric = (st.session_state.get("unit_ui") == "Metric (SI)")
-
-    # Clip RPT flooding if timestamps exist
-    if "Datetime" in df_nf.columns:
-        df_nf = df_nf[
-            (df_nf["Datetime"] >= tally_start) &
-            (df_nf["Datetime"] <= tally_end)
-        ]
-
-    total_event_vol, node_cuft_event = summarize_node_flooding_in_window(
-        df_nf, to_metric
-    )
-
     df_runoff = extract_total_runoff_from_text(rpt_text)
     df_ir     = extract_infiltration_and_runoff_from_text(rpt_text)
 
@@ -866,13 +753,15 @@ def run_swmm_scenario(
     total_flood = float((clipped_df[flood_cols].fillna(0).sum(axis=1) * dt).sum())
     st.session_state[f"{scenario_name}_storm_total_flood"] = total_flood
 
+    use_metric = (st.session_state.get("unit_ui") == "Metric (SI)")
+
     # Infiltration
     infiltration_value = 0.0
     if df_ir is not None and not df_ir.empty:
         infil_rows = df_ir.loc[df_ir["label"] == "infiltration_loss", "volume_acft"]
         if not infil_rows.empty:
             infiltration_acft = float(infil_rows.sum())
-            if to_metric:
+            if use_metric:
                 infiltration_value = infiltration_acft * 43560.0 * 0.0283168
             else:
                 infiltration_value = infiltration_acft * 43560.0
@@ -885,9 +774,7 @@ def run_swmm_scenario(
 
     return {
         "df_runoff": df_runoff,
-        "node_cuft_event": node_cuft_event,
         "df_continuity": df_ir,
-        "total_event_vol": total_event_vol,
     }
 
 def build_inundation_deck(df):
@@ -1045,9 +932,7 @@ def _ensure_baselines_visible(prefix: str):
                 df = extract_total_runoff_from_text(rpt_text)
 
         if isinstance(df, pd.DataFrame) and not df.empty:
-            node_key = f"{prefix}{name}_node_flood_event_cuft"
-            nodes = st.session_state.get(node_key, {}) or {}
-            remember_scenario(name, df, nodes, prefix)
+            remember_scenario(name, df, prefix)
             changed = True
 
     return changed
@@ -1069,23 +954,20 @@ def _rehydrate_baseline_into_store(prefix: str):
 
         df = st.session_state.get(df_key, None)
         if isinstance(df, pd.DataFrame) and not df.empty:
-            node_key = f"{prefix}{name}_node_flood_event_cuft"
-            nodes = st.session_state.get(node_key, {}) or {}
-            remember_scenario(name, df, nodes, prefix)
+            remember_scenario(name, df, prefix)
             continue
 
         rpt_text = rpts.get(f"{prefix}{name}", "")
         if rpt_text:
             df = extract_total_runoff_from_text(rpt_text)
-            node_key = f"{prefix}{name}_node_flood_event_cuft"
-            nodes = st.session_state.get(node_key, {}) or {}
             if not df.empty:
-                remember_scenario(name, df, nodes, prefix)
+                remember_scenario(name, df, prefix)
 
 def build_heatmap(df, title):
     if df.empty:
         return pdk.Deck()
-    
+
+    # Color ramp (same as before)
     colors = [
         [237, 248, 251],
         [198, 219, 239],
@@ -1095,6 +977,7 @@ def build_heatmap(df, title):
         [8, 81, 156]
     ]
 
+    # Heat Layer (TOP)
     heat_layer = pdk.Layer(
         "HeatmapLayer",
         data=df,
@@ -1103,16 +986,29 @@ def build_heatmap(df, title):
         radiusPixels=25,
         intensity=1,
         threshold=0.05,
-        colorRange=colors,   
+        colorRange=colors,
     )
+
+    # Subcatchment boundary (MIDDLE)
     sub_gdf = load_ws(WS_SHP_PATH)
     poly_layer = pdk.Layer(
         "GeoJsonLayer",
         data=sub_gdf.__geo_interface__,
         stroked=True,
         filled=False,
-        lineWidthMinPixels=1,
-        get_line_color=[0, 0, 0, 200],
+        get_line_color=[0, 0, 0, 180],
+        lineWidthMinPixels=1
+    )
+
+    # Pipes (BOTTOM)
+    pipe_gdf = load_pipes(PIPES_SHP_PATH)
+    pipe_layer = pdk.Layer(
+        "GeoJsonLayer",
+        data=pipe_gdf.__geo_interface__,
+        stroked=True,
+        filled=False,
+        get_line_color=[120, 120, 120, 180],   # medium gray
+        lineWidthMinPixels=2
     )
 
     view = pdk.ViewState(
@@ -1122,10 +1018,15 @@ def build_heatmap(df, title):
     )
 
     return pdk.Deck(
-        layers=[heat_layer, poly_layer],
+        layers=[
+            pipe_layer,    # bottom
+            poly_layer,    # middle
+            heat_layer     # top
+        ],
         initial_view_state=view,
         map_provider="carto",
         map_style="light",
+        tooltip={"text": "{depth}"}
     )
 
 def generate_lid_usage_lines(lid_config: Dict[str, Dict[str, int]], excel_df: pd.DataFrame) -> List[str]:
@@ -1195,13 +1096,12 @@ def _sc_store(prefix: str) -> dict:
         st.session_state[key] = {}
     return st.session_state[key]
 
-def remember_scenario(name: str, df_runoff: pd.DataFrame, node_dict: dict, prefix: str = ""):
+def remember_scenario(name: str, df_runoff: pd.DataFrame, prefix: str = ""):
     store = _sc_store(prefix)
 
     store[name] = {
         "df": df_runoff.copy(deep=True) if df_runoff is not None else None,
-        "nodes": dict(node_dict) if node_dict is not None else {},
-    }
+        }
 
 def recall_scenario(name: str, prefix: str = ""):
     return _sc_store(prefix).get(name)
@@ -1381,16 +1281,16 @@ def app_ui():
         )
         r_low, r_high = st.columns([1, 3])
         with r_low:
-            st.caption("Less intense but more likely to occur in a given year")
+            st.caption("Less intense and more common")
         with r_high:
-            st.caption("<div style='text-align:right;'>More intense and less likely to occur in a given year</div>", unsafe_allow_html=True)
+            st.caption("<div style='text-align:right;'>More intense and less common</div>", unsafe_allow_html=True)
 
         rain_variant_choice = st.radio(
             "Rainfall Scenario",
             ["Current", "Future (+20%)"],
             index=(0 if cfg.get("rain_variant", "current") == "current" else 1),
             horizontal=True,
-            help="Choose whether to run simulations using current rainfall or a fixed +20% future rainfall."
+            help="Choose whether to run simulations using current rainfall (NOAA Atlas 14 Values) or a +20% future rainfall that Norfolk, VA utilizes in its design standards for new builds in preparation for the future climate conditions of the area."
         )
 
         # ---------------- Tide Alignment ----------------
@@ -1479,13 +1379,13 @@ def app_ui():
     if unit == "U.S. Customary":
         display_rain_curve = rain_curve_in        
         display_tide_curve = tide_curve_ui        
-        rain_disp_unit = "inches"; tide_disp_unit = "ft"
+        rain_disp_unit = "in"; tide_disp_unit = "ft"
         flooding_unit = "ft3"
         infiltration_unit = "ft3"    
     else:
         display_rain_curve = rain_curve_in * 2.54  
         display_tide_curve = tide_curve_ui         
-        rain_disp_unit = "centimeters"; tide_disp_unit = "meters"
+        rain_disp_unit = "cm"; tide_disp_unit = "m"
         flooding_unit = "ft3"
         infiltration_unit = "ft3"    
 
@@ -1638,8 +1538,8 @@ def app_ui():
                     f"{prefix}df_base_gate_current":   info2["df_runoff"]
                 })
 
-                remember_scenario("baseline_nogate_current", info1["df_runoff"], info1["node_cuft_event"], prefix)
-                remember_scenario("baseline_gate_current",   info2["df_runoff"], info2["node_cuft_event"], prefix)
+                remember_scenario("baseline_nogate_current", info1["df_runoff"], prefix)
+                remember_scenario("baseline_gate_current",   info2["df_runoff"], prefix)
 
             if run_future: 
                 info3 = run_swmm_scenario_baseline(
@@ -1672,8 +1572,8 @@ def app_ui():
                     f"{prefix}df_base_gate_future":    info4["df_runoff"]
                 })
  
-                remember_scenario("baseline_nogate_future",  info3["df_runoff"], info3["node_cuft_event"], prefix)
-                remember_scenario("baseline_gate_future",    info4["df_runoff"], info4["node_cuft_event"], prefix)
+                remember_scenario("baseline_nogate_future",  info3["df_runoff"], prefix)
+                remember_scenario("baseline_gate_future",    info4["df_runoff"], prefix)
 
             # Replace your df_swmm_now block with:
             df_swmm_now = None
@@ -1846,9 +1746,9 @@ def app_ui():
         Each layout uses the **same total investment**, but places the LIDs in different priority areas:
 
         1. **All Subcatchments** – spread across the whole watershed  
-        2. **Upstream** – focused where runoff begins  
-        3. **Downstream/Outlet** – focused where water tends to accumulate  
-        4. **High-Runoff Areas** – focused on the locations that generate the most runoff  
+        2. **Upstream** – focused in the upper part of the watershed   
+        3. **Downstream** – focused in the lower part of the watershed near the outlet  
+        4. **High-Runoff Areas** – focused on the top 20 subcatchments that generated the most runoff (i.e., baseline simulation, darker subcatchments)  
 
         The purpose is to compare whether spreading LIDs across the watershed or concentrating them in specific areas has a larger benefit for managing stormwater and reducing flooding.
 
@@ -1863,11 +1763,12 @@ def app_ui():
 
         When you select a percentage of Rain Gardens and Rain Barrels for the watershed:
 
-        - The percentage is applied to each area's **own capacity**.
-        - Areas that cannot support many rain gardens are filled with **rain barrels instead**.
+        - The percentage is applied to each subcatchment's **own capacity** based on land use.
+        - Areas that cannot support as many rain gardens are filled with **rain barrels instead**.
         - This keeps the overall investment the same across the watershed.
+        - For more detail on how RG and RB placement works, see the [supporting document](https://docs.google.com/document/d/1I3sWiiGf6CqeSLmHuhr8rE60eiyLlCsPaQ_FMWZ4Ckc/edit?usp=sharing).
         """)
-            
+        
         row1 = st.columns(2, gap="large")
         with row1[0]:
             render_focus_placement_map_log(
@@ -2203,7 +2104,7 @@ def app_ui():
 
             st.info(
                 "This will run all 10 scenarios: Baseline, All-Subcatchments, "
-                "Upstream, Downstream, High-Runoff × Tide Gate On/Off."
+                "Upstream, Downstream, High-Runoff 2x where the Tide Gate On/Off, respectively."
             )
 
 
@@ -2255,9 +2156,9 @@ def app_ui():
                                 "highrunoff": "High-Runoff",
                             }
                             pretty_name = pretty_names[subset_key]
-                            gate_name = "Tide Gate ON" if gate_key == "gate" else "Tide Gate OFF"
+                            gate_name = "TG ON" if gate_key == "gate" else "TG OFF"
 
-                            label = f"{pretty_name} – {gate_name} {rain_label}"
+                            label = f"{pretty_name} – {gate_name}"
                             st.session_state["scenario_display_labels"][scen_key] = label
 
                             # LID usage
@@ -2438,7 +2339,7 @@ def app_ui():
             if "scenario_flood_ts" in st.session_state and len(st.session_state["scenario_flood_ts"]) > 0:
 
                 st.markdown("---")
-                st.subheader("Compare Inundation Between Two Scenarios")
+                st.subheader("Compare Flooding between Two Scenarios")
 
                 scenario_labels = st.session_state["scenario_display_labels"]
                 label_to_key = {v: k for k, v in scenario_labels.items()}
@@ -2450,7 +2351,7 @@ def app_ui():
                 with colB:
                     scenB_label = st.selectbox("Scenario B", sorted_labels, key="sB_new")
 
-                run_inundation = st.button("Compute Inundation Maps", key="run_inundation_maps")
+                run_inundation = st.button("Compare Maps", key="run_inundation_maps")
 
                 if run_inundation:
                     from inundation_mapper import compute_peak_inundation
