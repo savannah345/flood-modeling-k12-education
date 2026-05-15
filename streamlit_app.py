@@ -1,7 +1,7 @@
 import os, re, sys, shutil, tempfile, subprocess
 from datetime import datetime, timedelta
 from typing import Dict, Tuple, List
-
+import html
 
 import streamlit as st
 import pandas as pd
@@ -13,6 +13,7 @@ import matplotlib as mpl
 from matplotlib import colors as mcolors
 from pyswmm import Simulation, Nodes
 from streamlit import components
+
 
 
 from auth_supabase import create_user, authenticate_user, reset_password
@@ -141,12 +142,7 @@ def load_pipes(path: str):
 
 @st.cache_data(show_spinner=False)
 def load_raster_cells(path="raster_cells_per_sub.xlsx") -> pd.DataFrame:
-    df = pd.read_excel(path)
-    def extract_number(name):
-        if not isinstance(name, str): return float('inf')
-        m = re.search(r"_(\d+)", name)
-        return int(m.group(1)) if m else float('inf')
-    return df.sort_values(by="NAME", key=lambda x: x.map(extract_number)).reset_index(drop=True)
+    return pd.read_excel(path)
 
 def build_simulation_and_tally_windows(sim_start_str, rain_minutes, rain_curve_in):
     # Identify rainfall indices
@@ -456,34 +452,31 @@ def fill_with_rb_to_budget(plan, caps_RB, cRG, cRB, target_budget):
 
     return plan
 
-# --- LID placement map (logarithmic green shading; zero-LID transparent; Deck-level tooltip) ---
-def render_focus_placement_map_log(plan: Dict[str, Dict[str,int]],
-                                   title: str,
-                                   ws_shp_path: str,
-                                   widget_key: str):
-    # Load subcatchments
+def render_focus_placement_map(plan, title, ws_shp_path, widget_key):
     gdf = load_ws(ws_shp_path).copy()
 
-    # Attach counts to each subcatchment
+    # Attach counts
     gdf["_RG"] = gdf["NAME"].map(lambda s: plan.get(s, {}).get("rain_gardens", 0))
     gdf["_RB"] = gdf["NAME"].map(lambda s: plan.get(s, {}).get("rain_barrels", 0))
     gdf["_TOTAL_LID"] = gdf["_RG"] + gdf["_RB"]
 
-    # Log-scale green fill; zero-LID is transparent
-    vmax = max(1, int(gdf["_TOTAL_LID"].max()))
-    def fill_color(n):
-        if n <= 0:
-            return [0, 0, 0, 0]  # transparent
-        alpha = int(80 + 175 * (np.log1p(n) / np.log1p(vmax)))  # 80..255 (log scale)
-        return [34, 139, 34, alpha]  # ForestGreen
-    gdf["_fill"] = gdf["_TOTAL_LID"].map(fill_color)
+    FIXED_COLOR = [34, 139, 34, 160]   
 
-    # Labels for map (keep simple; details in tooltip)
+    def fixed_color(n):
+        if n <= 0:
+            return [0, 0, 0, 0] 
+        return FIXED_COLOR
+
+    gdf["_fill"] = gdf["_TOTAL_LID"].map(fixed_color)
+
+    # Labels
     reps = gdf.geometry.representative_point()
     labels = pd.DataFrame({
-        "lon": reps.x, "lat": reps.y,
+        "lon": reps.x,
+        "lat": reps.y,
         "text": gdf["NAME"].astype(str)
     })
+
     text_layer = pdk.Layer(
         "TextLayer",
         data=labels,
@@ -494,7 +487,7 @@ def render_focus_placement_map_log(plan: Dict[str, Dict[str,int]],
         get_alignment_baseline="'center'"
     )
 
-    # GeoJson layer (no tooltip here; Streamlit reads it from Deck)
+    # GeoJSON layer
     poly_layer = pdk.Layer(
         "GeoJsonLayer",
         data=gdf.__geo_interface__,
@@ -504,15 +497,18 @@ def render_focus_placement_map_log(plan: Dict[str, Dict[str,int]],
         stroked=True,
         filled=True,
         get_fill_color="properties._fill",
-        get_line_color=[0,0,0,255],  # black outlines
+        get_line_color=[0,0,0,255],
         line_width_min_pixels=1,
     )
 
-    # View
     centroid = gdf.geometry.union_all().centroid
-    view_state = pdk.ViewState(latitude=centroid.y, longitude=centroid.x, zoom=13.45)
+    view_state = pdk.ViewState(
+        latitude=centroid.y,
+        longitude=centroid.x,
+        zoom=13.45
+    )
 
-    deck_tooltip = {
+    tooltip = {
         "html": (
             "<b>{NAME}</b><br/>"
             "RG (rain gardens): {_RG}<br/>"
@@ -522,7 +518,6 @@ def render_focus_placement_map_log(plan: Dict[str, Dict[str,int]],
         "style": {"backgroundColor": "white", "color": "black"}
     }
 
-    # Render
     st.markdown(f"**{title}**")
     st.pydeck_chart(
         pdk.Deck(
@@ -530,7 +525,7 @@ def render_focus_placement_map_log(plan: Dict[str, Dict[str,int]],
             initial_view_state=view_state,
             map_provider="carto",
             map_style="light",
-            tooltip=deck_tooltip,  # <-- move tooltip here
+            tooltip=tooltip,
         ),
         use_container_width=True,
         height=260,
@@ -722,15 +717,9 @@ def run_swmm_scenario(
         (flooding_df["datetime"] <= tally_end)
     ].copy()
 
-    # Save debug CSV
-    debug_dir = "csv_files"
-    os.makedirs(debug_dir, exist_ok=True)
-    debug_path = os.path.join(debug_dir, f"{scenario_name}_hydraulics.csv")
-    clipped_df.to_csv(debug_path, index=False)
-
     # -----------------------------------------------
     # Parse RPT text
-    # -----------------------------------------------
+    # ----------------------f-------------------------
     rpt_text = _read_text_keep(rpt_path)
 
     df_runoff = extract_total_runoff_from_text(rpt_text)
@@ -909,126 +898,6 @@ def extract_infiltration_and_runoff_from_text(txt: str) -> pd.DataFrame:
         i += 1
     return pd.DataFrame(rows, columns=["label","volume_acft"])
 
-def _ensure_baselines_visible(prefix: str):
-    """If the scenario store lacks the 4 baseline entries, rebuild them from saved DFs / RPT text."""
-    store = _sc_store(prefix)
-    needed = {
-        "baseline_nogate_current": f"{prefix}df_base_nogate_current",
-        "baseline_gate_current":   f"{prefix}df_base_gate_current",
-        "baseline_nogate_future":  f"{prefix}df_base_nogate_future",
-        "baseline_gate_future":    f"{prefix}df_base_gate_future",
-    }
-    rpts = st.session_state.get("rpts", {})
-    changed = False
-
-    for name, df_key in needed.items():
-        if name in store:
-            continue
-        df = st.session_state.get(df_key, None)
-
-        if (df is None) or (isinstance(df, pd.DataFrame) and df.empty):
-            rpt_text = rpts.get(f"{prefix}{name}", "")
-            if rpt_text:
-                df = extract_total_runoff_from_text(rpt_text)
-
-        if isinstance(df, pd.DataFrame) and not df.empty:
-            remember_scenario(name, df, prefix)
-            changed = True
-
-    return changed
-
-def _rehydrate_baseline_into_store(prefix: str):
-    store = _sc_store(prefix)
-    df_keys = {
-        "baseline_nogate_current": f"{prefix}df_base_nogate_current",
-        "baseline_gate_current":   f"{prefix}df_base_gate_current",
-        "baseline_nogate_future":  f"{prefix}df_base_nogate_future",
-        "baseline_gate_future":    f"{prefix}df_base_gate_future",
-    }
-
-    rpts = st.session_state.get("rpts", {})
-
-    for name, df_key in df_keys.items():
-        if name in store:
-            continue
-
-        df = st.session_state.get(df_key, None)
-        if isinstance(df, pd.DataFrame) and not df.empty:
-            remember_scenario(name, df, prefix)
-            continue
-
-        rpt_text = rpts.get(f"{prefix}{name}", "")
-        if rpt_text:
-            df = extract_total_runoff_from_text(rpt_text)
-            if not df.empty:
-                remember_scenario(name, df, prefix)
-
-def build_heatmap(df, title):
-    if df.empty:
-        return pdk.Deck()
-
-    # Color ramp (same as before)
-    colors = [
-        [237, 248, 251],
-        [198, 219, 239],
-        [158, 202, 225],
-        [107, 174, 214],
-        [49, 130, 189],
-        [8, 81, 156]
-    ]
-
-    # Heat Layer (TOP)
-    heat_layer = pdk.Layer(
-        "HeatmapLayer",
-        data=df,
-        get_position='[lon, lat]',
-        get_weight="depth",
-        radiusPixels=25,
-        intensity=1,
-        threshold=0.05,
-        colorRange=colors,
-    )
-
-    # Subcatchment boundary (MIDDLE)
-    sub_gdf = load_ws(WS_SHP_PATH)
-    poly_layer = pdk.Layer(
-        "GeoJsonLayer",
-        data=sub_gdf.__geo_interface__,
-        stroked=True,
-        filled=False,
-        get_line_color=[0, 0, 0, 180],
-        lineWidthMinPixels=1
-    )
-
-    # Pipes (BOTTOM)
-    pipe_gdf = load_pipes(PIPES_SHP_PATH)
-    pipe_layer = pdk.Layer(
-        "GeoJsonLayer",
-        data=pipe_gdf.__geo_interface__,
-        stroked=True,
-        filled=False,
-        get_line_color=[120, 120, 120, 180],   # medium gray
-        lineWidthMinPixels=2
-    )
-
-    view = pdk.ViewState(
-        latitude=df["lat"].mean(),
-        longitude=df["lon"].mean(),
-        zoom=14.25,
-    )
-
-    return pdk.Deck(
-        layers=[
-            pipe_layer,    # bottom
-            poly_layer,    # middle
-            heat_layer     # top
-        ],
-        initial_view_state=view,
-        map_provider="carto",
-        map_style="light",
-        tooltip={"text": "{depth}"}
-    )
-
 def generate_lid_usage_lines(lid_config: Dict[str, Dict[str, int]], excel_df: pd.DataFrame) -> List[str]:
 
     lines: List[str] = []
@@ -1146,14 +1015,35 @@ def login_ui():
 def app_ui():
     """Main Streamlit UI — all scenario controls, runs, maps, export, and logout."""
 
+    st.session_state.setdefault("scenario_display_labels", {})
+    st.session_state.setdefault("scenario_flood_ts", {})
+    st.session_state.setdefault("scenario_flood_volume", {})
+    st.session_state.setdefault("scenario_infiltration", {})
+    st.session_state.setdefault("scenario_labels_saved", {})
+    st.session_state.setdefault("scenario_flood_saved", {})
+    st.session_state.setdefault("scenario_infil_saved", {})
+    st.session_state.setdefault("display_summary", False)
+
+        # Initialize storage
+    if "flood_summary_chart" not in st.session_state:
+        st.session_state["flood_summary_chart"] = None
+
     st.success(f"Logged in as: {st.session_state.get('email', 'user')}")
     ensure_temp_dir()
     prefix = st.session_state.get("scenario_prefix", "")
 
     st.session_state.setdefault("rpts", {})
 
-    _rehydrate_baseline_into_store(prefix)
-    _ensure_baselines_visible(prefix)
+    # Baseline loader (lightweight)
+    if "baseline_loaded" not in st.session_state:
+        # Check if user has actually run a baseline before
+        has_any_baseline = any(
+            key.startswith(f"{prefix}df_base_")
+            for key in st.session_state.keys()
+        )
+
+        st.session_state["baseline_loaded"] = has_any_baseline
+
 
     simulation_date = "05/31/2025 12:00"
     template_inp    = "SWMM_Project.inp"
@@ -1279,7 +1169,7 @@ def app_ui():
                 "For example, a 10-year storm is more intense than a 2-year storm."
             )
         )
-        r_low, r_high = st.columns([1, 3])
+        r_low, r_high = st.columns([1, 2])
         with r_low:
             st.caption("Less intense and more common")
         with r_high:
@@ -1332,15 +1222,13 @@ def app_ui():
             st.session_state.clear()
             st.success("Logged out and cleaned up all files.")
             st.experimental_rerun()
-        st.stop()  # cleanly halt Streamlit
+        st.stop() 
 
-        # Safe to read cfg from here onward
     align_mode       = cfg["align_mode"]
     unit             = cfg["unit"]
     moon_phase       = cfg["moon_phase"]
     duration_minutes = int(cfg["duration_minutes"])
     return_period    = cfg["return_period"]
-
 
     total_inches = float(
         pf_df.loc[pf_df["Duration_Minutes"] == duration_minutes, return_period].values[0]
@@ -1374,7 +1262,6 @@ def app_ui():
             prominence=None
         )
         tide_source = "synthetic"
-
 
     if unit == "U.S. Customary":
         display_rain_curve = rain_curve_in        
@@ -1505,120 +1392,82 @@ def app_ui():
     st.altair_chart(tide_chart, use_container_width=True)
 
     if st.button("Run Baseline Scenario" , key=f"{prefix}btn_run_baseline"):
+
         try:
-            lid_lines = [";"] 
-            if run_current:  
+            lid_lines = [";"]   # baseline always runs with NO LIDs
 
-                info1 = run_swmm_scenario_baseline(
-                    f"{prefix}baseline_nogate_current",
-                    rain_lines_cur,
-                    tide_lines,
-                    lid_lines,
-                    "NO",
-                    duration_minutes,
-                    template_path=template_inp,
-                    rain_minutes=minutes_15,
-                    rain_curve_in=st.session_state["rain_sim_curve_current_in"],
-                    sim_start_str=simulation_date,
-                )
-                info2 = run_swmm_scenario_baseline(
-                    f"{prefix}baseline_gate_current",
-                    rain_lines_cur,
-                    tide_lines,
-                    lid_lines,
-                    "YES",
-                    duration_minutes,
-                    template_path=template_inp,
-                    rain_minutes=minutes_15,
-                    rain_curve_in=st.session_state["rain_sim_curve_current_in"],
-                    sim_start_str=simulation_date,
-                )
-                st.session_state.update({
-                    f"{prefix}df_base_nogate_current": info1["df_runoff"],
-                    f"{prefix}df_base_gate_current":   info2["df_runoff"]
-                })
-
-                remember_scenario("baseline_nogate_current", info1["df_runoff"], prefix)
-                remember_scenario("baseline_gate_current",   info2["df_runoff"], prefix)
-
-            if run_future: 
-                info3 = run_swmm_scenario_baseline(
-                    f"{prefix}baseline_nogate_future",
-                    rain_lines_fut,
-                    tide_lines,
-                    lid_lines,
-                    "NO",
-                    duration_minutes,
-                    template_path=template_inp,
-                    rain_minutes=minutes_15,
-                    rain_curve_in=st.session_state["rain_sim_curve_future_in"],
-                    sim_start_str=simulation_date,
-                )
-                info4 = run_swmm_scenario_baseline(
-                    f"{prefix}baseline_gate_future",
-                    rain_lines_fut,
-                    tide_lines,
-                    lid_lines,
-                    "YES",
-                    duration_minutes,
-                    template_path=template_inp,
-                    rain_minutes=minutes_15,
-                    rain_curve_in=st.session_state["rain_sim_curve_future_in"],
-                    sim_start_str=simulation_date,
-                )
-
-                st.session_state.update({
-                    f"{prefix}df_base_nogate_future":  info3["df_runoff"],
-                    f"{prefix}df_base_gate_future":    info4["df_runoff"]
-                })
- 
-                remember_scenario("baseline_nogate_future",  info3["df_runoff"], prefix)
-                remember_scenario("baseline_gate_future",    info4["df_runoff"], prefix)
-
-            # Replace your df_swmm_now block with:
-            df_swmm_now = None
+            # Select rainfall based on user choice
             if run_current:
-                df_swmm_now = st.session_state.get(f"{prefix}df_base_nogate_current")
-            elif run_future:
-                df_swmm_now = st.session_state.get(f"{prefix}df_base_nogate_future")
-
-            if df_swmm_now is None or len(df_swmm_now) == 0:
-                st.error("No rows parsed from 'Subcatchment Runoff Summary' in the .rpt")
+                scenario_name = f"{prefix}baseline_nogate_current"
+                rain_lines_use = rain_lines_cur
+                rain_curve_use = st.session_state["rain_sim_curve_current_in"]
             else:
-                st.success("Baseline scenarios complete.")
-                st.session_state[f"{prefix}ran_baseline"] = True
-                map_html, legend_html = _build_baseline_map_html(
-                    df_swmm_local=df_swmm_now,
-                    unit_ui=st.session_state["unit_ui"],
-                    ws_shp_path=WS_SHP_PATH
-                )
-                st.session_state[f"{prefix}baseline_map_html"]    = map_html
-                st.session_state[f"{prefix}baseline_legend_html"] = legend_html
-                st.session_state[f"{prefix}grid_ready"] = True
+                scenario_name = f"{prefix}baseline_nogate_future"
+                rain_lines_use = rain_lines_fut
+                rain_curve_use = st.session_state["rain_sim_curve_future_in"]
+
+            # Run ONE baseline scenario (no gate)
+            info = run_swmm_scenario_baseline(
+                scenario_name,
+                rain_lines_use,
+                tide_lines,
+                lid_lines,
+                "NO",   # always NO GATE
+                duration_minutes,
+                template_path=template_inp,
+                rain_minutes=minutes_15,
+                rain_curve_in=rain_curve_use,
+                sim_start_str=simulation_date,
+            )
+
+            # Save runoff
+            st.session_state[f"{scenario_name}_df"] = info["df_runoff"]
+
+            # Build baseline runoff map
+            df_swmm_now = info["df_runoff"]
+
+            map_html, legend_html = _build_baseline_map_html(
+                df_swmm_local=df_swmm_now,
+                unit_ui=st.session_state["unit_ui"],
+                ws_shp_path=WS_SHP_PATH
+            )
+
+            # Persist results
+            st.session_state[f"{prefix}baseline_map_html"]    = map_html
+            st.session_state[f"{prefix}baseline_legend_html"] = legend_html
+            st.session_state[f"{prefix}baseline_ready"] = True
+
+            st.success("Baseline scenario complete.")
+
         except Exception as e:
             st.error(f"Baseline simulation failed: {e}")
 
-    if f"{prefix}baseline_map_html" in st.session_state:
-        st.subheader("Runoff and Land Cover Context")
+    # Show baseline map as soon as scenario is ready
+    if st.session_state.get(f"{prefix}baseline_ready", False):
 
-        st.markdown("""
-        Higher runoff values typically occur in areas with more **impervious surfaces** such as 
-        roads, parking lots, rooftops, and other paved areas. These surfaces prevent 
-        rainfall from soaking into the soil, increasing the amount of direct surface runoff. This 
-        is why developed or urbanized areas often show darker (higher) runoff values. 
-        The land cover map to the right helps show where these impervious areas are located.
-        """)
+        st.markdown("### Baseline Runoff and Land Cover")
 
-        # --- two columns side-by-side ---
         c1, c2 = st.columns([1, 1])
 
         with c1:
-            st.markdown("### Modeled Runoff")
-            components.v1.html(st.session_state[f"{prefix}baseline_map_html"], height=500, scrolling=False)
+            st.markdown("#### Modeled Runoff")
+            components.v1.html(
+                st.session_state[f"{prefix}baseline_map_html"],
+                height=500,
+                scrolling=False
+            )
+            st.markdown(
+                st.session_state[f"{prefix}baseline_legend_html"],
+                unsafe_allow_html=True
+            )
 
         with c2:
-            st.markdown("### Land Use / Land Cover")
-            st.image("lulc_image.png", use_container_width=True)
+            st.markdown("#### Land Use / Land Cover")
+
+            # container to match the 500px height of the runoff map
+            image_container = st.container()
+            with image_container:
+                st.image("lulc_image.png", use_container_width=True)
 
     REQUIRED_RASTER_COLS = {
         "NAME", "Max_RG_DEM_Considered", "MaxNumber_RB",
@@ -1771,14 +1620,14 @@ def app_ui():
         
         row1 = st.columns(2, gap="large")
         with row1[0]:
-            render_focus_placement_map_log(
+            render_focus_placement_map(
                 plan_all,
                 "All subcatchments",
                 WS_SHP_PATH,
                 "fa_place_all"
             )
         with row1[1]:
-            render_focus_placement_map_log(
+            render_focus_placement_map(
                 plan_upstream,
                 "Upstream",
                 WS_SHP_PATH,
@@ -1787,14 +1636,14 @@ def app_ui():
 
         row2 = st.columns(2, gap="large")
         with row2[0]:
-            render_focus_placement_map_log(
+            render_focus_placement_map(
                 plan_downstr,
                 "Downstream/outlet",
                 WS_SHP_PATH,
                 "fa_place_dn"
             )
         with row2[1]:
-            render_focus_placement_map_log(
+            render_focus_placement_map(
                 plan_highro,
                 "Highest runoff",
                 WS_SHP_PATH,
@@ -1918,14 +1767,14 @@ def app_ui():
         st.markdown("### LID Placement — Compare Different Focus Areas")
         row1 = st.columns(2, gap="large")
         with row1[0]:
-            render_focus_placement_map_log(
+            render_focus_placement_map(
                 plan_all,
                 "All subcatchments",
                 WS_SHP_PATH,
                 "fa_place_all"
             )
         with row1[1]:
-            render_focus_placement_map_log(
+            render_focus_placement_map(
                 plan_upstream,
                 "Upstream",
                 WS_SHP_PATH,
@@ -1934,14 +1783,14 @@ def app_ui():
 
         row2 = st.columns(2, gap="large")
         with row2[0]:
-            render_focus_placement_map_log(
+            render_focus_placement_map(
                 plan_downstr,
                 "Downstream/outlet",
                 WS_SHP_PATH,
                 "fa_place_dn"
             )
         with row2[1]:
-            render_focus_placement_map_log(
+            render_focus_placement_map(
                 plan_highro,
                 "Highest runoff",
                 WS_SHP_PATH,
@@ -2110,301 +1959,284 @@ def app_ui():
 
             if st.button("Run All Scenarios", key=f"{prefix}_run_all_scenarios"):
 
-                try:
-                    st.write("Running SWMM scenarios... this may take a moment.")
+                # Choose rainfall
+                use_cur = (st.session_state.get("rain_variant", "current") == "current")
+                rain_lines = st.session_state["rain_lines_cur"] if use_cur else st.session_state["rain_lines_fut"]
+                rain_curve = (
+                    st.session_state["rain_sim_curve_current_in"]
+                    if use_cur else st.session_state["rain_sim_curve_future_in"]
+                )
+                rain_label = "(Current)" if use_cur else "(+20% Future)"
 
-                    # Choose rainfall
-                    use_cur = (st.session_state.get("rain_variant", "current") == "current")
-                    rain_lines = st.session_state["rain_lines_cur"] if use_cur else st.session_state["rain_lines_fut"]
-                    rain_curve = (
-                        st.session_state["rain_sim_curve_current_in"]
-                        if use_cur else st.session_state["rain_sim_curve_future_in"]
-                    )
-                    rain_label = "(Current)" if use_cur else "(+20% Future)"
+                # 5 focus categories × 2 gate options
+                plan_sets = {
+                    "baseline": None,
+                    "all": plan_all,
+                    "upstream": plan_upstream,
+                    "downstream": plan_downstr,
+                    "highrunoff": plan_highro,
+                }
 
-                    # 5 focus categories × 2 gate options
-                    plan_sets = {
-                        "baseline": None,
-                        "all": plan_all,
-                        "upstream": plan_upstream,
-                        "downstream": plan_downstr,
-                        "highrunoff": plan_highro,
-                    }
+                gate_opts = {"nogate": "NO", "gate": "YES"}
 
-                    gate_opts = {"nogate": "NO", "gate": "YES"}
+                # ---- RESET STORED RESULTS ----
+                st.session_state.setdefault("scenario_display_labels", {})
+                st.session_state["scenario_display_labels"].clear()
 
-                    # ---- RESET STORED RESULTS ----
-                    st.session_state["scenario_display_labels"] = {}
-                    st.session_state["scenario_flood_ts"] = {}
-                    st.session_state["scenario_flood_volume"] = {}
-                    st.session_state["scenario_infiltration"] = {}
+                st.session_state.setdefault("scenario_flood_ts", {})
+                st.session_state["scenario_flood_ts"].clear()
 
-                    # ==================================================================
-                    # MAIN LOOP — RUN ALL 10 SCENARIOS
-                    # ==================================================================
-                    for subset_key, plan_dict in plan_sets.items():
-                        for gate_key, gate_flag in gate_opts.items():
+                st.session_state.setdefault("scenario_flood_volume", {})
+                st.session_state["scenario_flood_volume"].clear()
 
-                            scen_key = f"{subset_key}_{gate_key}"
+                st.session_state.setdefault("scenario_infiltration", {})
+                st.session_state["scenario_infiltration"].clear()
 
-                            # Label formatting
-                            pretty_names = {
-                                "baseline": "Baseline",
-                                "all": "All Subcatchments",
-                                "upstream": "Upstream",
-                                "downstream": "Downstream",
-                                "highrunoff": "High-Runoff",
-                            }
-                            pretty_name = pretty_names[subset_key]
-                            gate_name = "TG ON" if gate_key == "gate" else "TG OFF"
+                # ==================================================================
+                # MAIN LOOP — RUN ALL 10 SCENARIOS
+                # ==================================================================
+                for subset_key, plan_dict in plan_sets.items():
+                    for gate_key, gate_flag in gate_opts.items():
 
-                            label = f"{pretty_name} – {gate_name}"
-                            st.session_state["scenario_display_labels"][scen_key] = label
+                        scen_key = f"{subset_key}_{gate_key}"
 
-                            # LID usage
-                            lid_lines = [";"] if subset_key == "baseline" else generate_lid_usage_lines(plan_dict, raster_df)
+                        # Label formatting
+                        pretty_names = {
+                            "baseline": "Baseline",
+                            "all": "All Subcatchments",
+                            "upstream": "Upstream",
+                            "downstream": "Downstream",
+                            "highrunoff": "High-Runoff",
+                        }
+                        pretty_name = pretty_names[subset_key]
+                        gate_name = "TG ON" if gate_key == "gate" else "TG OFF"
 
-                            # Run the SWMM scenario
-                            full_scen_key = f"{prefix}{scen_key}"
-                            
-                            run_swmm_scenario(
-                                full_scen_key,
-                                rain_lines,
-                                tide_lines,
-                                lid_lines,
-                                gate_flag,
-                                duration_minutes,
-                                template_path=template_inp,
-                                rain_minutes=minutes_15,
-                                rain_curve_in=rain_curve,
-                                sim_start_str=simulation_date,
-                            )
+                        label = f"{pretty_name} – {gate_name}"
+                        st.session_state["scenario_display_labels"][scen_key] = label
 
-                            # Store outputs
-                            st.session_state["scenario_flood_ts"][scen_key] = \
-                                st.session_state.get(f"{full_scen_key}_node_flood_ts")
+                        # LID usage
+                        lid_lines = [";"] if subset_key == "baseline" else generate_lid_usage_lines(plan_dict, raster_df)
 
-                            st.session_state["scenario_flood_volume"][scen_key] = \
-                                st.session_state.get(f"{full_scen_key}_storm_total_flood", 0.0)
+                        # Run the SWMM scenario
+                        full_scen_key = f"{prefix}{scen_key}"
+                        
+                        run_swmm_scenario(
+                            full_scen_key,
+                            rain_lines,
+                            tide_lines,
+                            lid_lines,
+                            gate_flag,
+                            duration_minutes,
+                            template_path=template_inp,
+                            rain_minutes=minutes_15,
+                            rain_curve_in=rain_curve,
+                            sim_start_str=simulation_date,
+                        )
 
-                            st.session_state["scenario_infiltration"][scen_key] = \
-                                st.session_state.get(f"{full_scen_key}_storm_infiltration", 0.0)
+                        # Store outputs
+                        st.session_state["scenario_flood_ts"][scen_key] = \
+                            st.session_state.get(f"{full_scen_key}_node_flood_ts")
 
-                    # Save clean copies for charts
-                    st.session_state["scenario_labels_saved"] = dict(st.session_state["scenario_display_labels"])
-                    st.session_state["scenario_flood_saved"] = dict(st.session_state["scenario_flood_volume"])
-                    st.session_state["scenario_infil_saved"] = dict(st.session_state["scenario_infiltration"])
+                        st.session_state["scenario_flood_volume"][scen_key] = \
+                            st.session_state.get(f"{full_scen_key}_storm_total_flood", 0.0)
 
-                    st.success("All 10 scenarios completed.")
+                        st.session_state["scenario_infiltration"][scen_key] = \
+                            st.session_state.get(f"{full_scen_key}_storm_infiltration", 0.0)
 
-                    # Visibility flags
-                    st.session_state["show_summary_charts"] = True
+                # Save clean copies for charts
+                st.session_state["scenario_labels_saved"] = dict(st.session_state["scenario_display_labels"])
+                st.session_state["scenario_flood_saved"] = dict(st.session_state["scenario_flood_volume"])
+                st.session_state["scenario_infil_saved"] = dict(st.session_state["scenario_infiltration"])
 
-                except Exception as e:
-                    st.error(f"Scenario batch run failed: {e}")
+                st.success("All 10 scenarios completed.")
+                st.session_state["scenarios_finished"] = True
+                st.session_state["display_summary"] = True
 
+    st.markdown("### Flooding Summary")
 
-    # Only show the button after scenarios finished running
-    if st.session_state.get("show_summary_charts", False):
+    show_summary = st.button("Show Flooding Summary", key="btn_fld_summary")
+
+    # If button clicked, regenerate and store the chart
+    if show_summary:
+
+        if not st.session_state.get("scenarios_finished", False):
+            st.warning("Please run all scenarios first using 'Run All Scenarios'.")
+            st.stop()
+
+        scenario_labels = st.session_state.get("scenario_labels_saved", {})
+        flood_data      = st.session_state.get("scenario_flood_saved", {})
+        infil_data      = st.session_state.get("scenario_infil_saved", {})
+
+        if not scenario_labels:
+            st.error("No scenario results, cannot build flooding summary.")
+            st.stop()
+
+        st.markdown("## Flooding Summary Across All 10 Scenarios")
+
+        df_log = pd.DataFrame([
+            {
+                "Scenario": scenario_labels[k],
+                "Flooding": flood_data.get(k, 0.0),
+                "Infiltration": infil_data.get(k, 0.0)
+            }
+            for k in scenario_labels
+        ])
+
+        df_flood_sorted = df_log.sort_values("Flooding", ascending=False).copy()
+        df_flood_sorted["ScenarioColor"] = df_flood_sorted["Scenario"]
+
+        min_flood = df_flood_sorted["Flooding"].min()
+        max_flood = df_flood_sorted["Flooding"].max()
+
+        # Start at lowest number with 1% padding
+        x_domain_flood = [max(min_flood * 0.99, 0), max_flood]
+
+        import altair as alt
+        alt.data_transformers.disable_max_rows()
+
+        bars = (
+            alt.Chart(df_flood_sorted)
+            .mark_bar()
+            .encode(
+                x=alt.X(
+                    "Flooding:Q",
+                    title="Flood Volume (ft³)",
+                    scale=alt.Scale(domain=x_domain_flood)
+                ),
+                y=alt.Y(
+                    "Scenario:N",
+                    sort=df_flood_sorted["Scenario"].tolist(),
+                    axis=None
+                ),
+                color=alt.Color("ScenarioColor:N", legend=None),
+                tooltip=["Scenario:N", alt.Tooltip("Flooding:Q", format=",.1f")]
+            )
+        )
+
+        labels = (
+            alt.Chart(df_flood_sorted)
+            .mark_text(
+                align="left",
+                baseline="middle",
+                dx=5
+            )
+            .encode(
+                x=alt.X(
+                    "Flooding:Q",
+                    scale=alt.Scale(domain=x_domain_flood)
+                ),
+                y=alt.Y(
+                    "Scenario:N",
+                    sort=df_flood_sorted["Scenario"].tolist()
+                ),
+                text="Scenario:N"
+            )
+        )
+
+        flood_chart = (bars + labels).properties(
+            height=30 * len(df_flood_sorted) + 60
+        ).configure_view(strokeWidth=0)
+
+        # SAVE chart so it stays on screen
+        st.session_state["flood_summary_chart"] = flood_chart
+
+    # ALWAYS DISPLAY THE SAVED CHART IF AVAILABLE
+    if st.session_state["flood_summary_chart"] is not None:
+        st.altair_chart(st.session_state["flood_summary_chart"], use_container_width=True)
+
+    if st.session_state.get("display_summary", False):
 
         st.markdown("---")
-        st.subheader("Flooding & Infiltration Summary")
+        st.subheader("Compare Flooding Between Two Scenarios")
 
-        # Button that reveals the flooding + infiltration plots
-        if st.button("Show Flooding & Infiltration Summary", key="btn_show_summary"):
-            st.session_state["display_summary"] = True
+        scenario_labels = st.session_state.get("scenario_display_labels", {})
+        label_to_key = {v: k for k, v in scenario_labels.items()}
+        sorted_labels = sorted(label_to_key.keys())
 
-        # -----------------------------------------
-        # SHOW FLOODING + INFILTRATION BAR CHARTS
-        # -----------------------------------------
-        if st.session_state.get("display_summary", False):
+        colA, colB = st.columns(2)
+        with colA:
+            scenA_label = st.selectbox("Scenario A", sorted_labels, key="compA")
+        with colB:
+            scenB_label = st.selectbox("Scenario B", sorted_labels, key="compB")
 
-            scenario_labels = st.session_state.get("scenario_labels_saved", {})
-            flood_data = st.session_state.get("scenario_flood_saved", {})
-            infil_data = st.session_state.get("scenario_infil_saved", {})
+        if st.button("Compare Maps", key="btn_compare_maps"):
 
-            if scenario_labels:
+            from inundation_mapper import compute_peak_inundation
 
-                df_log = pd.DataFrame([
-                    {
-                        "Scenario": scenario_labels[k],
-                        "Flooding": float(flood_data.get(k, 0.0)),
-                        "Infiltration": float(infil_data.get(k, 0.0))
-                    }
-                    for k in scenario_labels.keys()
-                ])
+            scenA_key = label_to_key[scenA_label]
+            scenB_key = label_to_key[scenB_label]
 
-                # -------- Flooding Bar Chart --------
-                st.markdown("### Flooding")
+            tsA = st.session_state["scenario_flood_ts"][scenA_key]
+            tsB = st.session_state["scenario_flood_ts"][scenB_key]
 
-                df_flood_sorted = df_log.sort_values("Flooding", ascending=False).copy()
-                df_flood_sorted["ScenarioColor"] = df_flood_sorted["Scenario"]
+            dfA = compute_peak_inundation(tsA, DEM_PATH, NODES_SHP_PATH,
+                                        st.session_state.get("unit_ui", "U.S. Customary"),
+                                        FLOWDIR_PATH)
+            dfB = compute_peak_inundation(tsB, DEM_PATH, NODES_SHP_PATH,
+                                        st.session_state.get("unit_ui", "U.S. Customary"),
+                                        FLOWDIR_PATH)
 
-                flood_chart = (
-                    alt.Chart(df_flood_sorted, width="container")  # ensure Streamlit allocates width
-                    .mark_bar()
-                    .encode(
-                        x=alt.X(
-                            "Flooding:Q",
-                            scale=alt.Scale(
-                                domain=[
-                                    float(df_flood_sorted["Flooding"].min()) - 100,
-                                    float(df_flood_sorted["Flooding"].max())
-                                ],
-                                nice=False,
-                                zero=False
-                            ),
-                            axis=alt.Axis(title="Flood Volume (ft³)", titleFontSize=20, labelFontSize=16)
-                        ),
-                        y=alt.Y(
-                            "Scenario:N",
-                            sort=None,
-                            axis=alt.Axis(labels=True, labelFontSize=16, ticks=False, title=None)
-                        ),
-                        color=alt.Color(
-                            "ScenarioColor:N",
-                            legend=alt.Legend(
-                                title="Scenario",
-                                orient="right",
-                                direction="vertical",
-                                labelLimit=1000,
-                                labelExpr="datum.label",
-                                symbolLimit=1000
-                            )
-                        ),
-                        tooltip=[alt.Tooltip("Scenario:N"), alt.Tooltip("Flooding:Q", format=",.1f")]
-                    )
-                    .properties(
-                        height=50 * len(df_flood_sorted) + 120,
-                        padding={"left": 20, "right": 20, "top": 10, "bottom": 110}  # FIX 2: add bottom space
-                    )
+            df_diff = dfA.copy()
+            df_diff["depth"] = dfB["depth"] - dfA["depth"]
+
+            diverging_colors = [
+                [165, 0, 38],
+                [215, 48, 39],
+                [244, 109, 67],
+                [253, 174, 97],
+                [254, 224, 144],
+                [255, 255, 255],
+                [224, 243, 248],
+                [171, 217, 233],
+                [116, 173, 209],
+                [69, 117, 180],
+                [49, 54, 149]
+            ]
+
+            def build_difference_map(df):
+                df = df.copy()
+                df["weight"] = df["depth"]
+
+                lyr = pdk.Layer(
+                    "HeatmapLayer",
+                    data=df,
+                    get_position='[lon, lat]',
+                    get_weight="weight",
+                    radiusPixels=35,
+                    aggregation="SUM",
+                    colorRange=diverging_colors,
                 )
 
-                st.altair_chart(flood_chart, use_container_width=True)
-
-                # -------- Infiltration Bar Chart --------
-                st.markdown("### Infiltration")
-
-                df_infil_sorted = df_log.sort_values("Infiltration", ascending=False).copy()
-                df_infil_sorted["ScenarioColor2"] = df_infil_sorted["Scenario"]
-
-                infil_chart = (
-                    alt.Chart(df_infil_sorted, width="container")  # ensures legend fits
-                    .mark_bar()
-                    .encode(
-                        x=alt.X(
-                            "Infiltration:Q",
-                            scale=alt.Scale(
-                                domain=[
-                                    float(df_infil_sorted["Infiltration"].min()) - 100,
-                                    float(df_infil_sorted["Infiltration"].max())
-                                ],
-                                nice=False,
-                                zero=False
-                            ),
-                            axis=alt.Axis(title="Infiltration (ft³)", titleFontSize=20, labelFontSize=16)
-                        ),
-                        y=alt.Y(
-                            "Scenario:N",
-                            sort=None,
-                            axis=alt.Axis(labels=True, labelFontSize=16, ticks=False, title=None)
-                        ),
-                        color=alt.Color(
-                            "ScenarioColor2:N",
-                            legend=alt.Legend(
-                                title="Scenario",
-                                orient="right",
-                                direction="vertical",
-                                labelLimit=1000,
-                                labelExpr="datum.label",
-                                symbolLimit=1000
-                            )
-                        ),
-                        tooltip=[alt.Tooltip("Scenario:N"), alt.Tooltip("Infiltration:Q", format=",.1f")]
-                    )
-                    .properties(
-                        height=50 * len(df_infil_sorted) + 120,
-                        padding={"left": 20, "right": 20, "top": 10, "bottom": 110}  # FIX 2: big bottom padding
-                    )
+                vs = pdk.ViewState(
+                    latitude=df["lat"].mean(),
+                    longitude=df["lon"].mean(),
+                    zoom=14.3
                 )
 
-                st.altair_chart(infil_chart, use_container_width=True)
+                return pdk.Deck(
+                    layers=[lyr],
+                    initial_view_state=vs,
+                    map_style="light",
+                    tooltip={"html": "<b>Difference (B – A):</b> {depth}"}
+                )
 
-            else:
-                st.info("Run all scenarios to generate summary charts.")
+            st.markdown(f"### Flood Difference: **{scenB_label} − {scenA_label}**")
+            st.pydeck_chart(build_difference_map(df_diff), use_container_width=True)
 
-            # ---------------------------------------------------
-            # SHOW COMPARISON SECTION (ALWAYS BELOW THE CHARTS)
-            # ---------------------------------------------------
-            if "scenario_flood_ts" in st.session_state and len(st.session_state["scenario_flood_ts"]) > 0:
+            unit_vol = "m³" if st.session_state["unit_ui"] == "Metric (SI)" else "ft³"
 
-                st.markdown("---")
-                st.subheader("Compare Flooding between Two Scenarios")
-
-                scenario_labels = st.session_state["scenario_display_labels"]
-                label_to_key = {v: k for k, v in scenario_labels.items()}
-                sorted_labels = sorted(label_to_key.keys())
-
-                colA, colB = st.columns(2)
-                with colA:
-                    scenA_label = st.selectbox("Scenario A", sorted_labels, key="sA_new")
-                with colB:
-                    scenB_label = st.selectbox("Scenario B", sorted_labels, key="sB_new")
-
-                run_inundation = st.button("Compare Maps", key="run_inundation_maps")
-
-                if run_inundation:
-                    from inundation_mapper import compute_peak_inundation
-
-                    scenA_key = label_to_key[scenA_label]
-                    scenB_key = label_to_key[scenB_label]
-
-                    tsA = st.session_state["scenario_flood_ts"][scenA_key]
-                    tsB = st.session_state["scenario_flood_ts"][scenB_key]
-
-                    dfA = compute_peak_inundation(
-                        flooding_df=tsA,
-                        dem_path=DEM_PATH,
-                        nodes_shp_path=NODES_SHP_PATH,
-                        unit_system=st.session_state.get("unit_ui", "U.S. Customary"),
-                        flowdir_path=FLOWDIR_PATH
-                    )
-                    dfB = compute_peak_inundation(
-                        flooding_df=tsB,
-                        dem_path=DEM_PATH,
-                        nodes_shp_path=NODES_SHP_PATH,
-                        unit_system=st.session_state.get("unit_ui", "U.S. Customary"),
-                        flowdir_path=FLOWDIR_PATH
-                    )
-
-                    st.session_state["df_inundation_A"] = dfA
-                    st.session_state["df_inundation_B"] = dfB
-
-                    # Build the maps
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.markdown(f"### {scenA_label}")
-                        st.pydeck_chart(build_heatmap(dfA, scenA_label), use_container_width=True)
-                    with col2:
-                        st.markdown(f"### {scenB_label}")
-                        st.pydeck_chart(build_heatmap(dfB, scenB_label), use_container_width=True)
-
-                    # Legend
-                    unit_depth = "m" if st.session_state["unit_ui"] == "Metric (SI)" else "ft"
-                    all_depths = pd.concat([dfA["depth"], dfB["depth"]])
-                    dmin, dmax = float(all_depths.min()), float(all_depths.max())
-
-                    st.markdown(
-                        f"""
-                        <div style='width:100%;'>
-                            <b>Depth ({unit_depth})</b><br>
-                            {dmin:.2f} — {dmax:.2f}
-                        </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
-
-
+            st.markdown(
+                f"""
+                <div style='margin-top:15px;'>
+                    <b>Diverging Scale (Difference in Flood Volume, {unit_vol})</b><br>
+                    <span style='color:#a50026;'>More flooding in A</span> →
+                    <span style='color:#000;'>No change</span> →
+                    <span style='color:#313695;'>More flooding in B</span>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+ 
 
     st.markdown("---")
     if st.button("🚪 Logout"):
