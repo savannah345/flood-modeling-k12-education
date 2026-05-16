@@ -9,7 +9,6 @@ from scipy.signal import find_peaks
 
 __all__ = [
     "pf_df",
-    "convert_units",
     "generate_rainfall",
     "moon_tide_ranges",
     "generate_tide_curve",
@@ -30,9 +29,6 @@ pf_df = pd.DataFrame({
     "10": [2.98, 3.41, 3.91, 4.28, 4.41, 4.66],
     "25": [3.58, 4.07, 4.77, 5.25, 5.41, 5.73],
 })
-
-def feet_to_meters(series_or_array):
-    return series_or_array * 0.3048
 
 # Your Type III cumulative dimensionless curve (0..1). Assumed sampled at equal
 # time-fraction steps from 0 to 1. Replace with your own list if needed.
@@ -97,26 +93,23 @@ moon_tide_ranges = {
 
 def generate_tide_curve(moon_phase: str, unit: str) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Synthetic tide over 48h at 15-min resolution.
-    Returns (minutes_15, tide_15) where tide units are ft (U.S.) or m (Metric).
+    Synthetic tide generator.
+    Always returns tide in FEET for SWMM compatibility.
+    Metric conversion will be handled ONLY in the Streamlit display layer.
     """
     if moon_phase not in moon_tide_ranges:
         raise ValueError(f"Unknown moon phase: {moon_phase}")
 
-    tide_min_ft, tide_max_ft = moon_tide_ranges[moon_phase]
+    # always use feet
+    low_ft, high_ft = moon_tide_ranges[moon_phase]
 
-    # Build high-res (1-min) sine-ish tide across 48h (2880 min), then downsample to 15-min.
-    minutes_full = np.arange(0, 2880, 1)
-    tide_full_ft = ((np.sin(2 * np.pi * minutes_full / 720 - np.pi / 2) + 1) / 2) \
-                   * (tide_max_ft - tide_min_ft) + tide_min_ft
+    # build a synthetic tide over 48 hours (192 intervals)
+    minutes_15 = np.arange(0, 48 * 60, 15)
 
-    minutes_15 = np.arange(0, 2880, 15)
-    tide_15_ft = tide_full_ft[minutes_15]
-
-    if unit == "Metric (SI)":
-        tide_15 = feet_to_meters(tide_15_ft)  # meters
-    else:
-        tide_15 = tide_15_ft  # feet
+    # simple sinusoid between low_ft and high_ft
+    mid = (low_ft + high_ft) / 2
+    amp = (high_ft - low_ft) / 2
+    tide_15 = mid + amp * np.sin(2 * np.pi * minutes_15 / (12.42 * 60))  # M2-like cycle
 
     return minutes_15, tide_15
 
@@ -380,15 +373,13 @@ def build_timestep_and_resample_15min(df_raw: pd.DataFrame,
     idx6 = pd.date_range(end=end6, periods=n, freq="6min")
     tide_df = tide_df.set_index(idx6)
 
-    # Unit conversion (live data are in feet)
     vals = tide_df[water_col].astype(float)
-    if unit == "Metric (SI)":
-        vals = feet_to_meters(vals)
-        offset = navd88_to_sea_level_offset_ft * 0.3048   # ft -> m
-    else:
-        offset = navd88_to_sea_level_offset_ft             # ft
+
+    offset = navd88_to_sea_level_offset_ft  # always feet
     if offset != 0.0:
         vals = vals - offset
+
+    # Store back in DataFrame
     tide_df[water_col] = vals
 
     # Downsample to 15-min means, then keep exactly the last 48h (192 bins)
@@ -429,7 +420,7 @@ def get_tide_real_or_synthetic(moon_phase: str,
         return m15, tide_15, True
     except Exception:
         # Synthetic fallback (already outputs selected unit; no geodetic datum shift)
-        m15, tide_15 = generate_tide_curve(moon_phase, unit)
+        m15, tide_15 = generate_tide_curve(moon_phase, "U.S. Customary")
         return m15, tide_15, False
 
 def get_aligned_rainfall(
