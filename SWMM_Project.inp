@@ -244,6 +244,12 @@ J96              2.16       1.026      0          0          2000
 ;;Name           Elevation  Type       Stage Data       Gated    Route To        
 ;;-------------- ---------- ---------- ---------------- -------- ----------------
 outfall          -1.6       TIMESERIES tide             $TIDE_GATE_CONTROL$                       
+PumpOutfall          -1.6       TIMESERIES tide                                
+
+
+[PUMPS]
+;;Name   FromNode   ToNode   Curve   Status
+$PUMP_BLOCK$
 
 [CONDUITS]
 ;;Name           From Node        To Node          Length     Roughness  InOffset   OutOffset  InitFlow   MaxFlow   
@@ -314,8 +320,7 @@ C69              J9               J10              52         0.01       0      
 ;60''X120*
 C70_1            J10              J14              279.891    0.01       -0.6       -1.5       0          0         
 ;60''X120*
-C70_2            J14              outfall          5.47       0.01       -1.5       -1.6       0          0         
-;60''X96''
+C70_2            J14              outfall          5.47       0.01      -1.5         -1.6      0          0
 C78              J30              J18              281        0.01       -0.3       -0.34      0          0         
 ;60''X96''
 C84              J118             J103             163        0.01       1.4        0.97       0          0         
@@ -366,7 +371,7 @@ C68_1            CIRCULAR     2                0          0          0          
 C68_2            CIRCULAR     2                0          0          0          1                    
 C69              CIRCULAR     2                0          0          0          1                    
 C70_1            RECT_CLOSED  8                5          0          0          1                    
-C70_2            RECT_CLOSED  8                5          0          0          1                    
+C70_2            RECT_CLOSED  8                5          0          0          1
 C78              RECT_CLOSED  6                5          0          0          1                    
 C84              RECT_CLOSED  6                5          0          0          1                    
 C85              RECT_CLOSED  6                5          0          0          1                    
@@ -385,10 +390,18 @@ C96              CIRCULAR     1.25             0          0          0          
 $RAINFALL_TIMESERIES$
 $TIDE_TIMESERIES$    
 
+[CURVES]
+;;Name           Type       X-Value    Y-Value   
+;;-------------- ---------- ---------- ----------
+$PUMP_CURVE_BLOCK$  
+
+[CONTROLS]
+$PUMP_RULES$
+
 [REPORT]
 ;;Reporting Options
 INPUT      YES
-CONTROLS   NO
+CONTROLS   YES
 SUBCATCHMENTS ALL
 NODES ALL
 LINKS ALL

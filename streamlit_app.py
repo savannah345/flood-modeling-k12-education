@@ -525,84 +525,26 @@ def render_focus_placement_map(plan, title, ws_shp_path, widget_key):
         key=widget_key
     )
 
-def run_swmm_scenario_baseline(
-    scenario_name: str,
-    rain_lines: List[str],
-    tide_lines: List[str],
-    lid_lines: List[str],
-    gate_flag: str,
-    duration_minutes: int,
-    template_path: str = "SWMM_Project.inp",
-    rain_minutes: List[int] = None,
-    rain_curve_in: List[float] = None,
-    sim_start_str: str = None,
-):
 
+PUMP_BLOCK = "Pump_1  J14  PumpOutfall  PumpCurve1  ON"
 
-    temp_dir  = st.session_state.temp_dir
-    inp_path  = os.path.join(temp_dir, f"{scenario_name}.inp")
-    rpt_path  = os.path.join(temp_dir, f"{scenario_name}.rpt")
-    out_path  = os.path.join(temp_dir, f"{scenario_name}.out")
+PUMP_CURVE_BLOCK = (
+    "PumpCurve1 Pump3 0 20\n"
+    "PumpCurve1 5 20\n"
+    "PumpCurve1 10 20\n"
+    "PumpCurve1 20 20\n"
+    "PumpCurve1 25 0"
+)
 
-    sim_start_dt, sim_end_dt, tally_start_dt, tally_end_dt = \
-        build_simulation_and_tally_windows(sim_start_str, rain_minutes, rain_curve_in)
-
-    # Store tally window for later clipping
-    st.session_state[f"{scenario_name}_tally_start"] = tally_start_dt
-    st.session_state[f"{scenario_name}_tally_end"]   = tally_end_dt
-
-    # Format strings for INP template
-    sim_start_date = sim_start_dt.strftime("%m/%d/%Y")
-    sim_start_time = sim_start_dt.strftime("%H:%M:%S")
-    sim_end_date   = sim_end_dt.strftime("%m/%d/%Y")
-    sim_end_time   = sim_end_dt.strftime("%H:%M:%S")
-
-    # Fill the template
-    with open(template_path, "r") as f:
-        text = f.read()
-    text = (
-        text.replace("$RAINFALL_TIMESERIES$", "\n".join(rain_lines))
-            .replace("$TIDE_TIMESERIES$", "\n".join(tide_lines))
-            .replace("$LID_USAGE$", "\n".join(lid_lines))
-            .replace("$TIDE_GATE_CONTROL$", gate_flag)
-            .replace("$SIM_START_DATE$", sim_start_date)
-            .replace("$SIM_START_TIME$", sim_start_time)
-            .replace("$SIM_END_DATE$", sim_end_date)
-            .replace("$SIM_END_TIME$", sim_end_time)
-    )
-    with open(inp_path, "w") as f:
-        f.write(text)
-
-
-    report_interval = timedelta(minutes=5)
-
-    # Step size
-    step_s = int(report_interval.total_seconds())
-
-    # Run SWMM normally (no live capture)
-    with Simulation(inp_path, rpt_path, out_path) as sim:
-        sim.step_advance(step_s)
-        for _ in sim:
-            pass
-
-    # Read RPT-based results
-    rpt_text = _read_text_keep(rpt_path)
-
-    # KEEP infiltration and runoff
-    df_runoff = extract_total_runoff_from_text(rpt_text)
-    df_ir     = extract_infiltration_and_runoff_from_text(rpt_text)
-
-    # Save outputs 
-    st.session_state.setdefault("rpts", {})[scenario_name] = rpt_text
-    st.session_state[f"{scenario_name}_inp_path"] = inp_path
-    st.session_state[f"{scenario_name}_out_path"] = out_path
-    st.session_state[f"{scenario_name}_storm_start"] = tally_start_dt
-    st.session_state[f"{scenario_name}_storm_dur_hours"] = duration_minutes / 60.00
-
-    return {
-        "df_runoff": df_runoff,
-        "df_continuity": df_ir,
-    }
+PUMP_RULES = (
+    "RULE Turn_Pump_On\n"
+    "IF NODE J14 Depth > 0\n"
+    "AND NODE J14 Head > NODE outfall Head + 0.30\n"
+    "THEN PUMP Pump_1 STATUS = ON\n\n"
+    "RULE Turn_Pump_Off\n"
+    "IF NODE J14 Head <= NODE outfall Head + 0.05\n"
+    "THEN PUMP Pump_1 STATUS = OFF"
+)
 
 def run_swmm_scenario(
     scenario_name: str,
@@ -611,10 +553,10 @@ def run_swmm_scenario(
     lid_lines: List[str],
     gate_flag: str,
     duration_minutes: int,
+    rain_minutes: List[int],
+    rain_curve_in: List[float],
+    sim_start_str: str,
     template_path: str = "SWMM_Project.inp",
-    rain_minutes: List[int] | None = None,
-    rain_curve_in: List[float] | None = None,
-    sim_start_str: str = None,
 ):
     """
     Hydraulic timestep SWMM runner with clipped flooding window.
@@ -641,9 +583,42 @@ def run_swmm_scenario(
     sim_end_date   = sim_end_dt.strftime("%m/%d/%Y")
     sim_end_time   = sim_end_dt.strftime("%H:%M:%S")
 
-    # -----------------------------------------------
-    # Build INP file
-    # -----------------------------------------------
+    is_baseline = (
+        "baseline" in scenario_name.lower() 
+        and "runoff_only" not in scenario_name.lower()
+    )
+    has_lids = (lid_lines != [";"])
+
+    # --- baseline #1: no gate, no pump ---
+    if is_baseline and gate_flag == "NO" and not has_lids:
+        pump_block = ""
+        pump_curve_block = ""
+        pump_rule_block = ""
+
+    # --- baseline #2: gate+pump, no LIDs ---
+    elif is_baseline and gate_flag == "YES":
+        pump_block = PUMP_BLOCK
+        pump_curve_block = PUMP_CURVE_BLOCK
+        pump_rule_block = PUMP_RULES
+
+    # --- LID scenario: no gate, no pump ---
+    elif has_lids and gate_flag == "NO":
+        pump_block = ""
+        pump_curve_block = ""
+        pump_rule_block = ""
+
+    # --- LID scenario: gate + pump ---
+    elif has_lids and gate_flag == "YES":
+        pump_block = PUMP_BLOCK
+        pump_curve_block = PUMP_CURVE_BLOCK
+        pump_rule_block = PUMP_RULES
+
+    # --- fallback ---
+    else:
+        pump_block = ""
+        pump_curve_block = ""
+        pump_rule_block = ""
+
     with open(template_path, "r") as f:
         text = f.read()
 
@@ -656,6 +631,9 @@ def run_swmm_scenario(
             .replace("$SIM_START_TIME$", sim_start_time)
             .replace("$SIM_END_DATE$", sim_end_date)
             .replace("$SIM_END_TIME$", sim_end_time)
+            .replace("$PUMP_BLOCK$", pump_block)
+            .replace("$PUMP_CURVE_BLOCK$", pump_curve_block)
+            .replace("$PUMP_RULES$", pump_rule_block)
     )
 
     with open(inp_path, "w") as f:
@@ -731,8 +709,23 @@ def run_swmm_scenario(
     else:
         dt = 0
 
-    flood_cols = [c for c in clipped_df.columns if c != "datetime"]
-    total_flood = float((clipped_df[flood_cols].fillna(0).sum(axis=1) * dt).sum())
+    # Exclude pump inlet node when gate is ON
+    if gate_flag == "YES" and pump_block != "":
+        pump_nodes_to_ignore = ["J14"]
+    else:
+        pump_nodes_to_ignore = []
+
+    # Determine which columns represent true flooding
+    flood_cols = [
+        c for c in clipped_df.columns
+        if c not in ["datetime"] + pump_nodes_to_ignore
+    ]
+
+    # Integrate flood volume only from valid flood nodes
+    total_flood = float(
+        (clipped_df[flood_cols].fillna(0).sum(axis=1) * dt).sum()
+    )
+
     st.session_state[f"{scenario_name}_storm_total_flood"] = total_flood
 
     use_metric = (st.session_state.get("unit_ui") == "Metric (SI)")
@@ -992,17 +985,6 @@ def app_ui():
     prefix = st.session_state.get("scenario_prefix", "")
 
     st.session_state.setdefault("rpts", {})
-
-    # Baseline loader (lightweight)
-    if "baseline_loaded" not in st.session_state:
-        # Check if user has actually run a baseline before
-        has_any_baseline = any(
-            key.startswith(f"{prefix}df_base_")
-            for key in st.session_state.keys()
-        )
-
-        st.session_state["baseline_loaded"] = has_any_baseline
-
 
     simulation_date = "05/31/2025 12:00"
     template_inp    = "SWMM_Project.inp"
@@ -1360,28 +1342,26 @@ def app_ui():
 
             # Select rainfall based on user choice
             if run_current:
-                scenario_name = f"{prefix}baseline_nogate_current"
+                scenario_name = f"{prefix}early_baseline_runoff_only"
                 rain_lines_use = rain_lines_cur
                 rain_curve_use = st.session_state["rain_sim_curve_current_in"]
             else:
-                scenario_name = f"{prefix}baseline_nogate_future"
+                scenario_name = f"{prefix}early_baseline_runoff_only"
                 rain_lines_use = rain_lines_fut
                 rain_curve_use = st.session_state["rain_sim_curve_future_in"]
 
-            # Run ONE baseline scenario (no gate)
-            info = run_swmm_scenario_baseline(
+            info = run_swmm_scenario(
                 scenario_name,
                 rain_lines_use,
                 tide_lines,
-                lid_lines,
-                "NO",   # always NO GATE
+                [";"],
+                "NO",
                 duration_minutes,
+                minutes_15,
+                rain_curve_use,
+                simulation_date,
                 template_path=template_inp,
-                rain_minutes=minutes_15,
-                rain_curve_in=rain_curve_use,
-                sim_start_str=simulation_date,
             )
-
             # Save runoff
             st.session_state[f"{scenario_name}_df"] = info["df_runoff"]
 
@@ -1395,9 +1375,9 @@ def app_ui():
             )
 
             # Persist results
-            st.session_state[f"{prefix}baseline_map_html"]    = map_html
-            st.session_state[f"{prefix}baseline_legend_html"] = legend_html
-            st.session_state[f"{prefix}baseline_ready"] = True
+            st.session_state[f"{prefix}early_baseline_map_html"]    = map_html
+            st.session_state[f"{prefix}early_baseline_legend_html"] = legend_html
+            st.session_state[f"{prefix}early_baseline_ready"] = True
 
             st.success("Baseline scenario complete.")
 
@@ -1405,7 +1385,7 @@ def app_ui():
             st.error(f"Baseline simulation failed: {e}")
 
     # Show baseline map as soon as scenario is ready
-    if st.session_state.get(f"{prefix}baseline_ready", False):
+    if st.session_state.get(f"{prefix}early_baseline_ready", False):
 
         st.markdown("### Baseline Runoff and Land Cover")
 
@@ -1414,12 +1394,12 @@ def app_ui():
         with c1:
             st.markdown("#### Modeled Runoff")
             components.v1.html(
-                st.session_state[f"{prefix}baseline_map_html"],
+                st.session_state[f"{prefix}early_baseline_map_html"],
                 height=500,
                 scrolling=False
             )
             st.markdown(
-                st.session_state[f"{prefix}baseline_legend_html"],
+                st.session_state[f"{prefix}early_baseline_legend_html"],
                 unsafe_allow_html=True
             )
 
@@ -1986,7 +1966,8 @@ def app_ui():
 
                         # Run the SWMM scenario
                         full_scen_key = f"{prefix}{scen_key}"
-                        
+
+                       
                         run_swmm_scenario(
                             full_scen_key,
                             rain_lines,
@@ -1994,10 +1975,10 @@ def app_ui():
                             lid_lines,
                             gate_flag,
                             duration_minutes,
+                            minutes_15,
+                            rain_curve,
+                            simulation_date,
                             template_path=template_inp,
-                            rain_minutes=minutes_15,
-                            rain_curve_in=rain_curve,
-                            sim_start_str=simulation_date,
                         )
 
                         # Store outputs
@@ -2067,7 +2048,7 @@ def app_ui():
                     "Scenario:N",
                     sort=df_flood_sorted["Scenario"].tolist(),
                     axis=alt.Axis(
-                        labelFontSize=18,     # BIGGER scenario text
+                        labels=False,
                         title=None
                     )
                 ),
@@ -2137,10 +2118,8 @@ def app_ui():
 
             # compute peak depths for each scenario
             dfA = compute_peak_inundation(tsA, DEM_PATH, NODES_SHP_PATH,
-                                        "U.S. Customary",
                                         FLOWDIR_PATH)
             dfB = compute_peak_inundation(tsB, DEM_PATH, NODES_SHP_PATH,
-                                        "U.S. Customary",
                                         FLOWDIR_PATH)
 
             # combine into single df
