@@ -1,7 +1,6 @@
 import os, re, sys, shutil, tempfile, subprocess
 from datetime import datetime, timedelta
 from typing import Dict, Tuple, List
-import html
 
 import streamlit as st
 import pandas as pd
@@ -105,20 +104,6 @@ PIPES_SHP_PATH= st.session_state.get("PIPES_SHP_PATH", "map_files/Conduits.shp")
 NODES_SHP_PATH= st.session_state.get("NODES_SHP_PATH", "map_files/Nodes.shp")
 DEM_PATH = st.session_state.get("DEM_PATH", "map_files/DEM.tif")
 FLOWDIR_PATH = st.session_state.get("FLOWDIR_PATH", "map_files/flow_direction.tif")
-
-def get_clean_scenario_label(subset_key: str, gate_key: str, rain_label: str) -> str:
-    """Return a clean scenario label for maps, charts, etc."""
-    pretty_subset = {
-        "baseline": "Baseline",
-        "all": "All Subcatchments",
-        "upstream": "Upstream",
-        "downstream": "Downstream",
-        "highrunoff": "High-Runoff",
-    }[subset_key]
-
-    pretty_gate = "TG ON" if gate_key == "gate" else "TG OFF"
-
-    return f"{pretty_subset} – {pretty_gate}"
 
 @st.cache_resource(show_spinner=False)
 def load_ws(path="map_files/Subcatchments.shp") -> gpd.GeoDataFrame:
@@ -270,9 +255,6 @@ def _rain_lines_pair(sim_minutes, rain_curve_in, sim_start_str, future_mult=futu
     fut = format_timeseries("rain_gage_timeseries", sim_minutes, fut_vals, sim_start_str)
     return cur, fut
     
-
-from typing import Dict, Tuple, Set
-
 def load_caps_from_df(df: pd.DataFrame) -> Tuple[Dict[str,int], Dict[str,int]]:
     if "NAME" not in df.columns or "Max_RG_DEM_Considered" not in df.columns or "MaxNumber_RB" not in df.columns:
         raise ValueError("raster_df must have NAME, Max_RG_DEM_Considered, MaxNumber_RB")
@@ -389,11 +371,6 @@ def solve_group_percents_to_budget(pRG_global: float, pRB_global: float,
     plan_g = realize_percent_uptake_for_group(pRG_g, pRB_g, caps_RG, caps_RB, group_names)
     plan_g = largest_remainder_toward_budget(plan_g, caps_RG, caps_RB, cRG, cRB, target_budget)
     return pRG_g, pRB_g, plan_g
-
-
-def restrict_plan_to_group(plan: Dict[str, Dict[str,int]], group_names: Set[str]) -> Dict[str, Dict[str,int]]:
-    group = set(group_names or set())
-    return {s: v for s, v in plan.items() if s in group}
 
 def summarize_plan(plan: Dict[str, Dict[str,int]], cRG: float, cRB: float) -> dict:
     total_rg = sum(v["rain_gardens"] for v in plan.values())
@@ -766,24 +743,6 @@ def run_swmm_scenario(
         "df_continuity": df_ir,
     }
 
-def build_inundation_deck(df):
-    if df.empty:
-        return pdk.Deck()
-    layer = pdk.Layer(
-        "ScatterplotLayer",
-        data=df,
-        get_position='[lon, lat]',
-        get_radius=3,
-        get_fill_color='[0, 0, 255 * depth, 180]',
-        pickable=False
-    )
-    view_state = pdk.ViewState(
-        latitude=df["lat"].mean(),
-        longitude=df["lon"].mean(),
-        zoom=14.25
-    )
-    return pdk.Deck(layers=[layer], initial_view_state=view_state, map_style="light")
-
 def _build_baseline_map_html(df_swmm_local: pd.DataFrame, unit_ui: str, ws_shp_path: str) -> str:
     ws_gdf_local = load_ws(ws_shp_path)
     gdf, unit_r = prep_total_runoff_gdf(df_swmm_local, unit_ui, ws_gdf_local)
@@ -958,22 +917,6 @@ def generate_lid_usage_lines(lid_config: Dict[str, Dict[str, int]], excel_df: pd
             )
 
     return lines
-
-def _sc_store(prefix: str) -> dict:
-    key = f"{prefix}scenarios"
-    if key not in st.session_state:
-        st.session_state[key] = {}
-    return st.session_state[key]
-
-def remember_scenario(name: str, df_runoff: pd.DataFrame, prefix: str = ""):
-    store = _sc_store(prefix)
-
-    store[name] = {
-        "df": df_runoff.copy(deep=True) if df_runoff is not None else None,
-        }
-
-def recall_scenario(name: str, prefix: str = ""):
-    return _sc_store(prefix).get(name)
 
 def login_ui():
     st.title("🌊 CoastWise Login")

@@ -31,19 +31,6 @@ pf_df = pd.DataFrame({
     "25": [3.58, 4.07, 4.77, 5.25, 5.41, 5.73],
 })
 
-
-
-def convert_units(value_in_inches: float, unit: str) -> float:
-    """
-    Convert rainfall depth from inches -> inches (U.S.) or centimeters (Metric).
-    """
-    if unit == "U.S. Customary":
-        return value_in_inches
-    elif unit == "Metric (SI)":
-        return value_in_inches * 2.54
-    else:
-        raise ValueError("Unsupported unit. Use 'U.S. Customary' or 'Metric (SI)'.")
-
 def feet_to_meters(series_or_array):
     return series_or_array * 0.3048
 
@@ -146,9 +133,6 @@ def find_tide_extrema(
     troughs, _ = find_peaks(-tide_curve_15min, distance=distance_bins, prominence=prominence)
     return peaks, troughs
 
-# ============================================================
-# 6) Align rainfall to a tide curve (length-agnostic)
-# ============================================================
 def align_rainfall_to_tide(total_inches: float,
                            duration_minutes: int,
                            tide_curve_15min: np.ndarray,
@@ -167,9 +151,6 @@ def align_rainfall_to_tide(total_inches: float,
     - target_index: if set, center the storm at this index (overrides 'align')
     Returns (minutes_15, rain_15, center_index_used)
     """
-    if method != "SCS_TypeIII":
-        raise ValueError("Only 'SCS_TypeIII' is supported. Remove 'Normal' and 'Randomized' uses.")
-
     if duration_minutes % 15 != 0:
         raise ValueError("duration_minutes must be divisible by 15.")
     n = int(len(tide_curve_15min))
@@ -451,10 +432,6 @@ def get_tide_real_or_synthetic(moon_phase: str,
         m15, tide_15 = generate_tide_curve(moon_phase, unit)
         return m15, tide_15, False
 
-
-# ============================================================
-# 10) High-level helper: get tide (live or synthetic) and aligned rainfall
-# ============================================================
 def get_aligned_rainfall(
     total_inches: float,
     duration_minutes: int,
@@ -472,7 +449,6 @@ def get_aligned_rainfall(
     m15, tide_15, used_live = get_tide_real_or_synthetic(
         moon_phase, unit, start_ts, navd88_to_sea_level_offset_ft  # << forward it
     )
-    # ...rest unchanged...
 
     # Choose a target index near the series midpoint based on peaks/lows.
     peaks, troughs = find_tide_extrema(tide_15, prominence=prominence)
