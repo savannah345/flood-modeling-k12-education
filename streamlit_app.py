@@ -2054,24 +2054,12 @@ def app_ui():
 
     st.markdown("### Flooding Summary")
 
-    show_summary = st.button("Show Flooding Summary", key="btn_fld_summary")
+    # === ALWAYS SHOW FLOODING SUMMARY ONCE SCENARIOS FINISH ===
+    if st.session_state.get("scenarios_finished", False):
 
-    # If button clicked, regenerate and store the chart
-    if show_summary:
-
-        if not st.session_state.get("scenarios_finished", False):
-            st.warning("Please run all scenarios first using 'Run All Scenarios'.")
-            st.stop()
-
-        scenario_labels = st.session_state.get("scenario_labels_saved", {})
-        flood_data      = st.session_state.get("scenario_flood_saved", {})
-        infil_data      = st.session_state.get("scenario_infil_saved", {})
-
-        if not scenario_labels:
-            st.error("No scenario results, cannot build flooding summary.")
-            st.stop()
-
-        st.markdown("## Flooding Summary Across All 10 Scenarios")
+        scenario_labels = st.session_state["scenario_labels_saved"]
+        flood_data      = st.session_state["scenario_flood_saved"]
+        infil_data      = st.session_state["scenario_infil_saved"]
 
         df_log = pd.DataFrame([
             {
@@ -2087,13 +2075,11 @@ def app_ui():
 
         min_flood = df_flood_sorted["Flooding"].min()
         max_flood = df_flood_sorted["Flooding"].max()
-
-        # Start at lowest number with 1% padding
         x_domain_flood = [max(min_flood * 0.99, 0), max_flood]
 
-        import altair as alt
         alt.data_transformers.disable_max_rows()
 
+        # --- BIGGER LABELS + EXTRA PADDING ---
         bars = (
             alt.Chart(df_flood_sorted)
             .mark_bar()
@@ -2101,15 +2087,26 @@ def app_ui():
                 x=alt.X(
                     "Flooding:Q",
                     title="Flood Volume (ft³)",
-                    scale=alt.Scale(domain=x_domain_flood)
+                    scale=alt.Scale(domain=x_domain_flood, nice=True, padding=25),
+                    axis=alt.Axis(
+                        titleFontSize=20,
+                        labelFontSize=18,
+                        titlePadding=15
+                    )
                 ),
                 y=alt.Y(
                     "Scenario:N",
                     sort=df_flood_sorted["Scenario"].tolist(),
-                    axis=None
+                    axis=alt.Axis(
+                        labelFontSize=18,     # BIGGER scenario text
+                        title=None
+                    )
                 ),
                 color=alt.Color("ScenarioColor:N", legend=None),
-                tooltip=["Scenario:N", alt.Tooltip("Flooding:Q", format=",.1f")]
+                tooltip=[
+                    "Scenario:N",
+                    alt.Tooltip("Flooding:Q", format=",.1f")
+                ]
             )
         )
 
@@ -2118,31 +2115,31 @@ def app_ui():
             .mark_text(
                 align="left",
                 baseline="middle",
-                dx=5
+                dx=6,
+                fontSize=18,      # bigger
+                color="black"
             )
             .encode(
-                x=alt.X(
-                    "Flooding:Q",
-                    scale=alt.Scale(domain=x_domain_flood)
-                ),
-                y=alt.Y(
-                    "Scenario:N",
-                    sort=df_flood_sorted["Scenario"].tolist()
-                ),
+                x=alt.X("Flooding:Q", scale=alt.Scale(domain=x_domain_flood)),
+                y=alt.Y("Scenario:N", sort=df_flood_sorted["Scenario"].tolist()),
                 text="Scenario:N"
             )
         )
 
         flood_chart = (bars + labels).properties(
-            height=30 * len(df_flood_sorted) + 60
-        ).configure_view(strokeWidth=0)
-
-        # SAVE chart so it stays on screen
+            height=40 * len(df_flood_sorted) + 80,   # more vertical spacing
+            padding={"left": 10, "right": 50, "top": 10, "bottom": 50}  # prevents cutoff
+        ).configure_view(
+            strokeWidth=0
+        )
+        
         st.session_state["flood_summary_chart"] = flood_chart
+        st.altair_chart(flood_chart, use_container_width=True)
 
-    # ALWAYS DISPLAY THE SAVED CHART IF AVAILABLE
-    if st.session_state["flood_summary_chart"] is not None:
-        st.altair_chart(st.session_state["flood_summary_chart"], use_container_width=True)
+    
+    st.toggle("Flood Summary Loaded", value=False, key="trigger_flood_summary")
+
+
 
     if st.session_state.get("display_summary", False):
 
@@ -2169,6 +2166,7 @@ def app_ui():
             tsA = st.session_state["scenario_flood_ts"][scenA_key]
             tsB = st.session_state["scenario_flood_ts"][scenB_key]
 
+            # compute peak depths for each scenario
             dfA = compute_peak_inundation(tsA, DEM_PATH, NODES_SHP_PATH,
                                         st.session_state.get("unit_ui", "U.S. Customary"),
                                         FLOWDIR_PATH)
@@ -2176,8 +2174,16 @@ def app_ui():
                                         st.session_state.get("unit_ui", "U.S. Customary"),
                                         FLOWDIR_PATH)
 
+            # combine into single df
             df_diff = dfA.copy()
-            df_diff["depth"] = dfB["depth"] - dfA["depth"]
+            df_diff[scenB_label] = dfB["depth"]
+            df_diff[scenA_label] = dfA["depth"]
+
+            # total volumes
+            totalA = st.session_state["scenario_flood_saved"][scenA_key]
+            totalB = st.session_state["scenario_flood_saved"][scenB_key]
+
+            unit_vol = "m³" if st.session_state["unit_ui"] == "Metric (SI)" else "ft³"
 
             diverging_colors = [
                 [165, 0, 38],
@@ -2193,50 +2199,152 @@ def app_ui():
                 [49, 54, 149]
             ]
 
-            def build_difference_map(df):
-                df = df.copy()
-                df["weight"] = df["depth"]
+            def build_difference_map(df, scenarioA_label, scenarioB_label,
+                                    totalA, totalB, unit_vol):
+                """
+                Builds a difference map where colors always show:
+                Blue = good scenario reduced flooding here
+                Red  = good scenario increased flooding here
+                
+                'Good' scenario = the one with LOWER total flooding.
+                """
 
-                lyr = pdk.Layer(
-                    "HeatmapLayer",
+                df = df.copy()
+
+                if totalA <= totalB:
+                    good_label = scenarioA_label
+                    bad_label = scenarioB_label
+                else:
+                    good_label = scenarioB_label
+                    bad_label = scenarioA_label
+
+                # store good/bad
+                df["good_flood"] = df[good_label]
+                df["bad_flood"] = df[bad_label]
+
+
+                df["depth_diff"] = df["bad_flood"] - df["good_flood"]
+
+                vmax = np.nanmax(np.abs(df["depth_diff"]))
+                if not (isinstance(vmax, (float, int)) and np.isfinite(vmax) and vmax > 0):
+                    vmax = 1e-6
+
+                def color_for(row):
+                    d = float(row["depth_diff"])
+                    intensity = int(255 * min(abs(d) / vmax, 1.0))
+                    if d < 0:
+                        # Blue = good scenario improved flooding
+                        return [30, 60, 200, intensity]
+                    elif d > 0:
+                        # Red = good scenario worsened flooding
+                        return [200, 40, 30, intensity]
+                    else:
+                        return [200, 200, 200, 50]
+
+                df["color"] = df.apply(color_for, axis=1)
+
+
+                df["depth_diff_rounded"] = df["depth_diff"].round(2)
+
+                layer = pdk.Layer(
+                    "ScatterplotLayer",
                     data=df,
                     get_position='[lon, lat]',
-                    get_weight="weight",
-                    radiusPixels=35,
-                    aggregation="SUM",
-                    colorRange=diverging_colors,
+                    get_radius=12,
+                    get_fill_color="color",
+                    pickable=True,
+                    auto_highlight=True,
+                    # EXPLICITLY expose the field to PyDeck tooltip interpolation
+                    get_depth_diff_rounded="depth_diff_rounded"
                 )
 
+
+                # Subcatchment polygons
+                ws_gdf = load_ws(WS_SHP_PATH)
+                poly_layer = pdk.Layer(
+                    "GeoJsonLayer",
+                    data=ws_gdf.__geo_interface__,
+                    filled=False,
+                    stroked=True,
+                    get_line_color=[0, 0, 0, 120],
+                    line_width_min_pixels=1
+                )
+
+                # View state
                 vs = pdk.ViewState(
                     latitude=df["lat"].mean(),
                     longitude=df["lon"].mean(),
                     zoom=14.3
                 )
 
-                return pdk.Deck(
-                    layers=[lyr],
+                # ------- Tooltip -------
+                tooltip = {
+                    "html": """
+                        <div style='background:white; color:black; padding:6px;
+                            border-radius:6px; font-size:14px;'>
+                            <b>Good scenario:</b> {good_label}<br>
+                            <b>Depth diff:</b> {depth_diff_rounded} """ + unit_vol + """
+                        </div>
+                    """,
+                    "style": {
+                        "color": "black",
+                        "backgroundColor": "white",
+                        "border": "1px solid #888",
+                        "borderRadius": "8px",
+                        "padding": "6px"
+                    }
+                }
+
+                deck = pdk.Deck(
+                    layers=[poly_layer, layer],
                     initial_view_state=vs,
                     map_style="light",
-                    tooltip={"html": "<b>Difference (B – A):</b> {depth}"}
+                    tooltip=tooltip,
                 )
+                return deck, good_label, bad_label
 
-            st.markdown(f"### Flood Difference: **{scenB_label} − {scenA_label}**")
-            st.pydeck_chart(build_difference_map(df_diff), use_container_width=True)
 
-            unit_vol = "m³" if st.session_state["unit_ui"] == "Metric (SI)" else "ft³"
+            deck, good_label, bad_label = build_difference_map(
+                df_diff,
+                scenarioA_label=scenA_label,
+                scenarioB_label=scenB_label,
+                totalA=totalA,
+                totalB=totalB,
+                unit_vol=unit_vol
+            )
 
+            # Label above map
             st.markdown(
                 f"""
-                <div style='margin-top:15px;'>
-                    <b>Diverging Scale (Difference in Flood Volume, {unit_vol})</b><br>
-                    <span style='color:#a50026;'>More flooding in A</span> →
-                    <span style='color:#000;'>No change</span> →
-                    <span style='color:#313695;'>More flooding in B</span>
-                </div>
-                """,
-                unsafe_allow_html=True
+                ### Flood Difference Map  
+                **Scenario A:** {good_label} (lower total flood volume among the two selected)  
+                **Scenario B:** {bad_label}
+                """
             )
- 
+
+            st.pydeck_chart(deck, use_container_width=True)
+
+            # Legend
+            st.markdown(f"""
+            <div style='margin-top:10px;'>
+                <b>Difference Scale (relative to Scenario A)</b>
+                <div style="
+                    height: 18px;
+                    background: linear-gradient(to right,
+                        rgb(200,40,30),      /* worse */
+                        rgb(255,255,255),    /* equal */
+                        rgb(30,60,200)       /* better */
+                    );
+                    border: 1px solid #666;
+                    margin-top:4px;">
+                </div>
+                <div style='display:flex; justify-content:space-between; font-size:13px;'>
+                    <span style='color:rgb(200,40,30);'>Scenario B better here</span>
+                    <span>No change</span>
+                    <span style='color:rgb(30,60,200);'>Scenario A better here</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
 
     st.markdown("---")
     if st.button("🚪 Logout"):
