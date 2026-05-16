@@ -186,7 +186,7 @@ rain_barrel      STORAGE    34.25      0.75       0.5        0          YES
 rain_barrel      DRAIN      0          0.5        6          6          0          0                    
 
 rain_garden      RG
-rain_garden      SURFACE    6          0.25       0.1        1.0        5         
+rain_garden      SURFACE    2          0.25       0.1        1.0        5         
 rain_garden      SOIL       24         .453       0.2        0.1        0.43       10.0       4.33      
 rain_garden      STORAGE    0          0.75       0.5        0          NO        
 

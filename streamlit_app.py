@@ -74,6 +74,26 @@ canvas {
 </style>
 """, unsafe_allow_html=True)
 
+def to_ui_depth(ft, ui_unit):
+    if ui_unit == "Metric (SI)":
+        return ft * 0.3048
+    return ft
+
+def to_ui_volume(ft3, ui_unit):
+    if ui_unit == "Metric (SI)":
+        return ft3 * 0.0283168
+    return ft3
+
+def to_ui_rain(inches, ui_unit):
+    if ui_unit == "Metric (SI)":
+        return inches * 2.54
+    return inches
+
+def to_ui_tide(feet, ui_unit):
+    if ui_unit == "Metric (SI)":
+        return feet * 0.3048
+    return feet
+
 def _read_text_keep(path: str) -> str:
     """Read file contents and keep artifacts in temp for later use."""
     try:
@@ -153,10 +173,6 @@ def build_simulation_and_tally_windows(sim_start_str, rain_minutes, rain_curve_i
     tally_end_dt   = rain_end_dt + timedelta(hours=2)
 
     return sim_start_dt, sim_end_dt, tally_start_dt, tally_end_dt
-
-def tide_to_feet_for_swmm(tide_curve_ui: np.ndarray, ui_unit: str) -> np.ndarray:
-    arr = np.asarray(tide_curve_ui, dtype=float)
-    return arr if ui_unit == "U.S. Customary" else (arr / 0.3048)
 
 def format_timeseries(name: str, minutes: np.ndarray, values: np.ndarray, start_datetime: str) -> List[str]:
     start_dt = datetime.strptime(start_datetime, "%m/%d/%Y %H:%M")
@@ -1023,18 +1039,20 @@ def app_ui():
     </style>
     """, unsafe_allow_html=True)
 
+    cfg = st.session_state.get("cfg", {})
 
-    if "cfg" not in st.session_state:
-        st.session_state.cfg = {
-            "unit": "U.S. Customary",
-            "moon_phase": list(moon_tide_ranges.keys())[0],
-            "duration_minutes": int(pf_df["Duration_Minutes"].iloc[0]),
-            "return_period": "1",
-            "align_mode": "peak",  
-            "settings_ready": False,
-        }
-        st.session_state.pop(f"{prefix}grid_ready", None)
-    cfg = st.session_state.cfg
+    # Ensure all required keys exist, even if cfg was created in an older version
+    cfg.setdefault("ui_unit", "U.S. Customary")
+    cfg.setdefault("moon_phase", list(moon_tide_ranges.keys())[0])
+    cfg.setdefault("duration_minutes", int(pf_df["Duration_Minutes"].iloc[0]))
+    cfg.setdefault("return_period", "1")
+    cfg.setdefault("align_mode", "peak")
+    cfg.setdefault("settings_ready", False)
+
+    # Save back
+    st.session_state.cfg = cfg
+    st.session_state["ui_unit"] = cfg["ui_unit"]
+
     st.success(
         "Use the controls below to configure your storm scenario. "
         "These settings determine the rainfall event, tide conditions, and alignment "
@@ -1046,7 +1064,7 @@ def app_ui():
         unit = st.radio(
             "Preferred Units",
             ["U.S. Customary", "Metric (SI)"],
-            index=(0 if cfg["unit"] == "U.S. Customary" else 1),
+            index=(0 if cfg["ui_unit"] == "U.S. Customary" else 1),
             horizontal=True,
             help=(
                 "Choose how rainfall and tide inputs should be displayed. "
@@ -1143,7 +1161,7 @@ def app_ui():
 
     if submitted:
         st.session_state.cfg = {
-            "unit": unit,
+            "ui_unit": unit,
             "moon_phase": moon_phase,
             "duration_minutes": int(duration_minutes),
             "return_period": str(return_period),  # keep as string; downstream expects str
@@ -1168,7 +1186,7 @@ def app_ui():
         st.stop() 
 
     align_mode       = cfg["align_mode"]
-    unit             = cfg["unit"]
+    unit             = cfg["ui_unit"]
     moon_phase       = cfg["moon_phase"]
     duration_minutes = int(cfg["duration_minutes"])
     return_period    = cfg["return_period"]
@@ -1206,18 +1224,18 @@ def app_ui():
         )
         tide_source = "synthetic"
 
-    if unit == "U.S. Customary":
-        display_rain_curve = rain_curve_in        
-        display_tide_curve = tide_curve_ui        
-        rain_disp_unit = "in"; tide_disp_unit = "ft"
-        flooding_unit = "ft3"
-        infiltration_unit = "ft3"    
-    else:
-        display_rain_curve = rain_curve_in * 2.54  
-        display_tide_curve = tide_curve_ui         
-        rain_disp_unit = "cm"; tide_disp_unit = "m"
-        flooding_unit = "ft3"
-        infiltration_unit = "ft3"    
+
+
+    ui_unit = st.session_state.get("ui_unit", "U.S. Customary")
+
+    display_rain_curve = to_ui_rain(rain_curve_in, ui_unit)
+    display_tide_curve = to_ui_tide(tide_curve_ui, ui_unit)
+
+    rain_disp_unit = "in" if ui_unit == "U.S. Customary" else "cm"
+    tide_disp_unit = "ft" if ui_unit == "U.S. Customary" else "m"
+
+    # flooding / infiltration always computed in ft³
+    display_flood_unit = "ft³" if ui_unit == "U.S. Customary" else "m³"
 
     st.session_state.update({
         "rain_minutes": minutes_15,
@@ -1237,10 +1255,11 @@ def app_ui():
         f"{prefix}template_inp": template_inp,
     })
 
+
     tide_lines = format_timeseries(
         "tide",
         minutes_15,
-        tide_to_feet_for_swmm(st.session_state["display_tide_curve"], unit),
+        tide_curve_ui,   # <-- ALWAYS feet, no UI conversion here
         simulation_date
     )
 
@@ -1740,7 +1759,7 @@ def app_ui():
                 "fa_place_hi"
             )
 
-    RG_STORAGE_FT3 = 140.58
+    RG_STORAGE_FT3 = 107.27
     RB_STORAGE_FT3 = 7.34
 
     def build_focus_summary_df(plans_dict: dict, unit_cost_rg: float, unit_cost_rb: float) -> pd.DataFrame:
@@ -1778,7 +1797,12 @@ def app_ui():
             "Downstream": plan_downstr,
             "High runoff": plan_highro,
         }
-        df_sum = build_focus_summary_df(plans_dict, unit_cost_rg, unit_cost_rb)  # uses Storage_yd3, TotalCost_K, counts
+        df_sum = build_focus_summary_df(plans_dict, unit_cost_rg, unit_cost_rb)  
+        # Apply unit conversion to storage volumes for UI
+        ui_unit = st.session_state.get("unit_ui", "U.S. Customary")
+
+        df_sum["Storage_ft3"] = df_sum["Storage_ft3"].apply(lambda v: to_ui_volume(v, ui_unit))
+        storage_unit = "ft³" if ui_unit == "U.S. Customary" else "m³"
 
         # Focus area ordering: sort by Total Cost ($K) descending
         focus_order = df_sum.sort_values("TotalCost_K", ascending=False)["Focus Area"].tolist()
@@ -1887,8 +1911,8 @@ def app_ui():
             ch_cost = _metric_chart(df_sum, "TotalCost_K", "Total cost ($K)", focus_colors, focus_order)
             st.altair_chart(ch_cost, use_container_width=True)
         with row2[1]:
-            st.markdown("**Storage (ft³)**")
-            ch_storage = _metric_chart(df_sum, "Storage_ft3", "Storage (ft³)", focus_colors, focus_order)
+            st.markdown(f"**Storage ({storage_unit})**")
+            ch_storage = _metric_chart(df_sum, "Storage_ft3", f"Storage ({storage_unit})", focus_colors, focus_order)
             st.altair_chart(ch_storage, use_container_width=True)
 
         if plan_base is not None:
@@ -2004,11 +2028,13 @@ def app_ui():
         flood_data      = st.session_state["scenario_flood_saved"]
         infil_data      = st.session_state["scenario_infil_saved"]
 
+        ui_unit = st.session_state.get("unit_ui", "U.S. Customary")
+
         df_log = pd.DataFrame([
             {
                 "Scenario": scenario_labels[k],
-                "Flooding": flood_data.get(k, 0.0),
-                "Infiltration": infil_data.get(k, 0.0)
+                "Flooding": to_ui_volume(flood_data.get(k, 0.0), ui_unit),
+                "Infiltration": to_ui_volume(infil_data.get(k, 0.0), ui_unit)
             }
             for k in scenario_labels
         ])
@@ -2021,7 +2047,7 @@ def app_ui():
         x_domain_flood = [max(min_flood * 0.99, 0), max_flood]
 
         alt.data_transformers.disable_max_rows()
-
+        display_flood_unit = "ft³" if ui_unit == "U.S. Customary" else "m³"
         # --- BIGGER LABELS + EXTRA PADDING ---
         bars = (
             alt.Chart(df_flood_sorted)
@@ -2029,7 +2055,7 @@ def app_ui():
             .encode(
                 x=alt.X(
                     "Flooding:Q",
-                    title="Flood Volume (ft³)",
+                    title=f"Flood Volume ({display_flood_unit})",
                     scale=alt.Scale(domain=x_domain_flood, nice=True, padding=25),
                     axis=alt.Axis(
                         titleFontSize=20,
@@ -2111,16 +2137,17 @@ def app_ui():
 
             # compute peak depths for each scenario
             dfA = compute_peak_inundation(tsA, DEM_PATH, NODES_SHP_PATH,
-                                        st.session_state.get("unit_ui", "U.S. Customary"),
+                                        "U.S. Customary",
                                         FLOWDIR_PATH)
             dfB = compute_peak_inundation(tsB, DEM_PATH, NODES_SHP_PATH,
-                                        st.session_state.get("unit_ui", "U.S. Customary"),
+                                        "U.S. Customary",
                                         FLOWDIR_PATH)
 
             # combine into single df
             df_diff = dfA.copy()
-            df_diff[scenB_label] = dfB["depth"]
-            df_diff[scenA_label] = dfA["depth"]
+            ui_unit = st.session_state.get("unit_ui", "U.S. Customary")
+            df_diff[scenB_label] = to_ui_depth(dfB["depth"], ui_unit)
+            df_diff[scenA_label] = to_ui_depth(dfA["depth"], ui_unit)
 
             # total volumes
             totalA = st.session_state["scenario_flood_saved"][scenA_key]
