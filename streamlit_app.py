@@ -291,102 +291,9 @@ def realize_percent_uptake(pRG_percent: float, pRB_percent: float,
         out[s] = {"rain_gardens": rg, "rain_barrels": rb}
     return out
 
-def compute_percent_pair_for_budget(B: float, cRG: float, cRB: float,
-                                    CapRG_total: int, CapRB_total: int,
-                                    pin_type: str, pin_value_percent: float) -> Tuple[float, float]:
-    pin_type = pin_type.upper().strip()
-    pin_value = max(0.0, min(100.0, float(pin_value_percent)))
-    if pin_type == "RG":
-        pRG = pin_value
-        pRB_star = (B - cRG * (pRG/100.0) * CapRG_total) / (cRB * CapRB_total) if CapRB_total > 0 else 0.0
-        pRB = max(0.0, min(100.0, pRB_star * 100.0))
-        return round(pRG, 1), round(pRB, 1)
-    elif pin_type == "RB":
-        pRB = pin_value
-        pRG_star = (B - cRB * (pRB/100.0) * CapRB_total) / (cRG * CapRG_total) if CapRG_total > 0 else 0.0
-        pRG = max(0.0, min(100.0, pRG_star * 100.0))
-        return round(pRG, 1), round(pRB, 1)
-    else:
-        raise ValueError("pin_type must be 'RG' or 'RB'")
-
-def group_cap_totals(caps_RG: dict, caps_RB: dict, group_names: set[str]) -> tuple[int,int]:
-    g = set(group_names or set())
-    CapRG_group = sum(caps_RG.get(s, 0) for s in g)
-    CapRB_group = sum(caps_RB.get(s, 0) for s in g)
-    return int(CapRG_group), int(CapRB_group)
-
-def realize_percent_uptake_for_group(pRG_percent: float, pRB_percent: float,
-                                     caps_RG: dict, caps_RB: dict,
-                                     group_names: set[str]) -> dict:
-    pRG = max(0.0, min(100.0, float(pRG_percent)))
-    pRB = max(0.0, min(100.0, float(pRB_percent)))
-    out = {}
-    g = set(group_names or set())
-    for s in g:
-        rg = int(np.floor((pRG/100.0) * (caps_RG.get(s, 0) or 0)))
-        rb = int(np.floor((pRB/100.0) * (caps_RB.get(s, 0) or 0)))
-        out[s] = {"rain_gardens": rg, "rain_barrels": rb}
-    return out
 
 def plan_cost(plan: dict, cRG: float, cRB: float) -> float:
     return cRG * sum(v["rain_gardens"] for v in plan.values()) + cRB * sum(v["rain_barrels"] for v in plan.values())
-
-def largest_remainder_toward_budget(plan: dict, caps_RG: dict, caps_RB: dict,
-                                    cRG: float, cRB: float, target_budget: float) -> dict:
-    """
-    Greedy add units (respecting caps) until you reach or slightly pass the target budget.
-    Adds lower-cost units first to reduce jumps. Change ordering if you prefer RG-first.
-    """
-    spend = plan_cost(plan, cRG, cRB)
-    if spend >= target_budget:
-        return plan
-
-    # Build remaining capacity slots
-    candidates = []
-    for s, v in plan.items():
-        rem_rg = (caps_RG.get(s, 0) or 0) - v["rain_gardens"]
-        rem_rb = (caps_RB.get(s, 0) or 0) - v["rain_barrels"]
-        if rem_rg > 0:
-            candidates += [("RG", s, cRG)] * rem_rg
-        if rem_rb > 0:
-            candidates += [("RB", s, cRB)] * rem_rb
-
-    # Add cheapest first to approach budget smoothly
-    candidates.sort(key=lambda x: x[2])
-
-    for t, s, cost in candidates:
-        if spend + cost > target_budget:
-            break
-        if t == "RG":
-            plan[s]["rain_gardens"] += 1
-        else:
-            plan[s]["rain_barrels"] += 1
-        spend += cost
-
-    return plan
-
-def solve_group_percents_to_budget(pRG_global: float, pRB_global: float,
-                                   caps_RG: dict, caps_RB: dict,
-                                   group_names: set[str],
-                                   cRG: float, cRB: float, target_budget: float) -> tuple[float, float, dict]:
-    """
-    Scale both percents together by α so the group's continuous spend ≈ target_budget,
-    then realize as integers and nudge toward budget. Keeps your selected RG/RB 'style'.
-    """
-    CapRG_g, CapRB_g = group_cap_totals(caps_RG, caps_RB, group_names)
-    denom = cRG * (pRG_global/100.0) * CapRG_g + cRB * (pRB_global/100.0) * CapRB_g
-    if denom <= 0:
-        # No capacity → zero plan
-        return 0.0, 0.0, {s: {"rain_gardens": 0, "rain_barrels": 0} for s in group_names}
-
-    alpha = target_budget / denom
-    pRG_g = max(0.0, min(100.0, pRG_global * alpha))
-    pRB_g = max(0.0, min(100.0, pRB_global * alpha))
-
-    # Realize integers, then nudge spend
-    plan_g = realize_percent_uptake_for_group(pRG_g, pRB_g, caps_RG, caps_RB, group_names)
-    plan_g = largest_remainder_toward_budget(plan_g, caps_RG, caps_RB, cRG, cRB, target_budget)
-    return pRG_g, pRB_g, plan_g
 
 def summarize_plan(plan: Dict[str, Dict[str,int]], cRG: float, cRB: float) -> dict:
     total_rg = sum(v["rain_gardens"] for v in plan.values())
@@ -1440,94 +1347,88 @@ def app_ui():
 
     # Explain the two paths *before* any controls
     st.info(
-        "**Path A – Percent Uptake (whole watershed):** Choose the percent rain garden and rain barrel uptake across the whole watershed, highlighting collective action across the watershed."
-    )
-
-    st.info(
-
-        "**Path B – Known Budget → Feasible Uptake:** Enter a budget and unit costs for the rain gardens and rain barrels. Pin the percent rain garden or rain barrel to indicate how much of the budget should be devoted to a type of low impact developement. CoastWise solves "
-        "the other percent so the plan fits the budget, then reports the rain garden and rain barrel counts and the total costs.\n\n"
+        "**Percent Uptake (whole watershed):** Choose the percent rain garden and rain barrel uptake across the whole watershed, highlighting collective action across the watershed."
     )
 
     path_choice = st.selectbox(
         "Select a planning path:",
-        ["— Select a planning path —", "Path A — Percent Uptake", "Path B — Budget to Percent"],
+        ["Percent Uptake"],
         index=0
     )
 
-    if path_choice == "— Select a planning path —":
-        st.stop()  
-
     # Load per-subcatchment maxima from raster_df
     caps_RG, caps_RB = load_caps_from_df(raster_df)
-    CapRG_total = int(sum(caps_RG.values()))
-    CapRB_total = int(sum(caps_RB.values()))
 
 
+    if "Percent Uptake" in path_choice:
+        st.markdown("### Percent Uptake (whole watershed)")
 
-    # Build plan_base from the selected path
-    plan_base = None
-
-    if "Path A" in path_choice:
-        st.markdown("### Path A — Percent Uptake (whole watershed)")
-
-        # Unit costs (shared)
+        # Unit costs
         c1, c2 = st.columns(2)
         with c1:
-            unit_cost_rg = st.number_input("Rain Garden cost ($/unit)", min_value=0.0, value=500.0, step=25.0)
+            unit_cost_rg = st.number_input(
+                "Rain Garden cost ($/unit)", min_value=0.0, value=500.0, step=25.0
+            )
         with c2:
-            unit_cost_rb = st.number_input("Rain Barrel cost ($/unit)", min_value=0.0, value=150.0, step=5.0)
+            unit_cost_rb = st.number_input(
+                "Rain Barrel cost ($/unit)", min_value=0.0, value=150.0, step=5.0
+            )
 
+        # Percent sliders
         a1, a2 = st.columns(2)
         with a1:
-            pct_rg = st.slider("RG uptake (%)", 0, 100, 20, step=1,
-                            help="Applied uniformly to each subcatchment’s RG cap")
+            pct_rg = st.slider("RG uptake (%)", 0, 100, 20)
         with a2:
-            pct_rb = st.slider("RB uptake (%)", 0, 100, 30, step=1,
-                            help="Applied uniformly to each subcatchment’s RB cap")
+            pct_rb = st.slider("RB uptake (%)", 0, 100, 30)
 
+        # RAW PLAN (this is the ONLY source of truth)
         plan_base = realize_percent_uptake(pct_rg, pct_rb, caps_RG, caps_RB)
-        summary = summarize_plan(plan_base, unit_cost_rg, unit_cost_rb)
+        plan_all_raw = plan_base.copy()           # ← LOCKED FOREVER
+        cost_all_raw = plan_cost(plan_all_raw, unit_cost_rg, unit_cost_rb)
+        RG_limit_all = sum(v["rain_gardens"] for v in plan_all_raw.values())
+
+        # Display raw Path A summary
+        summary = summarize_plan(plan_all_raw, unit_cost_rg, unit_cost_rb)
         st.success(
-            f"RG={summary['rg']} | RB={summary['rb']}               "
-            f"   Estimated Cost: ${summary['spent']:,.0f}"
+            f"RG={summary['rg']} | RB={summary['rb']}   Estimated Cost: ${summary['spent']:,.0f}"
         )
 
-        # --- Make all four focus areas use the same budget as 'All' ---
-        B_target = summary['spent']  # use the 'All' plan spend as the common budget
+        # This is the target cost for all other scenarios
+        target_cost = cost_all_raw
 
-        # Solve per group to match B_target (keeps your RG/RB style via α scaling)
-        pRG_all_adj, pRB_all_adj, plan_all      = solve_group_percents_to_budget(pct_rg, pct_rb, caps_RG, caps_RB, set(caps_RG.keys()),
-                                                                                unit_cost_rg, unit_cost_rb, B_target)
-        pRG_up_adj,  pRB_up_adj,  plan_upstream = solve_group_percents_to_budget(pct_rg, pct_rb, caps_RG, caps_RB, UPSTREAM_LIST,
-                                                                                unit_cost_rg, unit_cost_rb, B_target)
-        pRG_dn_adj,  pRB_dn_adj,  plan_downstr  = solve_group_percents_to_budget(pct_rg, pct_rb, caps_RG, caps_RB, DOWNSTREAM_LIST,
-                                                                                unit_cost_rg, unit_cost_rb, B_target)
-        pRG_hi_adj,  pRB_hi_adj,  plan_highro   = solve_group_percents_to_budget(pct_rg, pct_rb, caps_RG, caps_RB, HIGHRUNOFF_LIST,
-                                                                                unit_cost_rg, unit_cost_rb, B_target)
+        def build_focus_plan(group_set):
 
-        # (Optional) Display achieved spend and RG/RB counts per group for transparency
-        for tag, p in [("All", plan_all), ("Upstream", plan_upstream), ("Downstream", plan_downstr), ("High‑runoff", plan_highro)]:
-            rg_cnt = sum(v["rain_gardens"] for v in p.values())
-            rb_cnt = sum(v["rain_barrels"]  for v in p.values())
-            spend  = unit_cost_rg * rg_cnt + unit_cost_rb * rb_cnt
+            # 1. Compute max RG capacity of this group
+            max_RG_group = sum(caps_RG.get(s, 0) for s in group_set)
 
-        # ---- Apply new LID rules ----
+            # 2. Determine how many RG we attempt to place
+            RG_for_group = min(RG_limit_all, max_RG_group)
 
-        # 1. Determine RG limit from the All scenario
-        RG_limit_all = sum(v["rain_gardens"] for v in plan_all.values())
+            # 3. Allocate RG proportionally to each subcatchment’s capacity
+            plan_group = {}
+            for s in group_set:
+                cap_s = caps_RG.get(s, 0)
+                if max_RG_group > 0:
+                    share = cap_s / max_RG_group
+                    plan_group[s] = {
+                        "rain_gardens": int(round(RG_for_group * share)),
+                        "rain_barrels": 0
+                    }
+                else:
+                    plan_group[s] = {"rain_gardens": 0, "rain_barrels": 0}
 
-        # 2. Enforce RG limit on the three groups
-        plan_upstream = enforce_rg_limit(plan_upstream, RG_limit_all, caps_RG)
-        plan_downstr  = enforce_rg_limit(plan_downstr,  RG_limit_all, caps_RG)
-        plan_highro   = enforce_rg_limit(plan_highro,   RG_limit_all, caps_RG)
+            # 4. Fill remaining budget using RB
+            plan_group = fill_with_rb_to_budget(
+                plan_group, caps_RB, unit_cost_rg, unit_cost_rb, target_cost
+            )
 
-        # 3. Fill remaining budget using RB
-        plan_upstream = fill_with_rb_to_budget(plan_upstream, caps_RB, unit_cost_rg, unit_cost_rb, B_target)
-        plan_downstr  = fill_with_rb_to_budget(plan_downstr,  caps_RB, unit_cost_rg, unit_cost_rb, B_target)
-        plan_highro   = fill_with_rb_to_budget(plan_highro,   caps_RB, unit_cost_rg, unit_cost_rb, B_target)
+            return plan_group
 
+        plan_all = plan_all_raw
 
+        plan_upstream  = build_focus_plan(UPSTREAM_LIST)
+        plan_downstr   = build_focus_plan(DOWNSTREAM_LIST)
+        plan_highro    = build_focus_plan(HIGHRUNOFF_LIST)
 
 
         with st.expander("Why CoastWise Shows Four Different Spatial Layouts"):
@@ -1560,7 +1461,7 @@ def app_ui():
         - For more detail on how RG and RB placement works, see the [supporting document](https://docs.google.com/document/d/1I3sWiiGf6CqeSLmHuhr8rE60eiyLlCsPaQ_FMWZ4Ckc/edit?usp=sharing).
         """)
         
-        row1 = st.columns(2, gap="large")
+        row1 = st.columns(2, gap="small")
         with row1[0]:
             render_focus_placement_map(
                 plan_all,
@@ -1576,154 +1477,7 @@ def app_ui():
                 "fa_place_up"
             )
 
-        row2 = st.columns(2, gap="large")
-        with row2[0]:
-            render_focus_placement_map(
-                plan_downstr,
-                "Downstream/outlet",
-                WS_SHP_PATH,
-                "fa_place_dn"
-            )
-        with row2[1]:
-            render_focus_placement_map(
-                plan_highro,
-                "Highest runoff",
-                WS_SHP_PATH,
-                "fa_place_hi"
-            )
-
-
-    elif "Path B" in path_choice:
-        st.markdown("### Path B — Known Budget → Feasible Uptake")
-
-        st.info(
-            "Path B starts from your **budget** and **unit costs**. You pick **one percent to pin** (RG or RB), "
-            "which CoastWise applies across **every subcatchment’s maximum** for that LID type. Then CoastWise solves "
-            "the **other percent** so the **total cost fits your budget**.\n\n"
-            "**Example (Pin RG = 30%)**: CoastWise applies 30% of each subcatchment’s RG max, totals that cost, then finds the RB% "
-            "that best uses the remaining budget.\n"
-        )
-
-        # Unit costs (shared)
-        c1, c2 = st.columns(2)
-        with c1:
-            unit_cost_rg = st.number_input("Rain Garden cost ($/unit)", min_value=0.0, value=500.0, step=25.0)
-        with c2:
-            unit_cost_rb = st.number_input("Rain Barrel cost ($/unit)", min_value=0.0, value=150.0, step=5.0)
-
-        # ---- Budget + pinned percent controls ----
-        b1, b2, b3 = st.columns([1,1,2])
-        with b1:
-            budget_total = st.number_input(
-                "Total budget ($)",
-                min_value=0.0, value=500_000.0, step=1_000.0,
-                help="Target total spend for this plan."
-            )
-        with b2:
-            pin_type_choice = st.radio(
-                "Pin which percent?",
-                ["RG", "RB"], horizontal=True,
-                help="Apply this percent uniformly across all subcatchments for the selected LID type."
-            )
-        with b3:
-            pin_value = st.slider(
-                f"Pinned {pin_type_choice} uptake (%)",
-                0, 100, 30, step=1,
-                help=f"Percent of each subcatchment’s maximum {pin_type_choice} capacity."
-            )
-
-        # ---- Solve the other percent to match the budget (as closely as caps/integers allow) ----
-        pRG_solved, pRB_solved = compute_percent_pair_for_budget(
-            B=budget_total, cRG=unit_cost_rg, cRB=unit_cost_rb,
-            CapRG_total=CapRG_total, CapRB_total=CapRB_total,
-            pin_type=pin_type_choice, pin_value_percent=pin_value
-        )
-
-        # ---- Realize plan as discrete counts per subcatchment ----
-        plan_base = realize_percent_uptake(pRG_solved, pRB_solved, caps_RG, caps_RB)
-
-        # Per-type counts and costs
-        total_rg = sum(v["rain_gardens"] for v in plan_base.values())
-        total_rb = sum(v["rain_barrels"] for v in plan_base.values())
-        est_cost_rg = unit_cost_rg * total_rg
-        est_cost_rb = unit_cost_rb * total_rb
-        est_cost_total = est_cost_rg + est_cost_rb
-
-        B_target = float(budget_total)  # common budget for all four focus areas
-
-        # Solve per group to match B_target (keeps solved RG/RB style via α scaling)
-        pRG_all_adj, pRB_all_adj, plan_all      = solve_group_percents_to_budget(pRG_solved, pRB_solved, caps_RG, caps_RB, set(caps_RG.keys()),
-                                                                                unit_cost_rg, unit_cost_rb, B_target)
-        pRG_up_adj,  pRB_up_adj,  plan_upstream = solve_group_percents_to_budget(pRG_solved, pRB_solved, caps_RG, caps_RB, UPSTREAM_LIST,
-                                                                                unit_cost_rg, unit_cost_rb, B_target)
-        pRG_dn_adj,  pRB_dn_adj,  plan_downstr  = solve_group_percents_to_budget(pRG_solved, pRB_solved, caps_RG, caps_RB, DOWNSTREAM_LIST,
-                                                                                unit_cost_rg, unit_cost_rb, B_target)
-        pRG_hi_adj,  pRB_hi_adj,  plan_highro   = solve_group_percents_to_budget(pRG_solved, pRB_solved, caps_RG, caps_RB, HIGHRUNOFF_LIST,
-                                                                                unit_cost_rg, unit_cost_rb, B_target)
-
-        # Transparency
-        for tag, p in [("All", plan_all), ("Upstream", plan_upstream), ("Downstream", plan_downstr), ("High‑runoff", plan_highro)]:
-            rg_cnt = sum(v["rain_gardens"] for v in p.values())
-            rb_cnt = sum(v["rain_barrels"]  for v in p.values())
-            spend  = unit_cost_rg * rg_cnt + unit_cost_rb * rb_cnt
-        # ---- Apply new LID rules ----
-
-        # 1. Determine RG limit from the All scenario
-        RG_limit_all = sum(v["rain_gardens"] for v in plan_all.values())
-
-        # 2. Enforce RG limit on the three groups
-        plan_upstream = enforce_rg_limit(plan_upstream, RG_limit_all, caps_RG)
-        plan_downstr  = enforce_rg_limit(plan_downstr,  RG_limit_all, caps_RG)
-        plan_highro   = enforce_rg_limit(plan_highro,   RG_limit_all, caps_RG)
-
-        # 3. Fill remaining budget using RB
-        plan_upstream = fill_with_rb_to_budget(plan_upstream, caps_RB, unit_cost_rg, unit_cost_rb, B_target)
-        plan_downstr  = fill_with_rb_to_budget(plan_downstr,  caps_RB, unit_cost_rg, unit_cost_rb, B_target)
-        plan_highro   = fill_with_rb_to_budget(plan_highro,   caps_RB, unit_cost_rg, unit_cost_rb, B_target)
-
-        # Treated area (using your constants: 400 ft² per RG; 300 ft² per RB)
-        treated_ft2 = 400.0 * total_rg + 300.0 * total_rb
-
-        # ---- Row 1: Budget + per-type estimated costs ----
-        s1c2, s1c3, s1c4 = st.columns([1,1,1])
-        with s1c2:
-            st.metric("Estimated RG Cost", f"${est_cost_rg:,.0f}")
-        with s1c3:
-            st.metric("Estimated RB Cost", f"${est_cost_rb:,.0f}")
-        with s1c4:
-            st.metric("Estimated Total Cost", f"${est_cost_total:,.0f}")
-
-        # ---- Row 2: Pinned + Solved percents (plus optional counts/treated area) ----
-        s2c1, s2c2, s2c3 = st.columns([1,1,1])
-        with s2c1:
-            st.metric(f"Pinned {pin_type_choice} (%)",
-                    f"{pin_value:.1f}%")
-        with s2c2:
-            # Show the counterpart label properly
-            solved_label = "RB (%)" if pin_type_choice == "RG" else "RG (%)"
-            solved_value = pRB_solved if pin_type_choice == "RG" else pRG_solved
-            st.metric(f"Solved {solved_label}", f"{solved_value:.1f}%")
-        with s2c3:
-            st.metric("Counts (RG | RB)", f"{int(total_rg)} | {int(total_rb)}")
-
-        st.markdown("### LID Placement — Compare Different Focus Areas")
-        row1 = st.columns(2, gap="large")
-        with row1[0]:
-            render_focus_placement_map(
-                plan_all,
-                "All subcatchments",
-                WS_SHP_PATH,
-                "fa_place_all"
-            )
-        with row1[1]:
-            render_focus_placement_map(
-                plan_upstream,
-                "Upstream",
-                WS_SHP_PATH,
-                "fa_place_up"
-            )
-
-        row2 = st.columns(2, gap="large")
+        row2 = st.columns(2, gap="small")
         with row2[0]:
             render_focus_placement_map(
                 plan_downstr,
@@ -1845,16 +1599,7 @@ def app_ui():
                 .properties(height=height_px)
             )
 
-            labels = (
-                base.mark_text(align="left", baseline="middle", dx=6, color="#333", fontSize=12)
-                .encode(
-                    y=alt.Y("Focus Area:N", sort=order, title=None),
-                    x=alt.X("Value:Q"),
-                    text=alt.Text("Value:Q", format=",.0f")
-                )
-            )
-
-            chart = (bars + labels).configure_view(strokeWidth=0)
+            chart = (bars).configure_view(strokeWidth=0)
             return chart
 
         st.markdown("### Summary")
@@ -1958,8 +1703,18 @@ def app_ui():
                         pretty_name = pretty_names[subset_key]
                         gate_name = "TG & PUMP ON" if gate_key == "gate" else "TG & PUMP OFF"
 
-                        label = f"{pretty_name} – {gate_name}"
-                        st.session_state["scenario_display_labels"][scen_key] = label
+                        rain_label = "Current" if use_cur else "Future"
+
+                        # Create a globally unique explicit label
+                        label = f"{subset_key}_{gate_key}_{rain_label}"
+
+                        # Also create a human-readable label for charts
+                        pretty_label = f"{pretty_name} – {gate_name} – {rain_label}"
+
+                        # Store both
+                        st.session_state["scenario_display_labels"][scen_key] = pretty_label
+                        st.session_state.setdefault("scenario_selector_options", [])
+                        st.session_state["scenario_selector_options"].append((pretty_label, scen_key))
 
                         # LID usage
                         lid_lines = [";"] if subset_key == "baseline" else generate_lid_usage_lines(plan_dict, raster_df)
@@ -1999,6 +1754,7 @@ def app_ui():
                 st.success("All 10 scenarios completed.")
                 st.session_state["scenarios_finished"] = True
                 st.session_state["display_summary"] = True
+                st.rerun()
 
     st.markdown("### Flooding Summary")
 
@@ -2092,22 +1848,28 @@ def app_ui():
         st.markdown("---")
         st.subheader("Compare Flooding Between Two Scenarios")
 
-        scenario_labels = st.session_state.get("scenario_display_labels", {})
-        label_to_key = {v: k for k, v in scenario_labels.items()}
-        sorted_labels = sorted(label_to_key.keys())
+        scenario_options = st.session_state.get("scenario_selector_options", [])
 
         colA, colB = st.columns(2)
         with colA:
-            scenA_label = st.selectbox("Scenario A", sorted_labels, key="compA")
+            scenA_label, scenA_key = st.selectbox(
+                "Scenario A",
+                scenario_options,
+                format_func=lambda x: x[0],
+                key="compA"
+            )
+
         with colB:
-            scenB_label = st.selectbox("Scenario B", sorted_labels, key="compB")
+            scenB_label, scenB_key = st.selectbox(
+                "Scenario B",
+                scenario_options,
+                format_func=lambda x: x[0],
+                key="compB"
+            )
 
         if st.button("Compare Maps", key="btn_compare_maps"):
 
             from inundation_mapper import compute_peak_inundation
-
-            scenA_key = label_to_key[scenA_label]
-            scenB_key = label_to_key[scenB_label]
 
             tsA = st.session_state["scenario_flood_ts"][scenA_key]
             tsB = st.session_state["scenario_flood_ts"][scenB_key]
@@ -2118,12 +1880,20 @@ def app_ui():
             dfB = compute_peak_inundation(tsB, DEM_PATH, NODES_SHP_PATH,
                                         FLOWDIR_PATH)
 
-            # combine into single df
-            df_diff = dfA.copy()
             ui_unit = st.session_state.get("unit_ui", "U.S. Customary")
-            df_diff[scenB_label] = to_ui_depth(dfB["depth"], ui_unit)
-            df_diff[scenA_label] = to_ui_depth(dfA["depth"], ui_unit)
 
+            df_diff = pd.merge(
+                dfA.rename(columns={"depth_ft": scenA_label}),
+                dfB.rename(columns={"depth_ft": scenB_label}),
+                on=["lon", "lat"],
+                how="outer"  # keeps all flooded cells
+            )
+
+            df_diff[scenA_label] = df_diff[scenA_label].fillna(0)
+            df_diff[scenB_label] = df_diff[scenB_label].fillna(0)
+
+            df_diff[scenA_label] = to_ui_depth(df_diff[scenA_label], ui_unit)
+            df_diff[scenB_label] = to_ui_depth(df_diff[scenB_label], ui_unit)
             # total volumes
             totalA = st.session_state["scenario_flood_saved"][scenA_key]
             totalB = st.session_state["scenario_flood_saved"][scenB_key]
