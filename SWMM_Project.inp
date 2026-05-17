@@ -13,8 +13,8 @@ SKIP_STEADY_STATE    NO
 
 START_DATE           $SIM_START_DATE$
 START_TIME           $SIM_START_TIME$
-REPORT_START_DATE    05/31/2025
-REPORT_START_TIME    12:00:00
+REPORT_START_DATE    $REPORT_START_DATE$
+REPORT_START_TIME    $REPORT_START_TIME$
 END_DATE             $SIM_END_DATE$
 END_TIME             $SIM_END_TIME$
 SWEEP_START          01/01
@@ -48,7 +48,7 @@ DRY_ONLY         NO
 [RAINGAGES]
 ;;Name           Format    Interval SCF      Source    
 ;;-------------- --------- -------- -------- ----------
-rain_gage        VOLUME    0:06     1.0      TIMESERIES rain_gage_timeseries
+rain_gage        VOLUME    0:15     1.0      TIMESERIES rain_gage_timeseries
 [SUBCATCHMENTS]
 ;;Name           Rain Gage        Outlet           Area     %Imperv  Width    %Slope   CurbLen  SnowPack        
 ;;-------------- ---------------- ---------------- -------- -------- -------- -------- -------- ----------------
