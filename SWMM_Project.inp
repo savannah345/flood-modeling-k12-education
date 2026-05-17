@@ -243,8 +243,8 @@ J96              2.16       1.026      0          0          2000
 [OUTFALLS]
 ;;Name           Elevation  Type       Stage Data       Gated    Route To        
 ;;-------------- ---------- ---------- ---------------- -------- ----------------
-outfall          -1.6       TIMESERIES tide             $TIDE_GATE_CONTROL$                       
-PumpOutfall          -1.6       TIMESERIES tide                                
+outfall          -1.6       TIMESERIES tide             $TIDE_GATE_CONTROL$
+PumpOutfall          -1.6       FREE             NO                                                        
 
 
 [PUMPS]

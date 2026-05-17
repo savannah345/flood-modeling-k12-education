@@ -1900,7 +1900,7 @@ def app_ui():
 
             st.info(
                 "This will run all 10 scenarios: Baseline, All-Subcatchments, "
-                "Upstream, Downstream, High-Runoff 2x where the Tide Gate On/Off, respectively."
+                "Upstream, Downstream, High-Runoff 2x where the Tide Gate and Pump are On/Off, respectively."
             )
 
 
@@ -1956,7 +1956,7 @@ def app_ui():
                             "highrunoff": "High-Runoff",
                         }
                         pretty_name = pretty_names[subset_key]
-                        gate_name = "TG ON" if gate_key == "gate" else "TG OFF"
+                        gate_name = "TG & PUMP ON" if gate_key == "gate" else "TG & PUMP OFF"
 
                         label = f"{pretty_name} – {gate_name}"
                         st.session_state["scenario_display_labels"][scen_key] = label
@@ -2085,10 +2085,6 @@ def app_ui():
         
         st.session_state["flood_summary_chart"] = flood_chart
         st.altair_chart(flood_chart, use_container_width=True)
-
-    
-    st.toggle("Flood Summary Loaded", value=False, key="trigger_flood_summary")
-
 
 
     if st.session_state.get("display_summary", False):
