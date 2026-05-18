@@ -94,6 +94,28 @@ def to_ui_tide(feet, ui_unit):
         return feet * 0.3048
     return feet
 
+def make_scenario_key(prefix: str, subset: str, gate_flag: str, rain_variant: str) -> str:
+    prefix = prefix.strip("_") + "_"
+
+    subset = subset.lower()
+    gate = "gate" if gate_flag.upper() == "YES" else "nogate"
+    rain = "future" if rain_variant.lower() == "future" else "current"
+
+    return f"{prefix}{subset}_{gate}_{rain}"
+
+def make_display_label(subset: str, gate_flag: str) -> str:
+    subset_map = {
+        "baseline": "Baseline",
+        "all": "All Subcatchments",
+        "upstream": "Upstream",
+        "downstream": "Downstream",
+        "highrunoff": "High-Runoff",
+    }
+
+    gate_text = "TG & Pump ON" if gate_flag.upper() == "YES" else "TG & Pump OFF"
+
+    return f"{subset_map.get(subset, subset)} – {gate_text}"
+
 def _read_text_keep(path: str) -> str:
     """Read file contents and keep artifacts in temp for later use."""
     try:
@@ -149,35 +171,6 @@ def load_pipes(path: str):
 def load_raster_cells(path="raster_cells_per_sub.xlsx") -> pd.DataFrame:
     return pd.read_excel(path)
 
-def build_simulation_and_tally_windows(sim_start_str, duration_minutes):
-
-    # Convert start string
-    base_dt = datetime.strptime(sim_start_str, "%m/%d/%Y %H:%M")
-
-    # Storm timing based only on user input
-    storm_start_dt = base_dt + timedelta(hours=2)
-    storm_end_dt   = storm_start_dt + timedelta(minutes=duration_minutes)
-
-    # Simulation window: 2 hours before → 1 hour after
-    sim_start_dt = base_dt
-    sim_end_dt   = storm_end_dt + timedelta(hours=1)
-
-    # Report window is storm start → simulation end
-    report_start_dt = storm_start_dt
-    report_end_dt   = sim_end_dt
-
-    # Formats for SWMM input
-    report_start_date = report_start_dt.strftime("%m/%d/%Y")
-    report_start_time = report_start_dt.strftime("%H:%M:%S")
-
-    return (
-        sim_start_dt, 
-        sim_end_dt, 
-        report_start_dt, 
-        report_end_dt,
-        report_start_date,
-        report_start_time
-    )
 
 
 def make_color(values, vmin, vmax, a=0.9):
@@ -423,6 +416,15 @@ def render_focus_placement_map(plan, title, ws_shp_path, widget_key):
         key=widget_key
     )
 
+def build_fixed_sim_windows(storm_duration_minutes):
+    sim_start = datetime(2025, 5, 1, 6, 0)
+    storm_duration_hr = storm_duration_minutes / 60
+    sim_duration_hr = storm_duration_hr + 3
+
+    sim_end = sim_start + timedelta(hours=sim_duration_hr)
+    report_start = datetime(2025, 5, 1, 8, 0)
+
+    return sim_start, sim_end, report_start
 
 PUMP_BLOCK = "Pump_1  J14  PumpOutfall  PumpCurve1  ON"
 
@@ -528,79 +530,44 @@ def extract_node_flooding_from_rpt(txt: str, preview: bool = False) -> pd.DataFr
 
     return df
 
-def run_swmm_scenario(
+def run_swmm_senario(
     scenario_name: str,
     rain_lines: List[str],
     tide_lines: List[str],
     lid_lines: List[str],
     gate_flag: str,
     duration_minutes: int,
-    rain_minutes: List[int],
-    rain_curve_in: List[float],
-    sim_start_str: str,
     template_path: str = "SWMM_Project.inp",
 ):
     """
-    Clean, fast SWMM runner using only RPT parsing.
-    No timestep stepping, no pyswmm flood integration.
+    Clean SWMM runner using only RPT parsing.
+    Assumes rainfall + tide lines already clipped and
+    time series rebuilt starting at 06:00.
     """
-
-    # ----------------------------------------------------
-    # Write INP/RPT/OUT files to swmm_files/
-    # ----------------------------------------------------
-    output_dir = "swmm_files"
-    os.makedirs(output_dir, exist_ok=True)
+    output_dir = tempfile.mkdtemp(prefix=f"{scenario_name}_")
 
     inp_path = os.path.join(output_dir, f"{scenario_name}.inp")
     rpt_path = os.path.join(output_dir, f"{scenario_name}.rpt")
     out_path = os.path.join(output_dir, f"{scenario_name}.out")
 
-    #temp_dir = st.session_state.temp_dir
-    #inp_path = os.path.join(temp_dir, f"{scenario_name}.inp")
-    #rpt_path = os.path.join(temp_dir, f"{scenario_name}.rpt")
-    #out_path = os.path.join(temp_dir, f"{scenario_name}.out")
+    # Build fixed simulation window
+    sim_start_dt, sim_end_dt, report_start_dt = build_fixed_sim_windows(duration_minutes)
 
-    # ----------------------------------------------------
-    # Build simulation window
-    # ----------------------------------------------------
-# ----------------------------------------------------
-# Build simulation + report window
-# ----------------------------------------------------
-# ----------------------------------------------------
-# Build simulation + report window
-# ----------------------------------------------------
-    (
-        sim_start_dt,
-        sim_end_dt,
-        report_start_dt,
-        report_end_dt,
-        report_start_date,
-        report_start_time
-    ) = build_simulation_and_tally_windows(sim_start_str, duration_minutes)
-
-    # ----------------------------------------------------
-    # Save metadata (we no longer use tally_start/tally_end)
-    # ----------------------------------------------------
-    st.session_state[f"{scenario_name}_sim_start"]   = sim_start_dt
-    st.session_state[f"{scenario_name}_sim_end"]     = sim_end_dt
-    st.session_state[f"{scenario_name}_report_start"] = report_start_dt
-    st.session_state[f"{scenario_name}_report_end"]   = report_end_dt
-
-    # ----------------------------------------------------
-    # Format SWMM-required timestamps
-    # ----------------------------------------------------
     sim_start_date = sim_start_dt.strftime("%m/%d/%Y")
     sim_start_time = sim_start_dt.strftime("%H:%M:%S")
     sim_end_date   = sim_end_dt.strftime("%m/%d/%Y")
     sim_end_time   = sim_end_dt.strftime("%H:%M:%S")
 
-    # ----------------------------------------------------
-    # Pump logic based on scenario type
-    # ----------------------------------------------------
-    is_baseline = "_baseline_" in scenario_name.lower()
+    report_start_date = report_start_dt.strftime("%m/%d/%Y")
+    report_start_time = report_start_dt.strftime("%H:%M:%S")
 
-    has_lids = (lid_lines != [";"])
+    # Store metadata
+    st.session_state[f"{scenario_name}_sim_start"] = sim_start_dt
+    st.session_state[f"{scenario_name}_sim_end"] = sim_end_dt
+    st.session_state[f"{scenario_name}_report_start"] = report_start_dt
+    st.session_state[f"{scenario_name}_report_end"] = sim_end_dt
 
+    # Pump logic
     if gate_flag == "YES":
         pump_block = PUMP_BLOCK
         pump_curve_block = PUMP_CURVE_BLOCK
@@ -610,10 +577,6 @@ def run_swmm_scenario(
         pump_curve_block = ""
         pump_rule_block = ""
 
-
-    # ----------------------------------------------------
-    # Build the INP file
-    # ----------------------------------------------------
     with open(template_path, "r") as f:
         text = f.read()
 
@@ -636,32 +599,20 @@ def run_swmm_scenario(
     with open(inp_path, "w") as f:
         f.write(text)
 
-    # ----------------------------------------------------
-    # Run SWMM hydraulics ONCE (no stepping)
-    # ----------------------------------------------------
     with Simulation(inp_path, rpt_path, out_path) as sim:
         sim.execute()
 
-    # ----------------------------------------------------
-    # Load the RPT file
-    # ----------------------------------------------------
     rpt_text = _read_text_keep(rpt_path)
 
-    # Parse the key summaries
     df_node_flooding = extract_node_flooding_from_rpt(rpt_text)
     df_runoff        = extract_total_runoff_from_text(rpt_text)
     df_ir            = extract_infiltration_and_runoff_from_text(rpt_text)
 
-    # ----------------------------------------------------
-    # Store the node flooding summary
-    # ----------------------------------------------------
     st.session_state[f"{scenario_name}_node_flooding_summary"] = df_node_flooding
 
-    # Compute total flooding (ft³, from RPT only)
     total_flood_ft3 = df_node_flooding["total_flood_ft3"].sum()
     st.session_state[f"{scenario_name}_storm_total_flood"] = total_flood_ft3
 
-    # Compute infiltration (convert ac-ft -> ft³)
     infiltration_ft3 = 0.0
     if df_ir is not None and not df_ir.empty:
         infil_acft = df_ir.loc[df_ir["label"] == "infiltration_loss", "volume_acft"].sum()
@@ -669,73 +620,59 @@ def run_swmm_scenario(
 
     st.session_state[f"{scenario_name}_storm_infiltration"] = infiltration_ft3
 
-    st.session_state[f"{scenario_name}_storm_dur_hours"] = duration_minutes / 60.0
-    
+    total_sim_minutes = duration_minutes + 180
+    st.session_state[f"{scenario_name}_storm_dur_hours"] = total_sim_minutes / 60.0
+
     return {
         "df_runoff": df_runoff,
         "df_continuity": df_ir,
         "df_flooding": df_node_flooding
     }
 
-
 def flooding_summary_ui():
-
     if not st.session_state.get("scenarios_finished", False):
         return
 
-    scenario_labels = st.session_state["scenario_labels_saved"]
-    prefix = st.session_state.get("scenario_prefix", "")
-
-    scenario_node_df = {}
-    for key in scenario_labels:
-        full_key = f"{prefix}{key}_node_flooding_summary"
-        df = st.session_state.get(full_key)
-        scenario_node_df[key] = df if df is not None else pd.DataFrame()
-    scenario_infil = st.session_state["scenario_infil_saved"]
-
     ui_unit = st.session_state.get("unit_ui", "U.S. Customary")
 
-    # Build dataframe of totals
+    labels = st.session_state.get("scenario_display_labels", {})
+    flood_data = st.session_state.get("scenario_flood_volume", {})
+    infil_data = st.session_state.get("scenario_infiltration", {})
+
     rows = []
-    for key, label in scenario_labels.items():
-        df = scenario_node_df[key]
-        total_flood_ft3 = df["total_flood_ft3"].sum()
-        infil = scenario_infil.get(key, 0.0)
+    for scen_key, label in labels.items():
+        flood_ft3 = float(flood_data.get(scen_key, 0.0))
+        infil_ft3 = float(infil_data.get(scen_key, 0.0))
 
         rows.append({
-            "ScenarioKey": key,
-            "Scenario": label,
-            "Flooding_ft3": to_ui_volume(total_flood_ft3, ui_unit),
-            "Infiltration_ft3": to_ui_volume(infil, ui_unit)
+            "ScenarioKey": scen_key,
+            "Scenario": label,     # readable label
+            "Flooding_ft3": to_ui_volume(flood_ft3, ui_unit),
+            "Infiltration_ft3": to_ui_volume(infil_ft3, ui_unit)
         })
 
-    df_log = pd.DataFrame(rows)
-    df_sorted = df_log.sort_values("Flooding_ft3", ascending=True)
+    df = pd.DataFrame(rows)
 
-    # Get the minimum value for x‑axis scale
-    min_flood = float(df_sorted["Flooding_ft3"].min())
-    max_flood = float(df_sorted["Flooding_ft3"].max())
+    if df.empty:
+        st.warning("No scenarios found.")
+        return
+
+    df_sorted = df.sort_values("Flooding_ft3", ascending=True)
+
+    min_val = float(df_sorted["Flooding_ft3"].min())
+    max_val = float(df_sorted["Flooding_ft3"].max())
+
     display_unit = "ft³" if ui_unit == "U.S. Customary" else "m³"
 
-    # Altair bar chart with individual scenario colors + custom x‑axis domain
-    bars = (
+    chart = (
         alt.Chart(df_sorted)
         .mark_bar()
         .encode(
-            x=alt.X(
-                "Flooding_ft3:Q",
-                title=f"Total Flood Volume ({display_unit})",
-                scale=alt.Scale(domain=[min_flood, max_flood]),
-                axis=alt.Axis(labelFontSize=16, titleFontSize=18)
-            ),
-            y=alt.Y(
-                "Scenario:N",
-                sort=alt.SortField(field="Flooding_ft3", order="ascending"),
-                axis=alt.Axis(labels=False, title=None)
-            ),
+            x=alt.X("Flooding_ft3:Q", title=f"Total Flood Volume ({display_unit})", scale=alt.Scale(domain=[min_val, max_val])),
+            y=alt.Y("Scenario:N", sort=alt.SortField(field="Flooding_ft3", order="ascending"), axis=None),
             color=alt.Color("Scenario:N", legend=None),
             tooltip=[
-                alt.Tooltip("Scenario:N"),
+                alt.Tooltip("Scenario:N", title="Scenario"),
                 alt.Tooltip("Flooding_ft3:Q", title="Flooding", format=",.1f")
             ]
         )
@@ -743,106 +680,107 @@ def flooding_summary_ui():
 
     labels = (
         alt.Chart(df_sorted)
-        .mark_text(align="left", baseline="middle", dx=6, fontSize=16)
+        .mark_text(
+            align="left", baseline="middle", dx=10, fontSize =15
+        )
         .encode(
             x="Flooding_ft3:Q",
-            y=alt.Y(
-                "Scenario:N",
-                sort=alt.SortField(field="Flooding_ft3", order="ascending")
-            ),
-            text="Scenario:N"
+            y=alt.Y("Scenario:N", sort=alt.SortField("Flooding_ft3", "ascending")),
+            text="Scenario"
         )
     )
 
-    chart = (bars + labels).properties(
-        height=40 * len(df_sorted) + 60,
-        title="Total Flooding by Scenario",
-        padding={"bottom": 60}
-    ).configure_title(
-        fontSize=20
+    st.markdown("### Flood Summary")
+    final_chart = (chart + labels).properties(
+        padding={"bottom": 40}
     )
-    st.altair_chart(chart, use_container_width=True)
 
-    st.session_state["flood_summary_chart"] = chart
+    st.altair_chart(final_chart, use_container_width=True)
+
 
 def scenario_comparison_map_ui():
+    st.subheader("Compare Two Scenarios")
 
-    st.subheader("Compare Two Scenarios (RPT Flooding Summary)")
+    st.markdown("What this shows: circle color = which scenario has more flooding")
+    st.markdown("Red: Scenario A has more flooding")
+    st.markdown("Blue: Scenario B has more")
+    st.markdown("Gray: no meaningful change")
+    st.markdown("Circle size = magnitude of difference")
 
-    scenario_options = st.session_state.get("scenario_labels_saved", {})
-    options = [(label, key) for key, label in scenario_options.items()]
-
-    if not options:
-        st.warning("No scenarios available yet. Run at least one scenario before comparing.")
+    labels = st.session_state.get("scenario_display_labels", {})
+    if not labels:
+        st.info("Run scenarios first.")
         return
+
+    opts = [(label, key) for key, label in labels.items()]
 
     col1, col2 = st.columns(2)
-
     with col1:
-        selectedA = st.selectbox(
-            "Scenario A", 
-            options, 
-            index=0, 
-            format_func=lambda x: x[0]
-        )
-
+        scenA = st.selectbox("Scenario A", opts, format_func=lambda x: x[0])
     with col2:
-        selectedB = st.selectbox(
-            "Scenario B", 
-            options, 
-            index=0 if len(options) == 1 else 1, 
-            format_func=lambda x: x[0]
-        )
+        scenB = st.selectbox("Scenario B", opts, format_func=lambda x: x[0])
 
-    # safe unpack
-    scenA_label, scenA_key = selectedA
-    scenB_label, scenB_key = selectedB
+    labelA, keyA = scenA
+    labelB, keyB = scenB
 
-    if not st.button("Compare Flooding (RPT Stats)"):
+    if not st.button("Compare Flooding"):
         return
 
-    prefix = st.session_state.get("scenario_prefix", "")
-    dfA = st.session_state.get(f"{prefix}{scenA_key}_node_flooding_summary")
-    dfB = st.session_state.get(f"{prefix}{scenB_key}_node_flooding_summary")
+    dfA = st.session_state.get(f"{keyA}_node_flooding_summary")
+    dfB = st.session_state.get(f"{keyB}_node_flooding_summary")
 
     if dfA is None or dfB is None:
-        st.error("Flooding summary not found for one of the scenarios. Try re-running the scenarios.")
+        st.error("Missing flooding data for selected scenarios.")
         return
 
-    # Load node geometry
-    nodes_gdf = load_nodes(NODES_SHP_PATH)[["NAME", "geometry"]]
+    nodes_gdf = load_nodes(NODES_SHP_PATH)
     nodes_gdf["lon"] = nodes_gdf.geometry.x
     nodes_gdf["lat"] = nodes_gdf.geometry.y
 
-    # Merge
-    merged = nodes_gdf.merge(
-        dfA[["node", "max_depth_ft"]].rename(columns={"max_depth_ft": "A_depth"}),
-        left_on="NAME", right_on="node", how="left"
-    ).merge(
-        dfB[["node", "max_depth_ft"]].rename(columns={"max_depth_ft": "B_depth"}),
-        left_on="NAME", right_on="node", how="left"
+    # ---- MERGE A AND B ----
+    merged = (
+        nodes_gdf
+        .merge(dfA[["node", "max_depth_ft"]].rename(columns={"max_depth_ft": "A_depth"}),
+               left_on="NAME", right_on="node", how="left")
+        .merge(dfB[["node", "max_depth_ft"]].rename(columns={"max_depth_ft": "B_depth"}),
+               left_on="NAME", right_on="node", how="left")
     )
 
     merged["A_depth"] = merged["A_depth"].fillna(0)
     merged["B_depth"] = merged["B_depth"].fillna(0)
-    merged["difference"] = merged["A_depth"] - merged["B_depth"]
+    merged["difference"] = (merged["A_depth"] - merged["B_depth"]).round(2)
 
-    # Color rule
-    def node_color(diff):
+    # ---- COLOR RULES ----
+    def color(diff):
         if diff > 0:
-            return [220, 50, 40, 200]   # A worse than B
-        elif diff < 0:
-            return [40, 80, 220, 200]  # A better than B
-        else:
-            return [150, 150, 150, 150]  # no change
+            return [220, 50, 40, 200]    # Scenario A worse
+        if diff < 0:
+            return [40, 80, 220, 200]    # Scenario B worse
+        return [150, 150, 150, 150]      # No change
 
-    merged["color"] = merged["difference"].apply(node_color)
+    merged["color"] = merged["difference"].apply(color)
 
-    # Size based on magnitude
-    max_diff = merged["difference"].abs().max()
-    merged["size"] = 50 * (merged["difference"].abs() / max_diff).fillna(0) + 20
+    merged["size"] = 40 + 80 * (
+        merged["difference"].abs() /
+        max(merged["difference"].abs().max(), 1e-6)
+    )
 
-    layer = pdk.Layer(
+    # ---- SUBCATCHMENTS SHAPEFILE ----
+    ws_gdf_local = load_ws(WS_SHP_PATH)
+    centroid = ws_gdf_local.geometry.union_all().centroid
+    view_state = pdk.ViewState(latitude=centroid.y, longitude=centroid.x, zoom=14.5)
+
+    poly_layer = pdk.Layer(
+        "GeoJsonLayer", data=ws_gdf_local.__geo_interface__,
+        pickable=True, stroked=True, filled=True,
+        get_fill_color=[255, 255, 255, 0],   
+        get_line_color=[0, 0, 0, 255],      
+        line_width_min_pixels=1,
+    )
+
+
+    # ---- NODES LAYER ----
+    nodes_layer = pdk.Layer(
         "ScatterplotLayer",
         data=merged,
         get_position='[lon, lat]',
@@ -851,15 +789,20 @@ def scenario_comparison_map_ui():
         pickable=True,
     )
 
+    # ---- MUCH IMPROVED TOOLTIP ----
     tooltip = {
-        "html": """
-        <div style='padding:6px; background:white; color:black'>
-            <b>Node:</b> {NAME}<br>
-            A depth: {A_depth} ft<br>
-            B depth: {B_depth} ft<br>
-            Difference: {difference} ft
-        </div>
-        """
+        "html": (
+            "<b>Node:</b> {NAME}<br>"
+            f"<b>{labelA}:</b> {{A_depth}} ft<br>"
+            f"<b>{labelB}:</b> {{B_depth}} ft<br>"
+            "<b>Difference:</b> {difference} ft"
+        ),
+        "style": {
+            "backgroundColor": "white",
+            "color": "black",
+            "fontSize": "14px",
+            "padding": "10px"
+        }
     }
 
     view_state = pdk.ViewState(
@@ -869,13 +812,14 @@ def scenario_comparison_map_ui():
     )
 
     deck = pdk.Deck(
-        layers=[layer],
+        layers=[poly_layer, nodes_layer],
         initial_view_state=view_state,
         map_style="light",
-        tooltip=tooltip
+        tooltip=tooltip,
     )
 
     st.pydeck_chart(deck)
+
 
 def _build_baseline_map_html(df_swmm_local: pd.DataFrame, unit_ui: str, ws_shp_path: str) -> str:
     ws_gdf_local = load_ws(ws_shp_path)
@@ -1052,25 +996,36 @@ def generate_lid_usage_lines(lid_config: Dict[str, Dict[str, int]], excel_df: pd
 
     return lines
 
+def clip_rain_and_tide(rain, tide, duration_minutes):
+    # find first rain
+    rain = np.array(rain)
+    tide = np.array(tide)
 
+    idx0 = np.argmax(rain > 0)
+    storm_steps = duration_minutes // 15
+    idx_end = idx0 + storm_steps - 1
 
-def build_rain_timeseries_from_aligned(sim_start_dt, minutes_15, rain_curve):
+    pre_steps = 2 * 4     # 2 hours = 8 steps
+    post_steps = 1 * 4    # 1 hour = 4 steps
+
+    start = idx0 - pre_steps
+    end = idx_end + post_steps
+
+    return rain[start:end+1], tide[start:end+1]
+
+def build_rain_timeseries(sim_start_dt, values):
     lines = []
-    for m, v in zip(minutes_15, rain_curve):
-        ts = (sim_start_dt + timedelta(minutes=int(m))).strftime("%m/%d/%Y %H:%M")
-        lines.append(f"rain_gage_timeseries {ts} {v:.5f}")
+    for i, v in enumerate(values):
+        ts = sim_start_dt + timedelta(minutes=15*i)
+        lines.append(f"rain_gage_timeseries {ts:%m/%d/%Y %H:%M} {v:.5f}")
     return lines
 
-
-
-def build_tide_timeseries(sim_start_dt, raw_minutes, raw_values):
+def build_tide_timeseries(sim_start_dt, values):
     lines = []
-    for m, v in zip(raw_minutes, raw_values):
-        ts = (sim_start_dt + timedelta(minutes=int(m))).strftime("%m/%d/%Y %H:%M")
-        lines.append(f"tide {ts} {float(v):.5f}")
+    for i, v in enumerate(values):
+        ts = sim_start_dt + timedelta(minutes=15*i)
+        lines.append(f"tide {ts:%m/%d/%Y %H:%M} {float(v):.5f}")
     return lines
-
-
 
 def login_ui():
     st.title("🌊 CoastWise Login")
@@ -1120,6 +1075,7 @@ def app_ui():
     st.session_state.setdefault("scenario_flood_saved", {})
     st.session_state.setdefault("scenario_infil_saved", {})
     st.session_state.setdefault("display_summary", False)
+    st.session_state.setdefault("scenario_runoff", {})
 
         # Initialize storage
     if "flood_summary_chart" not in st.session_state:
@@ -1131,7 +1087,6 @@ def app_ui():
 
     st.session_state.setdefault("rpts", {})
 
-    simulation_date = "05/31/2025 12:00"
     template_inp    = "SWMM_Project.inp"
     WS_SHP_PATH     = st.session_state.get("WS_SHP_PATH", "map_files/Subcatchment.shp")
 
@@ -1378,7 +1333,6 @@ def app_ui():
         "tide_source": tide_source,
         "moon_phase": moon_phase,
         "align_mode": align_mode,
-        f"{prefix}simulation_date": simulation_date,
         f"{prefix}template_inp": template_inp,
     })
 
@@ -1386,15 +1340,16 @@ def app_ui():
     # BUILD RAINFALL + TIDE FOR SWMM (must run before buttons)
     # ------------------------------------------------------------
 
-    sim_start_str = simulation_date
-    sim_start_dt = datetime.strptime(sim_start_str, "%m/%d/%Y %H:%M")
+    # --- Clip rain + tide using the aligned 48hr curves ---
+    rain_clip, tide_clip = clip_rain_and_tide(rain_curve_in, tide_curve_ui, duration_minutes)
 
-    rain_lines_cur = build_rain_timeseries_from_aligned(sim_start_dt, minutes_15, rain_curve_in)
-    rain_lines_fut = build_rain_timeseries_from_aligned(sim_start_dt, minutes_15, rain_curve_in * 1.2)
+    # --- Build new timestamps ---
+    sim_start_dt, sim_end_dt, report_start_dt = build_fixed_sim_windows(duration_minutes)
 
+    rain_lines_cur = build_rain_timeseries(sim_start_dt, rain_clip)
+    tide_lines = build_tide_timeseries(sim_start_dt, tide_clip)
+    rain_lines_fut = build_rain_timeseries(sim_start_dt, rain_clip * 1.2)
 
-    # TIDE
-    tide_lines = build_tide_timeseries(sim_start_dt, minutes_15, tide_curve_ui)
 
     # SAVE
     st.session_state["rain_lines_cur"] = rain_lines_cur
@@ -1484,73 +1439,81 @@ def app_ui():
 
     st.altair_chart(tide_chart, use_container_width=True)
 
-    if st.button("Run Baseline Scenario" , key=f"{prefix}btn_run_baseline"):
+
+    if st.button("Run Baseline Scenario", key=f"{prefix}_btn_run_baseline"):
 
         try:
-            lid_lines = [";"]   # baseline always runs with NO LIDs
+            lid_lines = [";"]  # no LIDs in baseline
+            rain_variant = st.session_state.get("rain_variant", "current")
 
-            # Select rainfall based on user choice
-            if run_current:
-                scenario_name = f"{prefix}early_baseline_runoff_only"
-                rain_lines_use = rain_lines_cur
-                rain_curve_use = st.session_state["rain_sim_curve_current_in"]
-            else:
-                scenario_name = f"{prefix}early_baseline_runoff_only"
-                rain_lines_use = rain_lines_fut
-                rain_curve_use = st.session_state["rain_sim_curve_future_in"]
+            # canonical scenario name
+            baseline_key = make_scenario_key(prefix, "baseline", "NO", rain_variant)
 
-            info = run_swmm_scenario(
-                scenario_name,
+            # choose rain series
+            rain_lines_use = rain_lines_cur if rain_variant == "current" else rain_lines_fut
+
+            # run SWMM
+            info = run_swmm_senario(
+                baseline_key,
                 rain_lines_use,
                 tide_lines,
-                [";"],
-                "NO",
+                lid_lines,
+                "NO",  # gate off
                 duration_minutes,
-                minutes_15,
-                rain_curve_use,
-                simulation_date,
-                template_path=template_inp,
+                template_path=template_inp
             )
-            # Save runoff
-            st.session_state[f"{scenario_name}_df"] = info["df_runoff"]
 
-            # Build baseline runoff map
-            df_swmm_now = info["df_runoff"]
+            # store baseline results under canonical keys
+            st.session_state["scenario_runoff"][baseline_key] = info["df_runoff"]
+            st.session_state["scenario_flood_volume"][baseline_key] = st.session_state.get(f"{baseline_key}_storm_total_flood", 0.0)
+            st.session_state["scenario_infiltration"][baseline_key] = st.session_state.get(f"{baseline_key}_storm_infiltration", 0.0)
 
+            # label for UI only
+            st.session_state["scenario_display_labels"][baseline_key] = make_display_label("baseline", "NO")
+
+            # build baseline runoff map
             map_html, legend_html = _build_baseline_map_html(
-                df_swmm_local=df_swmm_now,
+                df_swmm_local=info["df_runoff"],
                 unit_ui=st.session_state["unit_ui"],
                 ws_shp_path=WS_SHP_PATH
             )
 
-            # Persist results
-            st.session_state[f"{prefix}early_baseline_map_html"]    = map_html
-            st.session_state[f"{prefix}early_baseline_legend_html"] = legend_html
-            st.session_state[f"{prefix}early_baseline_ready"] = True
+            # save visuals
+            st.session_state[f"{baseline_key}_map_html"] = map_html
+            st.session_state[f"{baseline_key}_legend_html"] = legend_html
+            st.session_state[f"{baseline_key}_ready"] = True
 
             st.success("Baseline scenario complete.")
 
         except Exception as e:
             st.error(f"Baseline simulation failed: {e}")
 
-    # Show baseline map as soon as scenario is ready
-    if st.session_state.get(f"{prefix}early_baseline_ready", False):
+    baseline_key = make_scenario_key(
+        prefix,
+        "baseline",
+        "NO",
+        st.session_state.get("rain_variant", "current")
+    )
+
+    if st.session_state.get(f"{baseline_key}_ready", False):
 
         st.markdown("### Baseline Runoff and Land Cover")
 
         c1, c2 = st.columns([1, 1])
 
+        # left side = runoff map
         with c1:
             st.markdown("#### Modeled Runoff")
             components.v1.html(
-                st.session_state[f"{prefix}early_baseline_map_html"],
+                st.session_state[f"{baseline_key}_map_html"],
                 height=500,
                 scrolling=False
             )
             st.markdown(
-                st.session_state[f"{prefix}early_baseline_legend_html"],
+                st.session_state[f"{baseline_key}_legend_html"],
                 unsafe_allow_html=True
             )
+
 
         with c2:
             st.markdown("#### Land Use / Land Cover")
@@ -1890,19 +1853,18 @@ def app_ui():
                 "Upstream, Downstream, High-Runoff 2x where the Tide Gate and Pump are On/Off, respectively."
             )
 
-
             if st.button("Run All Scenarios", key=f"{prefix}_run_all_scenarios"):
 
-                # Choose rainfall
-                use_cur = (st.session_state.get("rain_variant", "current") == "current")
-                rain_lines = st.session_state["rain_lines_cur"] if use_cur else st.session_state["rain_lines_fut"]
-                rain_curve = (
-                    st.session_state["rain_sim_curve_current_in"]
-                    if use_cur else st.session_state["rain_sim_curve_future_in"]
-                )
-                rain_label = "(Current)" if use_cur else "(+20% Future)"
+                st.info("Running all 10 scenarios...")
 
-                # 5 focus categories × 2 gate options
+                prefix = st.session_state["scenario_prefix"]
+                rain_variant = "future" if st.session_state.get("rain_variant") == "future" else "current"
+
+                # Choose rainfall lines
+                use_current = (rain_variant == "current")
+                rain_lines = st.session_state["rain_lines_cur"] if use_current else st.session_state["rain_lines_fut"]
+
+                # Available scenario groups
                 plan_sets = {
                     "baseline": None,
                     "all": plan_all,
@@ -1911,92 +1873,87 @@ def app_ui():
                     "highrunoff": plan_highro,
                 }
 
-                gate_opts = {"nogate": "NO", "gate": "YES"}
+                # Gate options
+                gate_opts = {
+                    "nogate": "NO",
+                    "gate": "YES",
+                }
 
-                # ---- RESET STORED RESULTS ----
-                st.session_state.setdefault("scenario_display_labels", {})
-                st.session_state["scenario_display_labels"].clear()
+                # RESET ALL STORED DATA
+                st.session_state["scenario_display_labels"] = {}
+                st.session_state["scenario_flood_volume"] = {}
+                st.session_state["scenario_infiltration"] = {}
+                st.session_state["scenario_runoff"] = {}
 
-                st.session_state.setdefault("scenario_flood_ts", {})
-                st.session_state["scenario_flood_ts"].clear()
+                # -----------------------------
+                # RUN ALL 10 SCENARIOS
+                # -----------------------------
+                try:
+                    for subset_key, plan_dict in plan_sets.items():
+                        for gate_key, gate_flag in gate_opts.items():
 
-                st.session_state.setdefault("scenario_flood_volume", {})
-                st.session_state["scenario_flood_volume"].clear()
+                            # --------------------------------------------
+                            # 1. Build canonical scenario key (for files & state)
+                            # --------------------------------------------
+                            scen_key = make_scenario_key(
+                                prefix,
+                                subset=subset_key,
+                                gate_flag=gate_flag,
+                                rain_variant=rain_variant,
+                            )
 
-                st.session_state.setdefault("scenario_infiltration", {})
-                st.session_state["scenario_infiltration"].clear()
+                            # --------------------------------------------
+                            # 2. Readable label (no rain variant)
+                            # --------------------------------------------
+                            display_label = make_display_label(
+                                subset=subset_key,
+                                gate_flag=gate_flag
+                            )
 
-                # ==================================================================
-                # MAIN LOOP — RUN ALL 10 SCENARIOS
-                # ==================================================================
-                for subset_key, plan_dict in plan_sets.items():
-                    for gate_key, gate_flag in gate_opts.items():
+                            st.session_state["scenario_display_labels"][scen_key] = display_label
 
-                        scen_key = f"{subset_key}_{gate_key}"
+                            # --------------------------------------------
+                            # 3. Build LID lines
+                            # --------------------------------------------
+                            if subset_key == "baseline":
+                                lid_lines = [";"]  # no LIDs
+                            else:
+                                lid_lines = generate_lid_usage_lines(plan_dict, raster_df)
 
-                        # Label formatting
-                        pretty_names = {
-                            "baseline": "Baseline",
-                            "all": "All Subcatchments",
-                            "upstream": "Upstream",
-                            "downstream": "Downstream",
-                            "highrunoff": "High-Runoff",
-                        }
-                        pretty_name = pretty_names[subset_key]
-                        gate_name = "TG & PUMP ON" if gate_key == "gate" else "TG & PUMP OFF"
+                            # --------------------------------------------
+                            # 4. Run SWMM scenario
+                            # --------------------------------------------
+                            result = run_swmm_senario(
+                                scenario_name=scen_key,
+                                rain_lines=rain_lines,
+                                tide_lines=tide_lines,
+                                lid_lines=lid_lines,
+                                gate_flag=gate_flag,
+                                duration_minutes=duration_minutes,
+                                template_path=template_inp,
+                            )
 
-                        rain_label = "Current" if use_cur else "Future"
+                            # --------------------------------------------
+                            # 5. Save outputs (uniform storage)
+                            # --------------------------------------------
+                            flood_df = st.session_state.get(f"{scen_key}_node_flooding_summary")
+                            infiltration = st.session_state.get(f"{scen_key}_storm_infiltration", 0.0)
 
-                        # Create a globally unique explicit label
-                        label = f"{subset_key}_{gate_key}_{rain_label}"
+                            # flood volume from runner
+                            flood_vol = st.session_state.get(f"{scen_key}_storm_total_flood", 0.0)
 
-                        # Also create a human-readable label for charts
-                        pretty_label = f"{pretty_name} – {gate_name} – {rain_label}"
+                            st.session_state["scenario_flood_volume"][scen_key] = flood_vol
+                            st.session_state["scenario_infiltration"][scen_key] = infiltration
+                            st.session_state["scenario_runoff"][scen_key] = result.get("df_runoff")
 
-                        # Store both
-                        st.session_state["scenario_display_labels"][scen_key] = pretty_label
-                        st.session_state.setdefault("scenario_selector_options", [])
-                        st.session_state["scenario_selector_options"].append((pretty_label, scen_key))
+                    # FINALIZE
+                    st.success("All 10 scenarios completed successfully.")
+                    st.session_state["scenarios_finished"] = True
+                    st.session_state["display_summary"] = True
 
-                        # LID usage
-                        lid_lines = [";"] if subset_key == "baseline" else generate_lid_usage_lines(plan_dict, raster_df)
-
-                        # Run the SWMM scenario
-                        full_scen_key = f"{prefix}{scen_key}"
-
-                       
-                        run_swmm_scenario(
-                            full_scen_key,
-                            rain_lines,
-                            tide_lines,
-                            lid_lines,
-                            gate_flag,
-                            duration_minutes,
-                            minutes_15,
-                            rain_curve,
-                            simulation_date,
-                            template_path=template_inp,
-                        )
-
-                        # Store outputs
-                        st.session_state["scenario_flood_ts"][scen_key] = \
-                            st.session_state.get(f"{full_scen_key}_node_flood_ts")
-
-                        st.session_state["scenario_flood_volume"][scen_key] = \
-                            st.session_state.get(f"{full_scen_key}_storm_total_flood", 0.0)
-
-                        st.session_state["scenario_infiltration"][scen_key] = \
-                            st.session_state.get(f"{full_scen_key}_storm_infiltration", 0.0)
-
-                # Save clean copies for charts
-                st.session_state["scenario_labels_saved"] = dict(st.session_state["scenario_display_labels"])
-                st.session_state["scenario_flood_saved"] = dict(st.session_state["scenario_flood_volume"])
-                st.session_state["scenario_infil_saved"] = dict(st.session_state["scenario_infiltration"])
-
-                st.success("All 10 scenarios completed.")
-                st.session_state["scenarios_finished"] = True
-                st.session_state["display_summary"] = True
-                st.rerun()
+                except Exception as e:
+                    st.error(f"Scenario loop failed: {e}")
+                    st.stop()
 
     flooding_summary_ui()
     scenario_comparison_map_ui()
