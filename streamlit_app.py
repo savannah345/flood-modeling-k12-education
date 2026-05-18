@@ -701,11 +701,11 @@ def flooding_summary_ui():
 def scenario_comparison_map_ui():
     st.subheader("Compare Two Scenarios")
 
-    st.markdown("What this shows: circle color = which scenario has more flooding")
-    st.markdown("Red: Scenario A has more flooding")
-    st.markdown("Blue: Scenario B has more")
-    st.markdown("Gray: no meaningful change")
-    st.markdown("Circle size = magnitude of difference")
+    st.markdown("What this shows:")
+    st.markdown("**Red:** Scenario A has more flooding")
+    st.markdown("**Blue:** Scenario B has more flooding")
+    st.markdown("**Gray:** no meaningful change")
+    st.markdown("**Circle size:** magnitude of difference")
 
     labels = st.session_state.get("scenario_display_labels", {})
     if not labels:
