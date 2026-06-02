@@ -1,40 +1,100 @@
-CoastWise performs fully dynamic rainfall–runoff and tidal simulations using the Stormwater Management Model (SWMM) in real time. By incorporating live tide data, the platform enables users to explore compound flooding scenarios, add low-impact development (LID) features interactively, and receive immediate feedback on runoff and infiltration outcomes. 
+## CoastWise: Compound Flooding Scenario Builder, Simulator, and Mapper
 
-Built on a real urban watershed in Norfolk, Virginia, CoastWise demonstrates how rainfall–tide–infrastructure interactions can be visualized and simplified for education and decision support. The framework bridges critical gaps in serious gaming by integrating hydrologic modeling, coastal dynamics, and infrastructure planning within a freely accessible web environment. 
+CoastWise is a full workflow for constructing storm scenarios, generating rainfall (design storms from **NOAA Atlas 14**) and tide inputs (real-time data or synthetic if real-time is unavailable), running the EPA's **Stormwater Management Model (SWMM)** simulations, visualizing baseline conditions for subcatchment runoff, and exploring green infrastructure placement and amounts across a **155-acre watershed**.
 
-Adaptable to other watersheds through minimal input changes, CoastWise provides a practical tool for classrooms, local governments, and community planners to promote flood literacy and support data-informed resilience planning.
+The Streamlit app is the central user interface for CoastWise. It integrates rainfall/tide generation, land-use–based LID planning, SWMM model execution, flooding extraction, and interactive map/chart visualization.
 
-**What it does**
-  Builds a 48-hour rainfall + tide timeline for your scenario.
-  Writes those inputs into a SWMM template file.
-  Runs a small set of scenarios (baseline, ± tide gate, ± LID, ± +20% rain).
-  Maps subcatchment runoff and flooded stormwater junction nodes. 
-  Shows watershed comparison of infiltraiton, surface runoff, and flooding
-  Gives you an Excel with inputs and results for multiple run comparisons.
+---
 
-**How it works**
-  User Interface: Streamlit.
-  Engine: SWMM via PySWMM.
-  Model file: one SWMM template that has placeholders for rainfall, tides, LID, and tide-gate control.
-  Data: basic watershed shapefiles (subcatchments and nodes) and a table for LID upper bounds (per subcatchment).
+## User Authentication
+Login, signup, and password reset using:  
+- **Supabase** (if running in free Streamlit Cloud), or  
+- **PostgreSQL** (if running in Docker)
 
-**Adapting to your watershed** 
-  Start with your watershed as a standard SWMM INP.
-  Add four placeholders anywhere appropriate in the INP:
+---
 
-      RAINFALL_TIMESERIES; 
-      TIDE_TIMESERIES; 
-      LID_USAGE; 
-      TIDE_GATE_CONTROL
-   
-  Save this as your template INP. To check your placement download the SWMM file from this GitHub repository.  
+## Storm Scenario Builder
+Users can configure storm and tide conditions, including:
 
-3) Provide minimal spatial layers
-  Subcatchments polygon layer with a field that matches your INP subcatchment IDs.
-  Nodes point layer with IDs that match your INP node IDs.
-  Conduits for context (Optional).
+- **Units:** U.S. Customary or SI  
+- **Storm Duration:** 2–12 hours  
+- **Return Period:** NOAA Atlas 14 rainfall values  
+- **Tide Input Source:**  
+  - Real-time tide data (via Greenstream)  
+  - Synthetic moon-phase–based tide ranges (fallback if real-time is unavailable)  
+- **Rainfall-Tide Alignment:**  
+  - Align rainfall peak with **high tide**, or  
+  - Align rainfall peak with **low tide**
 
-4) Define your design storms, tides, and LIDs
-  Rainfall: supply return-period depths for a few durations (e.g., 2–24 h). Use your local IDF/Atlas values into the rainfall_and_tide_generator.py file.
-  Tide boundary: choose either a live gage you trust or a simple semidiurnal curve with reasonable min/max levels in the rainfall_and_tide_generator.py file.
-  LID rules: simple table per subcatchment with “max rain gardens” and “max rain barrels,” based on your land cover assumptions (create your own Excel file that matches the one located in this repository).
+---
+
+## SWMM Simulations
+The app automatically:
+
+- Builds rainfall, tide, and LID usage **time-series blocks**  
+- Creates per-scenario **SWMM INP files**  
+- Executes simulations via **pyswmm**  
+- Extracts from the SWMM report:  
+  - **Node Flooding Summary**  
+  - **Subcatchment Runoff Totals**
+
+---
+
+## Baseline and LID Scenarios
+Five spatial layouts are run under the same budget:
+
+1. **Baseline** (no LIDs)  
+2. **All subcatchments**  
+3. **Upstream areas**  
+4. **Downstream areas**  
+5. **High-runoff areas**
+
+Each layout is modeled with the **Tide Gate & Pump ON** and **OFF**, producing:
+
+**10 total SWMM scenarios**
+
+---
+
+## Reporting Summary Charts
+CoastWise generates summary charts showing:
+
+1. **Total Costs**  
+2. **Rain Garden & Rain Barrel Counts**  
+3. **Total Storage Volumes**
+
+---
+
+## Flooding Volume Comparison Across 10 Scenarios
+For each of the 10 runs, the SWMM model produces a **total flood volume** (cubic feet or cubic meters).  
+CoastWise extracts this directly from the **Node Flooding Summary** within the `.rpt` file.
+
+The app then displays a ranked bar chart so users can quickly see:
+
+- Which scenario performs **best** at reducing flooding  
+- How much influence the **tide gate** has  
+- Which LID layout produces the largest **flood-reduction benefit**
+
+---
+
+## Interactive Scenario‑to‑Scenario Difference Mapping
+This tool allows users to compare **any two scenarios visually, node by node**.
+
+For each node, CoastWise loads:
+
+- Its location (from `Nodes.shp`)  
+- Flooding depth for **Scenario A**  
+- Flooding depth for **Scenario B**
+
+### Map Visualization
+Nodes are displayed as circles with:
+
+- **Red:** Scenario A is worse (deeper flooding)  
+- **Blue:** Scenario B is worse  
+- **Gray:** No meaningful change  
+
+Circle **size** indicates the magnitude of the flooding difference.
+
+This allows users to clearly see:
+
+- Where LIDs reduce flooding  
+- Which areas see improvements or regressions based on LID placement 
