@@ -430,9 +430,11 @@ PUMP_BLOCK = "Pump_1  J14  PumpOutfall  PumpCurve1  ON"
 
 PUMP_CURVE_BLOCK = (
     "PumpCurve1 Pump3 0 0\n"
-    "PumpCurve1 2 8\n"
-    "PumpCurve1 5 20\n"
-    "PumpCurve1 10 20\n"
+    "PumpCurve1 1 25\n"
+    "PumpCurve1 2 45\n"
+    "PumpCurve1 3 60\n"
+    "PumpCurve1 4 70\n"    
+    "PumpCurve1 7 78\n"
 )
 
 PUMP_RULES = (
@@ -760,7 +762,7 @@ def scenario_comparison_map_ui():
 
     merged["color"] = merged["difference"].apply(color)
 
-    merged["size"] = 40 + 80 * (
+    merged["size"] = 20 + 40 * (
         merged["difference"].abs() /
         max(merged["difference"].abs().max(), 1e-6)
     )
