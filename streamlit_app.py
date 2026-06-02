@@ -762,7 +762,7 @@ def scenario_comparison_map_ui():
 
     merged["color"] = merged["difference"].apply(color)
 
-    merged["size"] = 20 + 40 * (
+    merged["size"] = 10 + 30 * (
         merged["difference"].abs() /
         max(merged["difference"].abs().max(), 1e-6)
     )
@@ -795,8 +795,6 @@ def scenario_comparison_map_ui():
     tooltip = {
         "html": (
             "<b>Node:</b> {NAME}<br>"
-            f"<b>{labelA}:</b> {{A_depth}} ft<br>"
-            f"<b>{labelB}:</b> {{B_depth}} ft<br>"
             "<b>Difference:</b> {difference} ft"
         ),
         "style": {
